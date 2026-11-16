@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="lgSphere" cx="62%" cy="38%" r="55%">
+      <stop offset="0%" stop-color="#93c5fd" />
+      <stop offset="35%" stop-color="#2e3192" />
+      <stop offset="100%" stop-color="#1e1b6b" />
+    </radialGradient>
+    <linearGradient id="lgCyan" x1="15%" y1="90%" x2="85%" y2="10%">
+      <stop offset="0%" stop-color="#00aeef" />
+      <stop offset="70%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#e0f2fe" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="#ffffff" />
+  <circle cx="256" cy="204" r="142" fill="none" stroke="#2e3192" stroke-width="18" />
+  <circle cx="256" cy="204" r="118" fill="url(#lgSphere)" />
+  <path d="M136 226 Q180 120 342 126 Q220 148 158 260 Z" fill="#ffffff" />
+  <path d="M164 268 Q228 144 352 126 Q244 176 232 318 Q190 296 164 268 Z" fill="url(#lgCyan)" />
+  <text x="256" y="422" font-family="Arial Black, system-ui, sans-serif" font-size="82" font-weight="900" fill="#00aeef" text-anchor="middle" letter-spacing="2">LG PLAST</text>
+  <text x="256" y="466" font-family="system-ui, sans-serif" font-size="25" font-weight="700" fill="#334155" text-anchor="middle">Affordable / Durable / Complete</text>
+</svg>

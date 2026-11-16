@@ -1,0 +1,6 @@
+{
+  "name": "DowntimeLog Pro - Online Signed Logs & Daily Sync",
+  "description": "Industrial equipment downtime log app with digital online signatures, daily updates, shift handovers, and real-time Firebase sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

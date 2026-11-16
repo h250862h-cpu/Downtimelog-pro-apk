@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attendance Logger</title>
+<style>
+:root{--bg:#f3f5f8;--card:#fff;--ink:#1d2733;--mute:#66758a;--line:#dde3ea;--blue:#1f6feb;--green:#1a9b50;--red:#d93025;--redbg:#fde2e0;--amber:#b7791f;--amberbg:#fff1cc}
+@media (prefers-color-scheme:dark){:root{--bg:#10151c;--card:#19212b;--ink:#e8edf3;--mute:#93a1b3;--line:#2b3644;--redbg:#4a1f1d;--amberbg:#463716}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+header{background:#12324f;color:#fff;padding:14px 16px}
+header h1{margin:0;font-size:19px}
+header p{margin:2px 0 0;font-size:12.5px;opacity:.8}
+main{max-width:980px;margin:0 auto;padding:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.card h2{margin:0 0 10px;font-size:16px}
+textarea{width:100%;min-height:190px;border:1px solid var(--line);border-radius:8px;padding:10px;font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;background:var(--bg);color:var(--ink);resize:vertical}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+label.f{font-size:12.5px;color:var(--mute);display:flex;flex-direction:column;gap:3px}
+input[type=date],select{border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;background:var(--bg);color:var(--ink)}
+button{border:0;border-radius:8px;padding:10px 14px;font-size:14px;font-weight:600;cursor:pointer;color:#fff;background:var(--blue)}
+button.green{background:var(--green)}button.red{background:var(--red)}button.gray{background:#6b7a8c}
+button.ghost{background:transparent;color:var(--red);border:1px solid var(--red)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.sp{flex:1}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.chip{padding:4px 10px;border-radius:999px;font-size:13px;font-weight:600;background:var(--bg);border:1px solid var(--line)}
+.chip.abs{background:var(--redbg);color:var(--red);border-color:var(--red)}
+.chip.cas{background:var(--amberbg);color:var(--amber);border-color:var(--amber)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{font-size:12px;text-transform:uppercase;color:var(--mute)}
+tr.absent td{background:var(--redbg);color:var(--red);font-weight:600}
+.tag{cursor:pointer;user-select:none;padding:2px 8px;border-radius:6px;border:1px solid var(--line);font-size:12.5px}
+tr.absent .tag{border-color:var(--red)}
+.tag.casual{background:var(--amberbg);color:var(--amber);border-color:var(--amber)}
+.x{cursor:pointer;color:var(--mute);padding:0 6px;font-size:16px}
+.hint{font-size:12.5px;color:var(--mute);margin:6px 0 0}
+.skip{font-size:13px;background:var(--amberbg);color:var(--amber);border-radius:8px;padding:8px 10px;margin-top:10px}
+.skip summary{cursor:pointer;font-weight:600}
+.item{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:9px 10px;margin-bottom:8px;flex-wrap:wrap}
+.item b{min-width:105px}
+.empty{color:var(--mute);font-size:14px;padding:6px 0}
+.toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#12324f;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;pointer-events:none;transition:.25s;max-width:90%;text-align:center}
+.toast.on{opacity:1}
+.msgblk{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<header><h1>Warehouse Attendance Logger</h1><p>Paste WhatsApp attendance &rarr; Preview &rarr; Phase (add to batch) &rarr; Download Excel report</p></header>
+<main>
+  <section class="card">
+    <h2>1. Paste one or more WhatsApp messages</h2>
+    <textarea id="msg" placeholder="Morning shift attendance (23/10/2026)&#10;from: Tinashe&#10;&#10;EXTRUSION&#10;Farai 101&#10;Dennis 102 absent&#10;&#10;CASUALS&#10;Tafadzwa&#10;Grammy absent&#10;&#10;ABSENT&#10;Trust 105"></textarea>
+    <div class="row">
+      
+      <span class="sp"></span>
+      <button class="gray" id="btnClearText">Clear text</button>
+      <button id="btnPreview">Preview</button>
+      <button class="green" id="btnPhaseNow">Phase message(s)</button>
+    </div>
+    <p class="hint">Absent = the word "absent"/"abs", an ABSENT heading, or a &#10060; mark. Casual = a CASUALS heading, the word "casual", or a line like "Casuals 5". You can paste several messages at once (each starting with its title/date line). Messages with the same date and shift are merged, so attendance from different messages is never lost. Date and shift can be edited per message in the preview. Tap a Status or Type to correct it.</p>
+  </section>
+
+  <section class="card" id="prevCard" hidden>
+    <h2>2. Preview <span id="prevCount" class="chip"></span></h2>
+    <div id="prevList"></div>
+    <div class="row"><span class="sp"></span><button class="green" id="btnPhase">Phase (add to batch)</button></div>
+  </section>
+
+  <section class="card">
+    <h2>3. Phased batch <span id="batchCount" class="chip"></span></h2>
+    <div id="batchList"></div>
+    <div class="chips" id="batchChips"></div>
+    <div class="row">
+      <button id="btnDownload">Download Excel report</button>
+      <button class="ghost" id="btnClearBatch">Clear phased messages</button>
+    </div>
+    <p class="hint">The report has separate sheets: Attendance (absent rows in red), Summary (totals of present, absent, casuals), Absent, Casuals and By Person.</p>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+/* =====================================================================
+   CORE LOGIC (no DOM) – parsing + Excel writer
+   ===================================================================== */
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const pad=n=>String(n).padStart(2,'0');
+function fmtDate(iso){const [y,m,d]=iso.split('-').map(Number);return pad(d)+'-'+MONTHS[m-1]+'-'+y;}
+function todayISO(){const t=new Date();return t.getFullYear()+'-'+pad(t.getMonth()+1)+'-'+pad(t.getDate());}
+function titleCase(s){return s.toLowerCase().replace(/(^|[\s.'\-])(\p{L})/gu,(m,a,b)=>a+b.toUpperCase());}
+
+function detectShift(text){
+  const t=text.toLowerCase();
+  if(/\bnight\b/.test(t)) return 'Night';
+  if(/\b(morning|evening|day|afternoon)\b/.test(t)) return 'Day';
+  return 'Unknown';
+}
+function extractDate(text){
+  let m=text.match(/\((\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\)/)||text.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+  if(!m) return null;
+  let d=+m[1],mo=+m[2],y=+m[3]; if(y<100) y+=2000;
+  if(mo<1||mo>12||d<1||d>31) return null;
+  return y+'-'+pad(mo)+'-'+pad(d);
+}
+function extractReportedBy(text){
+  let m=text.match(/^\s*[*_]*(?:reported\s+by|from)[*_]*\s*[:\-]?\s*([^\n\r]+)/im);
+  if(!m) return '';
+  return titleCase(m[1].replace(/[*_~`]/g,'').replace(/[^\p{L}.' ]/gu,' ').replace(/\s+/g,' ').trim());
+}
+const DEPT_W='extrusion|extruders?|injection|mixing|mixers?|stores?|cleaning|cleaners?|assembl\w*|gumboots?|punching|recycling|dispatch|maintenance|mtce|security|kitchen|polypipe|production|electrical|moulding|molding|packing|warehouse|factory|plant|workshop|office|canteen';
+const META_W='total|totals|attendance|labou?r|dayshift|nightshift|day|night|shift|morning|evening|afternoon|line|lines|section|department|dept|headcount|staff|employees?|workers|summary|report|sheet|list|manpower|grand|overall|operators?|assistants?|general|others?|unassigned';
+const DEPT_TOK=new RegExp('^(?:'+DEPT_W+')$','i'),VOC_TOK=new RegExp('^(?:'+DEPT_W+'|'+META_W+'|absent|abs|present|casuals?|and|of|the|for|&)$','i');
+const NOT_NAME=t=>{const k=String(t).toLowerCase().replace(/[^\p{L}\s]/gu,' ').split(/\s+/).filter(Boolean);return k.length>0&&k.every(w=>VOC_TOK.test(w))&&k.some(w=>!/^(absent|abs|present|casuals?|and|of|the|for)$/i.test(w));};
+const ABS_RE=/\b(absent|absentees?|abs|awol|no[\s-]?show)\b/i;
+const CAS_RE=/\bcasuals?\b/i;
+const ABS_MARK=/[\u274C\u2717\u2718]/u;
+
+
+/* ---------------- staff roster cross-reference ---------------- */
+const ROSTER_RAW=[[13, "Kefas", "Cleaner", "staff"], [4, "BOTHWELL MATIBHIRI", "recycling", "staff"], [14, "KUDAKWASHE JEMWA", "recycling", "staff"], [1, "ALLAN MHARANDU", "Dispatch clerk", "staff"], [52, "BRIGHTON MUDAMBURI", "electrician", "staff"], [43, "TRIED CHAKUBVA", "extruder assistant", "staff"], [50, "FARAI MURONZWA", "extruder operator", "staff"], [19, "MUNYARADZI MUHOMBA", "extruder assistant", "staff"], [20, "NGONI MUTENA", "extruder assistant", "staff"], [12, "JONATHAN CHIDINDI", "extruder assistant", "staff"], [11, "JAMES MUSHAWATU", "dispatch", "staff"], [33, "TAKUNDA KANHICHIRE", "extruder operator", "staff"], [40, "TINASHE MAGWANISA", "extruder operator", "staff"], [45, "VITALIS DENHERE", "extruder operator", "staff"], [53, "FIDELIS CHUMA", "mold setter", "staff"], [57, "DENNIS MUZANENHAMO", "extruder operator", "staff"], [47, "WALTER MASIMBITI", "extruder assistant", "staff"], [24, "OWEN GAMBO", "injection assistant", "staff"], [3, "BLESSING MUTENA", "dispatch", "staff"], [37, "THINKWELL MARUMANI", "injection assistant", "staff"], [26, "REMOS TSIGA", "injection assistant", "staff"], [46, "LIBERTY", "dispatch", "staff"], [34, "TAKUNDA MAGAUZE", "injection assistant", "staff"], [6, "ERIC NYAMAPANDA", "shift in charge/ injection operator", "staff"], [28, "SIMON TARUBINGA", "injection operator", "staff"], [16, "MARENZI LEORNARD", "injection supervisor", "staff"], [55, "MASIMBA MUKUKU", "maintenance", "staff"], [17, "MOREBLESSING MUTAURWA", "maintenance", "staff"], [60, "Tinomutenda", "maintenance", "staff"], [38, "TCHAONA MAKADHO", "mixer operator", "staff"], [31, "TAFARA SHAVAYEMOMBE", "WH Auto Mixer", "staff"], [5, "COLLEN CHAMANGA", "Dispatch clerk", "staff"], [8, "FREEDOM. C. MAPFUMO", "dispatch", "staff"], [9, "GARIKAI MADUBEKO", "dispatch", "staff"], [30, "TADIWA MHINDURWA", "dispatch", "staff"], [35, "TAWANDA WHITE", "WH Auto Mixer", "staff"], [2, "BIGGIE MANGWENDE", "mixing", "staff"], [18, "MUFARO SIYAMI", "dispatch", "staff"], [23, "esmore urombo", "gumboot machine operator", "staff"], [36, "TENDAI DZUNA", "mixing", "staff"], [25, "VICTOR CHIPUNZA", "plumber", "staff"], [29, "STANFORD TAKUDZWA", "dispatch", "staff"], [39, "TINASHE CHIHOTA", "Dispatch clerk", "staff"], [49, "MALVERN NZOMBE", "injection assistant", "staff"], [61, "WITNESS GOVA", "mixing", "staff"], [67, "PEDZISAI MARUFU", "mixing", "staff"], [74, "CALUM DHIMINGWI", "dispatch", "staff"], [68, "FRANK MUTSATSATI", "extruder assistant", "staff"], [95, "Courage Chinzou", "dispatch", "staff"], [72, "TAVONGA MUPWANYIWA", "dispatch", "staff"], [56, "SIMBARASHE CHAUNOITA", "production clerk", "staff"], [59, "Mapfumo", "Security", "staff"], [62, "BATANAI MUSIIWA", "dispatch", "staff"], [63, "CARLOS TAFRIREI", "dispatch", "staff"], [64, "JENKINS MANVINEMA", "injection assistant", "staff"], [10, "INNOCENT MAVHIYANI", "shift in charge", "staff"], [27, "RONWELL", "dispatch", "staff"], [44, "TRUST GWEME", "shift in charge", "staff"], [32, "TAKUDZWA ZIMANI", "Stores", "staff"], [58, "NEVER SHARA", "supervisor", "staff"], [65, "CLIVE SHOKO", "injection assistant", "staff"], [76, "PASSMORE", "mixing", "staff"], [77, "SHAWN NYANINGWE", "extruder assistant", "staff"], [78, "TREVOR MAZANHI", "extruder assistant", "staff"], [7, "TAFADZWA CHIRENGWA", "extruder assistant", "staff"], [79, "LENOX MUHLABA", "extruder assistant", "staff"], [80, "PATSON MUSEKIWA", "extruder assistant", "staff"], [81, "HAWARD", "injection assistant", "staff"], [82, "TINOTENDA SAMUKANGE", "maintenance", "staff"], [83, "EZIAS", "gumboot machine operator", "staff"], [84, "GRAMMY NDODA", "recycling", "staff"], [85, "PEARSON", "mixing", "staff"], [94, "Joseph Sakunyepa", "dispatch", "staff"], [88, "BOTHWELL MARENZI", "injection operator", "staff"], [87, "BLESSED", "polypipe operator", "staff"], [89, "FELIX SITHOLE", "injection assistant", "staff"], [91, "SHELTON", "dispatch", "staff"], [92, "Bernard Mafunhiya", "dispatch", "staff"], [96, "TINASHE BVUNGO", "gumboot machine assistant", "staff"], [97, "Given Wilson", "gumboot machine assistant", "staff"], [93, "Farasteny Tozvireva", "extruder assistant", "staff"], [98, "PASSION", "mixing", "staff"], [73, "Isa", "Cook", "staff"], [null, "Zvikomborero Vira", "assemblings", "casual"], [null, "ALLAN MAPURISA", "punching", "casual"], [null, "CLIVE SHOKO", "assemblings", "casual"], [null, "Cristiane Jackson", "assemblings", "casual"], [null, "Calum Dzingai", "assemblings", "casual"], [null, "Given Wilson", "assemblings / gumboot machine", "casual"], [null, "JONAH", "punching", "casual"], [null, "ALBERT TAFIRENYIKA", "recycling", "casual"], [null, "Allan Zisengwe", "gumboot", "casual"], [null, "Ernest Muzanari", "extrusion", "casual"], [null, "JOSEPH SAKUNYARA", "recycling", "casual"], [null, "Elton Kutumba", "punching", "casual"], [null, "Mathew Chiuto", "gumboot", "casual"], [null, "Michael Dziganu", "gumboot", "casual"], [null, "MPUMELELO MSILA", "gumboot", "casual"], [null, "Perseverence Mutawu", "gumboot", "casual"], [null, "Prosper Musangua", "extrusion", "casual"], [null, "RAMECK MASUKA", "recycling", "casual"], [null, "Tanaka Chinerumba", "extrusion", "casual"], [null, "Tanaka Mawodzeka", "recycling", "casual"], [null, "TINASHE BVUNGO", "gumboot", "casual"], [null, "Tafadzwa Nyatawa", "punching", "casual"]];
+function normName(s){return String(s||'').replace(/[.]/g,' ').replace(/\s+/g,' ').trim();}
+function deptOfDesig(d){d=String(d||'').toLowerCase();
+  if(/inject/.test(d))return 'injection'; if(/extru|polypipe/.test(d))return 'extrusion'; if(/recycl/.test(d))return 'recycling';
+  if(/mix/.test(d))return 'mixing'; if(/gumboot|assembl|punch/.test(d))return 'gumboot'; if(/dispatch/.test(d))return 'dispatch';
+  if(/mainten|electric|plumb|mold|mould/.test(d))return 'maintenance'; if(/store/.test(d))return 'stores'; if(/clean/.test(d))return 'cleaner';
+  if(/shift in charge|supervisor|production clerk/.test(d))return 'any'; if(/secur/.test(d))return 'security'; if(/cook/.test(d))return 'kitchen'; return '';}
+function deptOfSection(s){s=String(s||'').toLowerCase();
+  if(/inject/.test(s))return 'injection'; if(/extru|line/.test(s))return 'extrusion'; if(/recycl/.test(s))return 'recycling';
+  if(/mixing|mixer/.test(s))return 'mixing'; if(/gumboot|assembl|punch/.test(s))return 'gumboot'; if(/dispatch/.test(s))return 'dispatch';
+  if(/mtce|mainten|electric/.test(s))return 'maintenance'; if(/store/.test(s))return 'stores'; if(/clean/.test(s))return 'cleaner';
+  if(/secur/.test(s))return 'security'; if(/kitchen|cook/.test(s))return 'kitchen'; return '';}
+const ROSTER=(()=>{const m=new Map();
+  ROSTER_RAW.forEach(r=>{const name=titleCase(normName(r[1]));const key=name.toUpperCase();
+    const o={id:r[0]==null?'':String(r[0]),name,desig:titleCase(r[2]||''),casual:r[3]==='casual',dept:deptOfDesig(r[2]),toks:key.split(' ').filter(t=>t.length>=2)};
+    if(m.has(key)){ if(m.get(key).casual&&!o.casual) m.set(key,o); } else m.set(key,o);});
+  return [...m.values()];})();
+function lev(a,b){const m=a.length,n=b.length,d=[];for(let i=0;i<=m;i++)d[i]=[i];for(let j=1;j<=n;j++)d[0][j]=j;
+  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));return d[m][n];}
+const allow=l=>l>=8?2:l>=5?1:0;
+function nameToks(name){return String(name).toUpperCase().replace(/[^A-Z' ]/g,' ').split(/\s+/).filter(t=>t.length>=2);}
+function findCands(name){
+  const tk=nameToks(name); if(!tk.length) return [];
+  const ex=ROSTER.filter(p=>tk.every(t=>p.toks.includes(t))); if(ex.length) return ex;
+  return ROSTER.filter(p=>tk.every(t=>p.toks.some(x=>x===t||(x[0]===t[0]&&lev(t,x)<=allow(t.length)))));
+}
+function similar(name,p){const tk=nameToks(name);return tk.some(t=>t.length>=4&&p.toks.some(x=>x[0]===t[0]&&lev(t,x)<=3));}
+function applyPerson(r,p,notes,numGiven){
+  if(!numGiven&&!r.id&&p.id) notes.push('ID added from staff list');
+  else if(numGiven&&p.id&&numGiven!==p.id) notes.push('ID corrected (was '+r.id+')');
+  const wasCasualTag=r.type==='Casual';
+  r.name=p.name; r.id=p.id||r.id||''; r.designation=p.desig; r.type=p.casual?'Casual':'Employee';
+  if(wasCasualTag&&!p.casual) notes.push('Now on staff list');
+}
+function resolveRow(r){
+  r.designation=''; if(/headcount/i.test(r.name)) return;
+  const sd=deptOfSection(r.section), given=String(r.id||'').replace(/^0+(?=\d)/,'');
+  const numGiven=/^\d+$/.test(given)?given:'';
+  const notes=[]; if(r.remark) notes.push(r.remark);
+  const compat=p=>!sd||p.casual||!p.dept||p.dept==='any'||p.dept===sd;
+  let pool=findCands(r.name);
+  const allCands=pool;
+  if(pool.length>1){const f=pool.filter(compat); if(f.length) pool=f;}
+  if(pool.length>1&&sd){const s1=pool.filter(p=>p.dept===sd); if(s1.length) pool=s1;}
+  let pick=null,amb=null;
+  if(pool.length>1){const byId=numGiven?pool.filter(p=>p.id===numGiven):[]; if(byId.length===1) pick=byId[0]; else amb=pool;}
+  else if(pool.length===1) pick=pool[0];
+  let hint=null;
+  if(pick&&numGiven&&pick.id&&pick.id!==numGiven&&!ROSTER.some(p=>p.id===numGiven)&&nameToks(r.name).length<2&&pick.toks.length>1){hint=pick;pick=null;}
+  if(pick&&!compat(pick)){
+    if(numGiven&&pick.id&&pick.id!==numGiven){notes.push('Not in staff list (first name matches '+pick.name+') - kept as given');pick=null;}
+    else notes.push('Department differs from staff list - check');
+  }
+  if(!pick&&!amb){
+    const byId=numGiven?ROSTER.find(p=>p.id===numGiven):null;
+    if(byId&&compat(byId)&&similar(r.name,byId)){pick=byId;notes.push('Spelling matched using ID');}
+  }
+  r.review=false;
+  if(pick&&allCands.length>1&&numGiven){
+    const other=allCands.find(p=>p.id===numGiven&&p!==pick);
+    if(other){notes.push('ID '+numGiven+' belongs to '+other.name+' ('+other.desig+') - check');r.review=true;}
+  }
+  if(pick){applyPerson(r,pick,notes,numGiven);}
+  else if(amb){
+    r.name=titleCase(normName(r.name)); r.cands=amb.map(p=>({name:p.name,id:p.id,desig:p.desig,casual:p.casual}));
+    notes.push('Several staff match - choose the right one'); r.review=true;
+  } else {
+    r.name=titleCase(normName(r.name));
+    const owner=numGiven?ROSTER.find(p=>p.id===numGiven):null;
+    notes.push(owner?'Not in staff list - ID '+numGiven+' is listed for '+owner.name+', kept as given':'Not in staff list - kept as given');
+    if(hint){notes.pop();notes.push('ID '+numGiven+' is not on the staff list (resigned ID re-used?) - kept as given. Choose '+hint.name+' if that is who it is');r.cands=[{name:hint.name,id:hint.id,desig:hint.desig,casual:hint.casual}];}
+    r.review=true;
+  }
+  r.remark=notes.join('; ');
+}
+function choosePerson(r,idx){
+  if(idx<0||!r.cands||!r.cands[idx]) return;
+  const p=r.cands[idx]; const notes=[];
+  applyPerson(r,{id:p.id,name:p.name,desig:p.desig,casual:p.casual},notes,/^\d+$/.test(String(r.id))?String(r.id).replace(/^0+(?=\d)/,''):'');
+  r.cands=null; r.review=false; r.remark=notes.join('; ');
+}
+
+function parseMessage(text,ov){
+  ov=ov||{};
+  const shift=ov.shift||detectShift(text);
+  const date=ov.date||extractDate(text)||todayISO();
+  const reportedBy=extractReportedBy(text);
+  const rows=[],skipped=[];
+  let ctx={section:'General',absent:false,casual:false};
+  let blockStart=true;
+  const lines=text.replace(/\r/g,'').split('\n');
+  const hasBlank=/\n\s*\n/.test(text);
+  const nextHasId=(k)=>{for(let j=k+1;j<lines.length;j++){if(lines[j].trim()) return /\d/.test(lines[j]);}return false;};
+  for(let li=0;li<lines.length;li++){
+    const raw=lines[li];
+    if(!raw.trim()){blockStart=true;continue;}
+    let line=raw.replace(/[*_~`]/g,'').replace(/^\s*(?:[-\u2022\u25CF>]+|\d{1,3}[.)])\s+/u,'').trim();
+    const wasStart=blockStart; blockStart=false;
+    if(!line) continue;
+    const lower=line.toLowerCase();
+    const mark=ABS_MARK.test(line);
+    line=line.replace(/[\u274C\u2717\u2718\u2705\u2714\uFE0F]/gu,'').trim();
+    // meta lines (title, date, sender, totals)
+    if(/^(from|reported\s+by)\b/i.test(line)) continue;
+    if(/\b(attendance|good\s+(morning|evening|afternoon|night)|shift\s+(report|attendance))\b/i.test(line) && !/\d{2,}\s*$/.test(line)) continue;
+    if(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/.test(line)) continue;
+    if(/^total\b/i.test(line) && !CAS_RE.test(line)) continue;
+    // process / department / total words are never names
+    if(NOT_NAME(line)){
+      if(!/\d/.test(line)){
+        const dw=line.toLowerCase().replace(/[^\p{L}\s]/gu,' ').split(/\s+/).filter(w=>DEPT_TOK.test(w));
+        if(dw.length){ctx.absent=ABS_RE.test(line);ctx.casual=CAS_RE.test(line);ctx.section=titleCase(dw.join(' '));}
+      }
+      continue;
+    }
+    const hasDigit=/\d/.test(line);
+    // ---------- heading detection
+    const upper=line===line.toUpperCase()&&/\p{L}/u.test(line);
+    const colon=/:\s*$/.test(line);
+    const kwOnly=/^(casuals?|absent(ees)?|present)\b[\w\s&\/-]*$/i.test(line)&&!hasDigit&&line.split(/\s+/).length<=4;
+    const inMode=ctx.casual||ctx.absent;
+    if(!hasDigit && line.length<=45 && !(CAS_RE.test(line)&&!kwOnly&&!colon) && (colon||kwOnly||(upper&&(wasStart||(!hasBlank&&!inMode&&nextHasId(li)))))){
+      const head=line.replace(/:\s*$/,'').trim();
+      ctx.absent=ABS_RE.test(head); ctx.casual=CAS_RE.test(head);
+      let sec=head.replace(ABS_RE,'').replace(CAS_RE,'').replace(/\bpresent\b/i,'').replace(/[\s&\/-]+$/,'').trim();
+      if(/^(casuals?)/i.test(head)&&!sec) sec='Casuals';
+      if(sec) ctx.section=titleCase(sec);
+      else if(!ctx.casual) ctx.section='Unassigned';
+      continue;
+    }
+    // ---------- person line
+    const absent=ctx.absent||ABS_RE.test(line)||mark;
+    const casual=ctx.casual||CAS_RE.test(line)||/\(c\)\s*$/i.test(line);
+    let s=line.replace(ABS_RE,' ').replace(CAS_RE,' ').replace(/\bpresent\b/gi,' ').replace(/\(c\)/gi,' ');
+    let remark='';
+    let pid='';
+    s=s.replace(/\(([^)]*)\)/g,(m,a)=>{a=a.trim();if(/^[A-Za-z]{0,3}\d+$/.test(a)&&!pid)pid=a.toUpperCase();else remark=a;return ' ';});
+    s=s.replace(/\s+/g,' ').replace(/^[\s:,\-=#]+|[\s:,\-=#]+$/g,'');
+    // headcount only line, e.g. "Casuals 5" / "Casuals absent 2"
+    let cm=s.match(/^(?:total\s*)?(\d{1,3})$/i);
+    if(cm&&(casual)){
+      rows.push({section:(ctx.section==='General'||ctx.section==='Unassigned')?'Casuals':ctx.section,name:'Casuals (headcount)',id:'',type:'Casual',status:absent?'Absent':'Present',count:+cm[1],remark});
+      continue;
+    }
+    const lead=s.match(/^(?:id\s*[:#-]?\s*)?(\d+)\s*[-:.,)]*\s+(\p{L}[\p{L}.'\- ]*)$/iu);
+    const m=lead?[0,lead[2],lead[1]]:s.match(/^(\p{L}[\p{L}.'\- ]*?)\s*[-:,#]?\s*([A-Za-z]{0,3}\d+)?$/u);
+    if(!m||m[1].trim().length<2){skipped.push({line:raw.trim(),why:'not a name/ID line'});continue;}
+    if(NOT_NAME(m[1])) continue;
+    const name=titleCase(m[1].trim().replace(/\s+/g,' ')), id=(m[2]||pid||'').toUpperCase();
+    let rk=remark;
+    if(!id&&!casual&&!absent){
+      if(name.split(' ').length>4||/\b(thank|thanks|regards|noted|okay|please|kindly|manpower|nil)\b/i.test(name)){skipped.push({line:raw.trim(),why:'no ID'});continue;}
+    }
+    rows.push({section:ctx.section,name,id,type:casual?'Casual':'Employee',status:absent?'Absent':'Present',count:1,remark:rk});
+  }
+  rows.forEach(resolveRow);
+  const num=v=>v===undefined?null:(/nil|none/i.test(v)?0:+v);
+  const cp=text.match(/total[^\n=:]*?present\s*[=:\-]?\s*(\d+|nil|none)/i), ca=text.match(/total[^\n=:]*?absent\s*[=:\-]?\s*(\d+|nil|none)/i);
+  const claimed={present:cp?num(cp[1]):null,absent:ca?num(ca[1]):null};
+  return {date,shift,reportedBy,rows,skipped,claimed};
+}
+
+/* ---------------- minimal XLSX writer (zip "store", no external libs) */
+const CRC_T=(()=>{const t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+function crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=CRC_T[(c^b[i])&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+const ENC=new TextEncoder();
+function zip(files){
+  const parts=[],cen=[];let off=0;
+  const u16=n=>[n&255,(n>>8)&255],u32=n=>[n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255];
+  for(const f of files){
+    const nm=ENC.encode(f.name),d=ENC.encode(f.data),crc=crc32(d);
+    const lh=[0x50,0x4b,3,4,...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(d.length),...u32(d.length),...u16(nm.length),...u16(0)];
+    parts.push(new Uint8Array(lh),nm,d);
+    cen.push({nm,crc,len:d.length,off});
+    off+=lh.length+nm.length+d.length;
+  }
+  let cs=0;const cparts=[];
+  for(const c of cen){
+    const h=[0x50,0x4b,1,2,...u16(20),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(c.crc),...u32(c.len),...u32(c.len),...u16(c.nm.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(c.off)];
+    cparts.push(new Uint8Array(h),c.nm);cs+=h.length+c.nm.length;
+  }
+  const end=[0x50,0x4b,5,6,0,0,0,0,...u16(cen.length),...u16(cen.length),...u32(cs),...u32(off),0,0];
+  return new Blob([...parts,...cparts,new Uint8Array(end)],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'');
+function colL(i){let s='';i++;while(i>0){const m=(i-1)%26;s=String.fromCharCode(65+m)+s;i=Math.floor((i-1)/26);}return s;}
+function serial(iso){const [y,m,d]=iso.split('-').map(Number);return Math.round((Date.UTC(y,m-1,d)-Date.UTC(1899,11,30))/86400000);}
+/* style ids – see STYLES_XML */
+const S={def:0,head:1,txt:2,date:3,aTxt:4,aDate:5,cas:6,bold:7,title:8,num:9,aNum:10,pct:11,totNum:12,totLbl:13,aHead:14,aCas:15,totPct:16,sub:17};
+function sheetXml(rows,opt){
+  opt=opt||{};
+  let x='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"'+(opt.tab?' tabSelected="1"':'')+'>';
+  if(opt.freeze) x+='<pane ySplit="'+opt.freeze+'" topLeftCell="A'+(opt.freeze+1)+'" activePane="bottomLeft" state="frozen"/>';
+  x+='</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>';
+  if(opt.widths) x+='<cols>'+opt.widths.map((w,i)=>'<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+w+'" customWidth="1"/>').join('')+'</cols>';
+  x+='<sheetData>';
+  rows.forEach((r,ri)=>{
+    x+='<row r="'+(ri+1)+'">';
+    r.forEach((c,ci)=>{
+      if(c===null||c===undefined||c==='') return;
+      if(typeof c!=='object') c={v:c};
+      const ref=colL(ci)+(ri+1), st=c.s?(' s="'+c.s+'"'):'';
+      if(c.f!==undefined) x+='<c r="'+ref+'"'+st+'><f>'+esc(c.f)+'</f><v>'+(c.v===undefined?0:c.v)+'</v></c>';
+      else if(typeof c.v==='number') x+='<c r="'+ref+'"'+st+'><v>'+c.v+'</v></c>';
+      else x+='<c r="'+ref+'"'+st+' t="inlineStr"><is><t xml:space="preserve">'+esc(c.v)+'</t></is></c>';
+    });
+    x+='</row>';
+  });
+  x+='</sheetData>';
+  if(opt.filter) x+='<autoFilter ref="'+opt.filter+'"/>';
+  if(opt.merges&&opt.merges.length) x+='<mergeCells count="'+opt.merges.length+'">'+opt.merges.map(m=>'<mergeCell ref="'+m+'"/>').join('')+'</mergeCells>';
+  return x+'<pageMargins left="0.5" right="0.5" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>';
+}
+const STYLES_XML='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+
+'<numFmts count="2"><numFmt numFmtId="164" formatCode="dd\\-mmm\\-yyyy"/><numFmt numFmtId="165" formatCode="0.0%"/></numFmts>'+
+'<fonts count="7"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FF9C0006"/><name val="Calibri"/></font><font><sz val="11"/><color rgb="FF9C0006"/><name val="Calibri"/></font><font><b/><sz val="15"/><color rgb="FF12324F"/><name val="Calibri"/></font><font><i/><sz val="10"/><color rgb="FF666666"/><name val="Calibri"/></font></fonts>'+
+'<fills count="7"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF12324F"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFC7CE"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFEB9C"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE7ECF2"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFC00000"/></patternFill></fill></fills>'+
+'<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border></borders>'+
+'<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'+
+'<cellXfs count="18">'+
+'<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'+                                                                                   //0
+'<xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>'+ //1 head
+'<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>'+                                                                    //2 txt
+'<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left"/></xf>'+ //3 date
+'<xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>'+                                         //4 absent text
+'<xf numFmtId="164" fontId="3" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left"/></xf>'+ //5 absent date
+'<xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>'+                                         //6 casual cell
+'<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'+                                                                      //7 bold
+'<xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1"/>'+                                                                      //8 title
+'<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>'+                //9 num
+'<xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>'+ //10 absent num
+'<xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>'+ //11 pct
+'<xf numFmtId="0" fontId="1" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>'+ //12 tot num
+'<xf numFmtId="0" fontId="1" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>'+                                         //13 tot label
+'<xf numFmtId="0" fontId="2" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>'+ //14 absent head
+'<xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>'+                                         //15 absent casual (same look)
+'<xf numFmtId="165" fontId="1" fillId="5" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center"/></xf>'+ //16 tot pct
+'<xf numFmtId="0" fontId="6" fillId="0" borderId="0" xfId="0" applyFont="1"/>'+                                                                      //17 sub
+'</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+
+function shiftOrder(s){return s==='Day'?0:s==='Night'?1:2;}
+function buildWorkbook(batch){
+  // ---- flatten
+  const recs=[];
+  batch.forEach(b=>b.rows.forEach(r=>recs.push({date:b.date,shift:b.shift,section:r.section,name:r.name,id:r.id,type:r.type,status:r.status,count:r.count,by:b.reportedBy,remark:r.remark||'',desig:r.designation||''})));
+  recs.sort((a,b)=>a.date.localeCompare(b.date)||shiftOrder(a.shift)-shiftOrder(b.shift));
+  const idc=(id,s)=>/^\d+$/.test(String(id))?{v:+id,s}:{v:id,s};
+  const N=recs.length, last=Math.max(N+1,2);
+  const sum=(f)=>recs.filter(f).reduce((t,r)=>t+r.count,0);
+
+  /* ---- Attendance */
+  const head=['Date','Shift','Section','Name','ID','Type','Status','Count','Reported By','Remark','Designation'];
+  const aRows=[head.map(h=>({v:h,s:S.head}))];
+  recs.forEach(r=>{
+    const ab=r.status==='Absent';
+    aRows.push([{v:serial(r.date),s:ab?S.aDate:S.date},{v:r.shift,s:ab?S.aTxt:S.txt},{v:r.section,s:ab?S.aTxt:S.txt},{v:r.name,s:ab?S.aTxt:S.txt},idc(r.id,ab?S.aTxt:S.txt),
+      {v:r.type,s:ab?S.aCas:(r.type==='Casual'?S.cas:S.txt)},{v:r.status,s:ab?S.aTxt:S.txt},{v:r.count,s:ab?S.aNum:S.num},{v:r.by,s:ab?S.aTxt:S.txt},{v:r.remark,s:ab?S.aTxt:S.txt},{v:r.desig,s:ab?S.aTxt:S.txt}]);
+  });
+  const R=(c)=>'Attendance!$'+c+'$2:$'+c+'$'+last;
+  const sif=(crit)=>'SUMIFS('+R('H')+','+crit.join(',')+')';
+
+  /* ---- Summary */
+  const sm=[];
+  const dates=[...new Set(batch.map(b=>b.date))].sort();
+  sm.push([{v:'Attendance Summary',s:S.title}]);
+  sm.push([{v:(dates.length?'Period: '+fmtDate(dates[0])+' to '+fmtDate(dates[dates.length-1]):'No data')+'   |   Reports phased: '+batch.length+'   |   Red = absent',s:S.sub}]);
+  sm.push([]);
+  sm.push([{v:'Overall totals',s:S.bold}]);
+  sm.push([{v:'Measure',s:S.head},{v:'Total',s:S.head}]);
+  const E='"Employee"',C='"Casual"',P='"Present"',A='"Absent"';
+  const ov=[
+    ['Employees present',[R('F')+','+E,R('G')+','+P],r=>r.type==='Employee'&&r.status==='Present',false],
+    ['Employees absent',[R('F')+','+E,R('G')+','+A],r=>r.type==='Employee'&&r.status==='Absent',true],
+    ['Casuals present',[R('F')+','+C,R('G')+','+P],r=>r.type==='Casual'&&r.status==='Present',false],
+    ['Casuals absent',[R('F')+','+C,R('G')+','+A],r=>r.type==='Casual'&&r.status==='Absent',true]];
+  const ovRow0=sm.length+1; // excel row of first measure
+  ov.forEach(o=>{
+    const v=sum(o[2]);
+    sm.push([{v:o[0],s:o[3]?S.aTxt:S.txt},{f:'SUMIFS('+R('H')+','+o[1].map(c=>{const [rg,cr]=c.split(',');return rg+','+cr;}).join(',')+')',v,s:o[3]?S.aNum:S.num}]);
+  });
+  const vEP=sum(ov[0][2]),vEA=sum(ov[1][2]),vCP=sum(ov[2][2]),vCA=sum(ov[3][2]);
+  sm.push([{v:'Total present (employees + casuals)',s:S.totLbl},{f:'B'+ovRow0+'+B'+(ovRow0+2),v:vEP+vCP,s:S.totNum}]);
+  sm.push([{v:'Total absent (employees + casuals)',s:S.totLbl},{f:'B'+(ovRow0+1)+'+B'+(ovRow0+3),v:vEA+vCA,s:S.totNum}]);
+  sm.push([{v:'Total people listed',s:S.totLbl},{f:'SUM(B'+ovRow0+':B'+(ovRow0+3)+')',v:vEP+vEA+vCP+vCA,s:S.totNum}]);
+  sm.push([{v:'Employee attendance %',s:S.totLbl},{f:'IF((B'+ovRow0+'+B'+(ovRow0+1)+')=0,0,B'+ovRow0+'/(B'+ovRow0+'+B'+(ovRow0+1)+'))',v:(vEP+vEA)?vEP/(vEP+vEA):0,s:S.totPct}]);
+  sm.push([]);
+
+  const tblHead=(first)=>[...first,'Employees Present','Employees Absent','Casuals Present','Casuals Absent','Total Present','Total Absent','Total Listed','Employee Attendance %'];
+  const mkTable=(title,firstHeads,keys,critFor,matchFn)=>{
+    sm.push([{v:title,s:S.bold}]);
+    sm.push(tblHead(firstHeads).map((h,i)=>({v:h,s:(h.includes('Absent'))?S.aHead:S.head})));
+    const start=sm.length+1;
+    keys.forEach(k=>{
+      const rr=recs.filter(r=>matchFn(r,k));
+      const g=(t,s)=>rr.filter(r=>r.type===t&&r.status===s).reduce((a,r)=>a+r.count,0);
+      const ep=g('Employee','Present'),ea=g('Employee','Absent'),cp=g('Casual','Present'),ca=g('Casual','Absent');
+      const er=sm.length+1, cr=critFor(k);
+      const fcell=(typeS,stat)=>({f:'SUMIFS('+R('H')+','+cr.join(',')+','+R('F')+',"'+typeS+'",'+R('G')+',"'+stat+'")'});
+      const rowCells=[...k.labels.map(l=>({v:l.v,s:l.date?S.date:S.txt}))];
+      const n0=k.labels.length;
+      const cc=(i)=>colL(n0+i)+er;
+      rowCells.push({...fcell('Employee','Present'),v:ep,s:S.num},{...fcell('Employee','Absent'),v:ea,s:ea?S.aNum:S.num},{...fcell('Casual','Present'),v:cp,s:S.num},{...fcell('Casual','Absent'),v:ca,s:ca?S.aNum:S.num});
+      rowCells.push({f:cc(0)+'+'+cc(2),v:ep+cp,s:S.num},{f:cc(1)+'+'+cc(3),v:ea+ca,s:(ea+ca)?S.aNum:S.num},{f:'SUM('+cc(0)+':'+cc(3)+')',v:ep+ea+cp+ca,s:S.num},
+        {f:'IF(('+cc(0)+'+'+cc(1)+')=0,0,'+cc(0)+'/('+cc(0)+'+'+cc(1)+'))',v:(ep+ea)?ep/(ep+ea):0,s:S.pct});
+      sm.push(rowCells);
+    });
+    const end=sm.length;
+    if(keys.length){
+      const n0=keys[0].labels.length, tr=[];
+      for(let i=0;i<n0;i++) tr.push(i===0?{v:'TOTAL',s:S.totLbl}:{v:'',s:S.totLbl});
+      const cs=[];for(let i=0;i<8;i++) cs.push(colL(n0+i));
+      const T=(i)=>colL(n0+i)+(end+1);
+      [0,1,2,3,4,5,6].forEach(i=>{
+        const col=cs[i];
+        let v=0;for(let r=start-1;r<end;r++){const c=sm[r][n0+i];v+=c.v;}
+        tr.push({f:'SUM('+col+start+':'+col+end+')',v,s:S.totNum});
+      });
+      const vp=tr[n0].v,va=tr[n0+1].v;
+      tr.push({f:'IF(('+T(0)+'+'+T(1)+')=0,0,'+T(0)+'/('+T(0)+'+'+T(1)+'))',v:(vp+va)?vp/(vp+va):0,s:S.totPct});
+      sm.push(tr);
+    }
+    sm.push([]);
+  };
+  const dsKeys=[];batch.slice().sort((a,b)=>a.date.localeCompare(b.date)||shiftOrder(a.shift)-shiftOrder(b.shift)).forEach(b=>{if(!dsKeys.find(k=>k.date===b.date&&k.shift===b.shift))dsKeys.push({date:b.date,shift:b.shift,labels:[{v:serial(b.date),date:true},{v:b.shift}]});});
+  mkTable('By date and shift',['Date','Shift'],dsKeys,k=>[R('A')+','+serial(k.date),R('B')+',"'+k.shift+'"'],(r,k)=>r.date===k.date&&r.shift===k.shift);
+  const secs=[...new Set(recs.map(r=>r.section))].sort();
+  const secKeys=secs.map(s=>({sec:s,labels:[{v:s}]}));
+  mkTable('By section',['Section'],secKeys,k=>[R('C')+',"'+k.sec.replace(/"/g,'""')+'"'],(r,k)=>r.section===k.sec);
+
+  /* ---- Absent & Casuals lists */
+  const listHead=['Date','Shift','Section','Name','ID','Type','Count','Reported By','Remark','Designation'];
+  const absRows=[listHead.map(h=>({v:h,s:S.aHead}))];
+  recs.filter(r=>r.status==='Absent').forEach(r=>absRows.push([{v:serial(r.date),s:S.aDate},{v:r.shift,s:S.aTxt},{v:r.section,s:S.aTxt},{v:r.name,s:S.aTxt},idc(r.id,S.aTxt),{v:r.type,s:S.aTxt},{v:r.count,s:S.aNum},{v:r.by,s:S.aTxt},{v:r.remark,s:S.aTxt},{v:r.desig,s:S.aTxt}]));
+  const casRows=[['Date','Shift','Section','Name','ID','Status','Count','Reported By','Remark','Designation'].map(h=>({v:h,s:S.head}))];
+  recs.filter(r=>r.type==='Casual').forEach(r=>{const ab=r.status==='Absent';casRows.push([{v:serial(r.date),s:ab?S.aDate:S.date},{v:r.shift,s:ab?S.aTxt:S.txt},{v:r.section,s:ab?S.aTxt:S.txt},{v:r.name,s:ab?S.aTxt:S.txt},idc(r.id,ab?S.aTxt:S.txt),{v:r.status,s:ab?S.aTxt:S.cas},{v:r.count,s:ab?S.aNum:S.num},{v:r.by,s:ab?S.aTxt:S.txt},{v:r.remark,s:ab?S.aTxt:S.txt},{v:r.desig,s:ab?S.aTxt:S.txt}]);});
+
+  /* ---- By person */
+  const pmap=new Map();
+  recs.filter(r=>!/headcount/i.test(r.name)).forEach(r=>{
+    const k=(r.id||r.name).toUpperCase()+'|'+r.name.toUpperCase();
+    if(!pmap.has(k)) pmap.set(k,{name:r.name,id:r.id,type:r.type,p:0,a:0,desig:r.desig});
+    const o=pmap.get(k); if(r.status==='Absent')o.a++;else o.p++; if(r.type==='Casual')o.type='Casual';
+  });
+  const people=[...pmap.values()].sort((a,b)=>b.a-a.a||a.name.localeCompare(b.name));
+  const pRows=[['Name','ID','Type','Shifts Present','Shifts Absent','Shifts Listed','Attendance %','Designation'].map((h,i)=>({v:h,s:i===4?S.aHead:S.head}))];
+  people.forEach((o,i)=>{const r=i+2;pRows.push([{v:o.name,s:S.txt},idc(o.id,S.txt),{v:o.type,s:o.type==='Casual'?S.cas:S.txt},{v:o.p,s:S.num},{v:o.a,s:o.a?S.aNum:S.num},{f:'D'+r+'+E'+r,v:o.p+o.a,s:S.num},{f:'IF(F'+r+'=0,0,D'+r+'/F'+r+')',v:(o.p+o.a)?o.p/(o.p+o.a):0,s:S.pct},{v:o.desig,s:S.txt}]);});
+
+  const sheets=[
+    {name:'Attendance',xml:sheetXml(aRows,{freeze:1,widths:[13,9,18,26,8,11,10,8,16,34,22],filter:'A1:K'+last})},
+    {name:'Summary',xml:sheetXml(sm,{tab:1,widths:[36,12,14,14,14,14,14,14,14,16]})},
+    {name:'Absent',xml:sheetXml(absRows,{freeze:1,widths:[13,9,18,26,8,11,8,16,34,22]})},
+    {name:'Casuals',xml:sheetXml(casRows,{freeze:1,widths:[13,9,18,26,8,11,8,16,34,22]})},
+    {name:'By Person',xml:sheetXml(pRows,{freeze:1,widths:[28,8,11,14,14,13,14,22]})}
+  ];
+  const files=[
+    {name:'[Content_Types].xml',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+sheets.map((s,i)=>'<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('')+'</Types>'},
+    {name:'_rels/.rels',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'},
+    {name:'xl/workbook.xml',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView activeTab="1"/></bookViews><sheets>'+sheets.map((s,i)=>'<sheet name="'+s.name+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>').join('')+'</sheets><calcPr fullCalcOnLoad="1"/></workbook>'},
+    {name:'xl/_rels/workbook.xml.rels',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+sheets.map((s,i)=>'<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>').join('')+'<Relationship Id="rId'+(sheets.length+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'},
+    {name:'xl/styles.xml',data:STYLES_XML},
+    ...sheets.map((s,i)=>({name:'xl/worksheets/sheet'+(i+1)+'.xml',data:s.xml}))
+  ];
+  return zip(files);
+}
+function batchTotals(batch){
+  const t={ep:0,ea:0,cp:0,ca:0};
+  batch.forEach(b=>b.rows.forEach(r=>{const k=(r.type==='Casual'?'c':'e')+(r.status==='Absent'?'a':'p');t[k]+=r.count;}));
+  return t;
+}
+function splitMessages(text){
+  const lines=text.replace(/\r/g,'').split('\n'),out=[];let c=[],body=false;
+  const hdr=l=>/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/.test(l)||/\b(attendance|shift\s+report)\b/i.test(l);
+  for(const l of lines){
+    const t=l.trim();
+    if(t&&hdr(t)&&body){out.push(c.join('\n'));c=[];body=false;}
+    c.push(l);
+    if(t&&!hdr(t)&&!/^(from|reported\s+by)\b/i.test(t.replace(/[*_]/g,''))) body=true;
+  }
+  out.push(c.join('\n'));
+  return out.filter(x=>x.trim());
+}
+function mergeMsg(ex,inc){
+  const st={added:0,updated:0,dup:0};
+  const key=r=>/headcount/i.test(r.name)?'H|'+r.section+'|'+r.type+'|'+r.status:'N|'+r.name.toUpperCase();
+  inc.rows.forEach(r=>{
+    const k=key(r),i=ex.rows.findIndex(x=>key(x)===k);
+    if(i<0){ex.rows.push({...r});st.added++;}
+    else{const o=ex.rows[i];
+      if(o.status===r.status&&o.count===r.count) st.dup++;
+      else{ex.rows[i]={...r,id:r.id||o.id,remark:[r.remark,'Updated by later message (was '+o.status+')'].filter(Boolean).join('; ')};st.updated++;}}
+  });
+  ex.reportedBy=[...new Set([ex.reportedBy,inc.reportedBy].filter(Boolean))].join(', ');
+  if(ex.shift==='Unknown') ex.shift=inc.shift;
+  ex.msgs=(ex.msgs||1)+1;
+  return st;
+}
+if(typeof module!=='undefined') module.exports={splitMessages,mergeMsg,parseMessage,buildWorkbook,batchTotals,zip,choosePerson};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+if(typeof document!=='undefined'){
+const $=id=>document.getElementById(id);
+const KEY='attlog_batch_v1';
+let cur=[],batch=[];
+try{batch=JSON.parse(localStorage.getItem(KEY)||'[]');}catch(e){batch=[];}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(batch));}catch(e){}}
+function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),3500);}
+function h(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function counts(rows){const t={ep:0,ea:0,cp:0,ca:0};rows.forEach(r=>{t[(r.type==='Casual'?'c':'e')+(r.status==='Absent'?'a':'p')]+=r.count;});return t;}
+function claimChip(m,c){
+  const cl=m.claimed||{}; if(cl.present==null&&cl.absent==null) return '';
+  const P=c.ep+c.cp,A=c.ea+c.ca,ok=(cl.present==null||cl.present===P)&&(cl.absent==null||cl.absent===A);
+  const txt='Message says '+(cl.present==null?'?':cl.present)+' present / '+(cl.absent==null?'?':cl.absent)+' absent';
+  return ok?'<span class="chip" style="color:var(--green);border-color:var(--green)">&#10003; '+txt+' - matches</span>':'<span class="chip abs">&#9888; '+txt+' - preview shows '+P+' / '+A+'</span>';
+}
+function block(m,mi){
+  const c=counts(m.rows),rv=m.rows.filter(r=>r.review).length;
+  const rows=m.rows.map((r,i)=>{
+    const k=mi+':'+i;
+    const nameCell=(r.cands&&r.cands.length)?'<select data-c="'+k+'"><option value="-1">'+h(r.name)+' (as given)</option>'+r.cands.map((x,n)=>'<option value="'+n+'">'+h(x.name)+' ('+h(x.id||'casual')+') - '+h(x.desig)+'</option>').join('')+'</select>':h(r.name);
+    return '<tr class="'+(r.status==='Absent'?'absent':'')+'"><td>'+(i+1)+'</td><td>'+nameCell+'</td><td>'+h(r.id)+'</td><td>'+h(r.designation||'')+'</td><td>'+h(r.section)+'</td><td><span class="tag '+(r.type==='Casual'?'casual':'')+'" data-t="'+k+'">'+r.type+'</span></td><td><span class="tag" data-s="'+k+'">'+r.status+'</span></td><td>'+r.count+'</td><td style="white-space:normal;min-width:150px;font-size:12px;font-weight:400;color:'+(r.review?'var(--amber)':'var(--mute)')+'">'+h(r.remark||'')+'</td><td><span class="x" data-d="'+k+'" title="Remove">&#10005;</span></td></tr>';}).join('')||'<tr><td colspan="10" class="empty">No attendance lines found in this message.</td></tr>';
+  const sk=m.skipped.length?'<details class="skip" open><summary>'+m.skipped.length+' line(s) not picked up - tap to add</summary>'+m.skipped.map((s,i)=>'<div style="margin-top:6px">'+h(s.line)+' <i>('+s.why+')</i> <span class="tag" data-k="'+mi+'|'+i+'|Employee">+ Employee</span> <span class="tag" data-k="'+mi+'|'+i+'|Casual">+ Casual</span> <span class="tag" data-k="'+mi+'|'+i+'|skip">ignore</span></div>').join('')+'</details>':'';
+  return '<div class="msgblk"><div class="row" style="margin:0 0 8px"><b>Message '+(mi+1)+'</b><label class="f">Date<input type="date" data-dt="'+mi+'" value="'+m.date+'"></label><label class="f">Shift<select data-sh="'+mi+'">'+['Day','Night','Unknown'].map(s=>'<option'+(s===m.shift?' selected':'')+'>'+s+'</option>').join('')+'</select></label><span class="hint">Reported by: '+h(m.reportedBy||'(not found)')+'</span></div>'+
+  '<div class="chips"><span class="chip">Present '+(c.ep+c.cp)+'</span><span class="chip abs">Absent '+(c.ea+c.ca)+'</span><span class="chip cas">Casuals '+(c.cp+c.ca)+'</span>'+claimChip(m,c)+(rv?'<span class="chip cas">Needs check '+rv+'</span>':'')+'</div>'+
+  '<div class="tw"><table><thead><tr><th>#</th><th>Name</th><th>ID</th><th>Designation</th><th>Section</th><th>Type</th><th>Status</th><th>Count</th><th>Check</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+sk+'</div>';
+}
+function renderPreview(){
+  const ok=cur.length>0; $('prevCard').hidden=!ok; if(!ok) return;
+  $('prevCount').textContent=cur.length+' message'+(cur.length>1?'s':'');
+  $('prevList').innerHTML=cur.map(block).join('');
+  $('btnPhase').disabled=!cur.some(m=>m.rows.length);
+}
+const P2=k=>k.split(':').map(Number);
+$('prevList').addEventListener('change',e=>{
+  const t=e.target,d=t.dataset;
+  if(d.c!==undefined){const [m,i]=P2(d.c);choosePerson(cur[m].rows[i],+t.value);renderPreview();}
+  else if(d.dt!==undefined){if(t.value)cur[+d.dt].date=t.value;}
+  else if(d.sh!==undefined){cur[+d.sh].shift=t.value;}
+});
+$('prevList').addEventListener('click',e=>{
+  const d=e.target.dataset;
+  if(d.s!==undefined){const [m,i]=P2(d.s),r=cur[m].rows[i];r.status=r.status==='Absent'?'Present':'Absent';renderPreview();}
+  else if(d.t!==undefined){const [m,i]=P2(d.t),r=cur[m].rows[i];r.type=r.type==='Casual'?'Employee':'Casual';renderPreview();}
+  else if(d.d!==undefined){const [m,i]=P2(d.d);cur[m].rows.splice(i,1);renderPreview();}
+  else if(d.k!==undefined){
+    const [m,i,type]=d.k.split('|'),msg=cur[+m],s=msg.skipped[+i]; if(!s) return;
+    if(type!=='skip'){
+      const nm=titleCase(s.line.replace(/[^\p{L}.' \-]/gu,' ').replace(/\s+/g,' ').trim());
+      const idm=s.line.match(/[A-Za-z]{0,3}\d+/);
+      const nr={section:'Unassigned',name:nm,id:idm?idm[0].toUpperCase():'',type,status:'Present',count:1,remark:''};resolveRow(nr);msg.rows.push(nr);
+    }
+    msg.skipped.splice(+i,1);renderPreview();
+  }
+});
+function doPreview(scroll){
+  const text=$('msg').value.trim();
+  if(!text){toast('Please paste a message first.');return;}
+  cur=splitMessages(text).map(t=>parseMessage(t)).filter(m=>m.rows.length||m.skipped.length);
+  renderPreview();
+  if(!cur.length) toast('No valid attendance entries found.');
+  else if(scroll) $('prevCard').scrollIntoView({behavior:'smooth',block:'start'});
+}
+$('btnPreview').onclick=()=>doPreview(true);
+let tmr;$('msg').addEventListener('input',()=>{clearTimeout(tmr);tmr=setTimeout(()=>{
+  if(!$('msg').value.trim()){cur=[];renderPreview();return;}
+  doPreview(false);},400);});
+$('btnClearText').onclick=()=>{$('msg').value='';cur=[];renderPreview();};
+$('btnPhaseNow').onclick=()=>{if(!$('msg').value.trim()){toast('Please paste a message first.');return;}doPreview(false);phase();};
+$('btnPhase').onclick=()=>phase();
+function phase(){
+  const ms=cur.filter(m=>m.rows.length);
+  if(!ms.length){toast('No valid attendance entries found.');return;}
+  let a=0,u=0,d=0;
+  ms.forEach(m=>{
+    const ex=batch.find(b=>b.date===m.date&&b.shift===m.shift)||batch.find(b=>b.date===m.date&&(b.shift==='Unknown'||m.shift==='Unknown'));
+    if(ex){const s=mergeMsg(ex,m);a+=s.added;u+=s.updated;d+=s.dup;}
+    else{batch.push({id:Date.now()+Math.floor(Math.random()*1e6),date:m.date,shift:m.shift,reportedBy:m.reportedBy,msgs:1,rows:m.rows.map(r=>({...r}))});a+=m.rows.length;}
+  });
+  batch.sort((x,y)=>x.date.localeCompare(y.date)||shiftOrder(x.shift)-shiftOrder(y.shift));
+  save();renderBatch();
+  cur=[];renderPreview();$('msg').value='';
+  toast('Phased '+ms.length+' message(s): '+a+' entries added'+(u?', '+u+' updated':'')+(d?', '+d+' duplicates skipped':'')+'.');
+  window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+}
+function renderBatch(){
+  $('batchCount').textContent=batch.length+' phased';
+  $('batchList').innerHTML=batch.length?batch.map(b=>{const c=counts(b.rows);return '<div class="item"><b>'+fmtDate(b.date)+'</b><span>'+b.shift+'</span><span>Present '+(c.ep+c.cp)+'</span><span style="color:var(--red);font-weight:700">Absent '+(c.ea+c.ca)+'</span><span style="color:var(--amber)">Casuals '+(c.cp+c.ca)+'</span>'+((b.msgs||1)>1?'<span class="chip">'+b.msgs+' messages merged</span>':'')+'<span class="sp"></span><span class="x" data-r="'+b.id+'" title="Remove this one">&#10005;</span></div>';}).join(''):'<div class="empty">Nothing phased yet. Preview a message, then tap "Phase".</div>';
+  const t=batchTotals(batch);
+  $('batchChips').innerHTML=batch.length?'<span class="chip">Employees present '+t.ep+'</span><span class="chip abs">Employees absent '+t.ea+'</span><span class="chip">Casuals present '+t.cp+'</span><span class="chip abs">Casuals absent '+t.ca+'</span>':'';
+  $('btnDownload').disabled=!batch.length;$('btnClearBatch').disabled=!batch.length;
+}
+$('batchList').addEventListener('click',e=>{
+  const id=e.target.dataset.r; if(!id) return;
+  batch=batch.filter(b=>String(b.id)!==id);save();renderBatch();
+});
+$('btnClearBatch').onclick=()=>{
+  if(!batch.length) return;
+  if(!confirm('Clear all '+batch.length+' phased message(s)? This cannot be undone.')) return;
+  batch=[];save();renderBatch();toast('Phased messages cleared.');
+};
+$('btnDownload').onclick=()=>{
+  if(!batch.length){toast('Phase at least one message first.');return;}
+  const blob=buildWorkbook(batch);
+  const ds=batch.map(b=>b.date).sort();
+  const name='Attendance_'+ds[0]+(ds[ds.length-1]!==ds[0]?'_to_'+ds[ds.length-1]:'')+'.xlsx';
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;
+  document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500);
+  toast('Downloaded '+name+'. Use "Clear phased messages" to start a new batch.');
+};
+renderBatch();renderPreview();
+}
+</script>
+</body>
+</html>

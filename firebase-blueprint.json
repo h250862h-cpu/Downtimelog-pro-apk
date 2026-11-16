@@ -1,0 +1,96 @@
+{
+  "entities": {
+    "downtime_log": {
+      "title": "Downtime Log Entry",
+      "description": "Log of machine/equipment downtime incident with resolution and digital signatures",
+      "type": "object",
+      "properties": {
+        "equipmentId": { "type": "string", "maxLength": 100 },
+        "equipmentName": { "type": "string", "maxLength": 100 },
+        "location": { "type": "string", "maxLength": 100 },
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 50 },
+        "category": { "type": "string", "maxLength": 50 },
+        "severity": { "type": "string", "maxLength": 30 },
+        "startTime": { "type": "string", "maxLength": 50 },
+        "endTime": { "type": "string", "maxLength": 50 },
+        "durationMinutes": { "type": "number" },
+        "faultDescription": { "type": "string", "maxLength": 2000 },
+        "rootCause": { "type": "string", "maxLength": 2000 },
+        "actionTaken": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "maxLength": 30 },
+        "technicianName": { "type": "string", "maxLength": 100 },
+        "technicianBadge": { "type": "string", "maxLength": 50 },
+        "supervisorName": { "type": "string", "maxLength": 100 },
+        "technicianSignature": { "type": "string", "maxLength": 200000 },
+        "technicianSignedAt": { "type": "string", "maxLength": 50 },
+        "supervisorSignature": { "type": "string", "maxLength": 200000 },
+        "supervisorSignedAt": { "type": "string", "maxLength": 50 },
+        "digitalVerificationCode": { "type": "string", "maxLength": 50 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": [
+        "equipmentId",
+        "equipmentName",
+        "date",
+        "shift",
+        "category",
+        "severity",
+        "startTime",
+        "status"
+      ]
+    },
+    "daily_summary": {
+      "title": "Daily Shift Summary",
+      "description": "Daily operational summary report with shift metrics and supervisor sign-off",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 50 },
+        "totalIncidents": { "type": "number" },
+        "totalDowntimeMinutes": { "type": "number" },
+        "availabilityPercent": { "type": "number" },
+        "operatingHours": { "type": "number" },
+        "dailyNotes": { "type": "string", "maxLength": 3000 },
+        "shiftSupervisor": { "type": "string", "maxLength": 100 },
+        "supervisorSignature": { "type": "string", "maxLength": 200000 },
+        "isClosed": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["date", "shift", "totalIncidents", "totalDowntimeMinutes"]
+    },
+    "plant_user": {
+      "title": "Plant Operator Account",
+      "description": "Plant staff and operator credentials provisioned exclusively by Administrator",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 150 },
+        "displayName": { "type": "string", "maxLength": 150 },
+        "role": { "type": "string", "maxLength": 50 },
+        "department": { "type": "string", "maxLength": 100 },
+        "createdBy": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["email", "displayName", "role"]
+    }
+  },
+  "firestore": {
+    "/downtime_logs/{logId}": {
+      "schema": "downtime_log",
+      "description": "Individual machine and line downtime incident reports"
+    },
+    "/daily_summaries/{summaryId}": {
+      "schema": "daily_summary",
+      "description": "Daily shift downtime summaries and supervisor handovers"
+    },
+    "/plant_users/{userId}": {
+      "schema": "plant_user",
+      "description": "Registered operator accounts managed exclusively by Plant Administration"
+    }
+  }
+}
