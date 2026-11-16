@@ -24,13 +24,14 @@ import {
 } from 'lucide-react';
 import { getCurrentShift, ymd } from '../services/downtimeCalc';
 import { exportDispatchExcelWorkbook, saveDispatchEntryToFirebase } from '../services/dispatchStore';
+import { getLinkedScrapAndWastageForDispatch } from '../services/sopStore';
 import {
   DispatchShiftWindow,
   generateShiftStockMovementPdf,
   getWindowDisplayLabel,
   getWindowShift,
 } from '../services/dispatchPdf';
-import { DispatchEntry, UserPermissions } from '../types';
+import { DispatchEntry, SopProductionRecord, UserPermissions } from '../types';
 import {
   GENERAL_HAND_OPTIONS,
   OPERATOR_OPTIONS,
@@ -172,6 +173,7 @@ const ReusableSignaturePad: React.FC<ReusableSignaturePadProps> = ({
 interface DispatchSystemViewProps {
   machines: string[];
   dispatchEntries: DispatchEntry[];
+  sopProductionLogs?: SopProductionRecord[];
   permissions: UserPermissions;
   isAdmin?: boolean;
   currentUserName: string;
@@ -183,6 +185,7 @@ interface DispatchSystemViewProps {
 export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   machines,
   dispatchEntries,
+  sopProductionLogs = [],
   permissions,
   isAdmin = false,
   currentUserName,
@@ -221,10 +224,12 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   const [product, setProduct] = useState<string>(MASTER_JOB_CARDS[0] || '');
   const [trolleyNo, setTrolleyNo] = useState<string>('');
   const [recordedQty, setRecordedQty] = useState<string>('');
+  const [unitWeightKg, setUnitWeightKg] = useState<string>('');
   const [operatorName, setOperatorName] = useState<string>(OPERATOR_OPTIONS[0]?.value || 'FARAI MURONZWA');
   const [assistantName, setAssistantName] = useState<string>(GENERAL_HAND_OPTIONS[0]?.value || 'TRIED CHAKUBVA');
   const [isCasualAssistant, setIsCasualAssistant] = useState<boolean>(false);
   const [casualAssistantText, setCasualAssistantText] = useState<string>('');
+  const [casualHelperName, setCasualHelperName] = useState<string>('');
   const [shiftInChargeName, setShiftInChargeName] = useState<string>(
     SHIFT_IN_CHARGE_OPTIONS[0]?.value || currentUserName
   );
@@ -232,6 +237,13 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   const [shiftSignature, setShiftSignature] = useState<string>('');
   const [shiftBanner, setShiftBanner] = useState<{ text: string; isError?: boolean } | null>(null);
   const [savingShift, setSavingShift] = useState(false);
+
+  const liveTotalWeightKg = useMemo(() => {
+    const q = Number(recordedQty);
+    const uw = Number(unitWeightKg);
+    if (!q || !uw || Number.isNaN(q) || Number.isNaN(uw) || q <= 0 || uw <= 0) return 0;
+    return Number((q * uw).toFixed(2));
+  }, [recordedQty, unitWeightKg]);
 
   const filteredProducts = useMemo(
     () => MASTER_JOB_CARDS.filter((p) => p.toLowerCase().includes(productSearch.toLowerCase())),
@@ -315,9 +327,42 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   const [toDate, setToDate] = useState<string>('');
   const [shiftLogSearch, setShiftLogSearch] = useState<string>('');
   const [ledgerStatusFilter, setLedgerStatusFilter] = useState<'ALL' | 'CONFIRMED' | 'PENDING_HOD' | 'PENDING_WH'>('ALL');
+  const [ledgerShiftFilter, setLedgerShiftFilter] = useState<'ALL' | 'Day' | 'Night'>('ALL');
+  const [ledgerMachineFilter, setLedgerMachineFilter] = useState<string>('ALL');
   const [ledgerSearch, setLedgerSearch] = useState<string>('');
   const [previewEntry, setPreviewEntry] = useState<DispatchEntry | null>(null);
   const [excelNotice, setExcelNotice] = useState<string | null>(null);
+
+  const handleDispatchDatePreset = (
+    preset: 'all' | 'today' | '7days' | '30days' | 'thisMonth' | 'lastMonth'
+  ) => {
+    if (preset === 'all') {
+      setFromDate('');
+      setToDate('');
+      return;
+    }
+    const n = new Date();
+    let f = new Date();
+    let t = new Date();
+    if (preset === 'today') {
+      f = n;
+      t = n;
+    } else if (preset === '7days') {
+      f.setDate(n.getDate() - 6);
+      t = n;
+    } else if (preset === '30days') {
+      f.setDate(n.getDate() - 29);
+      t = n;
+    } else if (preset === 'thisMonth') {
+      f = new Date(n.getFullYear(), n.getMonth(), 1);
+      t = n;
+    } else if (preset === 'lastMonth') {
+      f = new Date(n.getFullYear(), n.getMonth() - 1, 1);
+      t = new Date(n.getFullYear(), n.getMonth(), 0);
+    }
+    setFromDate(ymd(f));
+    setToDate(ymd(t));
+  };
 
   const shiftReflectedEntries = useMemo(() => {
     const q = shiftLogSearch.trim().toLowerCase();
@@ -339,6 +384,8 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
       if (fromDate && e.date < fromDate) return false;
       if (toDate && e.date > toDate) return false;
       if (ledgerStatusFilter !== 'ALL' && e.status !== ledgerStatusFilter) return false;
+      if (ledgerShiftFilter !== 'ALL' && e.shift !== ledgerShiftFilter) return false;
+      if (ledgerMachineFilter !== 'ALL' && e.machine !== ledgerMachineFilter) return false;
       if (ledgerSearch.trim()) {
         const q = ledgerSearch.toLowerCase();
         const hit =
@@ -353,7 +400,15 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
       }
       return true;
     });
-  }, [dispatchEntries, fromDate, toDate, ledgerStatusFilter, ledgerSearch]);
+  }, [
+    dispatchEntries,
+    fromDate,
+    toDate,
+    ledgerStatusFilter,
+    ledgerShiftFilter,
+    ledgerMachineFilter,
+    ledgerSearch,
+  ]);
 
   const confirmedCount = useMemo(
     () => dispatchEntries.filter((e) => e.status === 'CONFIRMED').length,
@@ -522,12 +577,20 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
     setShiftBanner(null);
 
     const qtyNum = Number(recordedQty);
+    const unitWtNum = unitWeightKg.trim() !== '' ? Number(unitWeightKg) : undefined;
     if (!trolleyNo.trim()) {
       setShiftBanner({ text: 'Please enter the Trolley Number.', isError: true });
       return;
     }
     if (!recordedQty || Number.isNaN(qtyNum) || qtyNum <= 0) {
       setShiftBanner({ text: 'Please enter a valid positive Quantity Recorded.', isError: true });
+      return;
+    }
+    if (unitWtNum === undefined || Number.isNaN(unitWtNum) || unitWtNum <= 0) {
+      setShiftBanner({
+        text: 'Please enter Weight of 1 Item Qty (kg) so total Qty (kg) is calculated automatically.',
+        isError: true,
+      });
       return;
     }
     const finalAssistant = isCasualAssistant ? casualAssistantText.trim() : assistantName;
@@ -540,6 +603,10 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
       return;
     }
 
+    const totalWtNum = Number((qtyNum * unitWtNum).toFixed(2));
+    const resolvedCasualHelper =
+      casualHelperName.trim() || (isCasualAssistant ? casualAssistantText.trim() : '');
+
     setSavingShift(true);
     try {
       const entry: DispatchEntry = {
@@ -550,9 +617,12 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
         product: product || MASTER_JOB_CARDS[0],
         trolleyNo: trolleyNo.trim().toUpperCase(),
         recordedQty: qtyNum,
+        unitWeightKg: unitWtNum,
+        totalWeightKg: totalWtNum,
         operatorName,
         assistantName: finalAssistant,
         isCasualAssistant,
+        casualAssistantName: resolvedCasualHelper || undefined,
         shiftInChargeName,
         shiftInChargeSignature: shiftSignature,
         shiftNotes: shiftNotes.trim() || undefined,
@@ -565,12 +635,14 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
       const res = await saveDispatchEntryToFirebase(entry);
       setTrolleyNo('');
       setRecordedQty('');
+      setUnitWeightKg('');
+      setCasualHelperName('');
       setShiftNotes('');
       setShiftSignature('');
       setCasualAssistantText('');
       setShiftBanner({
         text: res.ok
-          ? `Dispatch ${entry.trolleyNo} (${entry.recordedQty} units) logged & Pop-up Message sent to WH Personnel!`
+          ? `Dispatch ${entry.trolleyNo} (${entry.recordedQty} units • ${totalWtNum} kg) logged & Pop-up Message sent to WH Personnel!`
           : `Saved locally (${entry.trolleyNo}); cloud retry queued (${res.error || 'offline'}).`,
         isError: false,
       });
@@ -785,15 +857,15 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   };
 
   const handleDownloadDispatchExcel = () => {
-    if (!isAdmin && !permissions.exportDispatchExcel) {
-      setExcelNotice('Confidentiality Lock: Only Admin-authorized staff can download Dispatch Excel reports.');
+    if (!isAdmin) {
+      setExcelNotice('Confidentiality Lock: Only Plant Admin / Production HOD can download Dispatch Excel reports.');
       return;
     }
     const effectiveFrom = fromDate || '2020-01-01';
     const effectiveTo = toDate || '2099-12-31';
-    exportDispatchExcelWorkbook(dispatchEntries, effectiveFrom, effectiveTo);
+    exportDispatchExcelWorkbook(ledgerEntries, effectiveFrom, effectiveTo, sopProductionLogs);
     setExcelNotice(
-      `Confidential Dispatch Excel (.xlsx) downloaded (${fromDate || 'All Dates'} to ${toDate || 'Latest'}).`
+      `Confidential Dispatch Excel (.xlsx) downloaded (${ledgerEntries.length} filtered records · ${fromDate || 'All Dates'} to ${toDate || 'Latest'}) with Qty (kg) & linked Production Scrap/Wastage.`
     );
   };
 
@@ -1187,14 +1259,14 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                 </div>
               </div>
 
-              {/* Row 2: Product Dispatched (with Search Filter) & Quantity Recorded */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              {/* Row 2: Product Dispatched (with Search Filter), Quantity & Weight per 1 Item */}
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                 <div className="lg:col-span-2 space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-[11px] font-bold text-slate-300">
                       Product Dispatched (Job Card Catalogue)
                     </label>
-                    <div className="relative w-44 sm:w-56">
+                    <div className="relative w-44 sm:w-52">
                       <Search className="h-3 w-3 text-slate-500 absolute left-2.5 top-2" />
                       <input
                         type="text"
@@ -1227,7 +1299,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 mb-1.5">
-                    Quantity Recorded by Shift In Charge *
+                    Quantity Recorded *
                   </label>
                   <input
                     type="number"
@@ -1237,13 +1309,36 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                     placeholder="e.g. 250"
                     value={recordedQty}
                     onChange={(e) => setRecordedQty(e.target.value)}
-                    className="w-full rounded-xl border border-amber-500/40 bg-slate-950 px-3 py-2 text-sm font-black text-amber-300 placeholder:text-slate-600 focus:border-amber-500 focus:outline-none"
+                    className="w-full rounded-xl border border-amber-500/40 bg-slate-950 px-3 py-2 text-sm font-black text-amber-300 placeholder:text-slate-600 focus:border-amber-500 focus:outline-none tabular-nums"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-[11px] font-bold text-slate-300">
+                      Wt of 1 Item Qty (kg) *
+                    </label>
+                    {liveTotalWeightKg > 0 && (
+                      <span className="text-[10px] font-black text-emerald-300 tabular-nums">
+                        = {liveTotalWeightKg} kg
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    min="0.001"
+                    step="any"
+                    required
+                    placeholder="e.g. 1.25"
+                    value={unitWeightKg}
+                    onChange={(e) => setUnitWeightKg(e.target.value)}
+                    className="w-full rounded-xl border border-emerald-500/40 bg-slate-950 px-3 py-2 text-sm font-black text-emerald-300 placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none tabular-nums"
                   />
                 </div>
               </div>
 
-              {/* Row 3: Operator, Assistant/General Hand, Shift In Charge Name */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Row 3: Operator, Assistant/General Hand, Casual Assisted, Shift In Charge Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 mb-1">
                     Operator Name (Downtime Logger)
@@ -1297,6 +1392,19 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                       ))}
                     </select>
                   )}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Name of Casual Who Assisted
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Optional casual helper name..."
+                    value={casualHelperName}
+                    onChange={(e) => setCasualHelperName(e.target.value)}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs sm:text-sm text-white placeholder:text-slate-600 focus:border-amber-500 focus:outline-none"
+                  />
                 </div>
 
                 <div>
@@ -2192,19 +2300,19 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                 </p>
               </div>
 
-              {isAdmin && permissions.exportDispatchExcel ? (
+              {isAdmin ? (
                 <button
                   type="button"
                   onClick={handleDownloadDispatchExcel}
                   className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-4 py-2.5 text-xs font-black text-white shadow-md transition"
                 >
                   <Download className="h-4 w-4" />
-                  <span>Download Dispatch Excel (.xlsx)</span>
+                  <span>Download Dispatch Excel ({ledgerEntries.length})</span>
                 </button>
               ) : (
                 <div className="flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-300">
                   <Lock className="h-4 w-4" />
-                  <span>Excel Download Locked (Admin Confidentiality)</span>
+                  <span>Excel Download Locked (Admin Only)</span>
                 </div>
               )}
             </div>
@@ -2218,10 +2326,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => {
-                  setFromDate('');
-                  setToDate('');
-                }}
+                onClick={() => handleDispatchDatePreset('all')}
                 className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${
                   !fromDate && !toDate
                     ? 'border-sky-400 bg-sky-500/20 text-sky-200'
@@ -2232,28 +2337,51 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setFromDate(todayStr);
-                  setToDate(todayStr);
-                }}
-                className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-800"
+                onClick={() => handleDispatchDatePreset('today')}
+                className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${
+                  fromDate === todayStr && toDate === todayStr
+                    ? 'border-sky-400 bg-sky-500/20 text-sky-200'
+                    : 'border-slate-700 bg-slate-950 text-slate-300 hover:bg-slate-800'
+                }`}
               >
                 Today
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setFromDate(firstOfMonthStr);
-                  setToDate(todayStr);
-                }}
+                onClick={() => handleDispatchDatePreset('7days')}
                 className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-800"
               >
+                Last 7 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDispatchDatePreset('30days')}
+                className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-800"
+              >
+                Last 30 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDispatchDatePreset('thisMonth')}
+                className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${
+                  fromDate === firstOfMonthStr && toDate === todayStr
+                    ? 'border-sky-400 bg-sky-500/20 text-sky-200'
+                    : 'border-slate-700 bg-slate-950 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
                 This Month
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDispatchDatePreset('lastMonth')}
+                className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-800"
+              >
+                Last Month
               </button>
             </div>
 
             {/* Filters */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">
                   From Date
@@ -2275,6 +2403,37 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                   onChange={(e) => setToDate(e.target.value)}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white"
                 />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">
+                  Shift
+                </label>
+                <select
+                  value={ledgerShiftFilter}
+                  onChange={(e) => setLedgerShiftFilter(e.target.value as 'ALL' | 'Day' | 'Night')}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white"
+                >
+                  <option value="ALL">All Shifts</option>
+                  <option value="Day">Day Shift</option>
+                  <option value="Night">Night Shift</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">
+                  Machine
+                </label>
+                <select
+                  value={ledgerMachineFilter}
+                  onChange={(e) => setLedgerMachineFilter(e.target.value)}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white"
+                >
+                  <option value="ALL">All Machines</option>
+                  {machines.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">
@@ -2305,80 +2464,94 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
               </div>
             </div>
 
-            {/* Table */}
+            {/* Table — Structured Operational Columns + Linked Production Scrap/Wastage */}
             <div className="overflow-x-auto rounded-xl border border-slate-800">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-950 text-[10px] font-black uppercase text-slate-400 border-b border-slate-800">
                   <tr>
-                    <th className="px-3 py-2.5">Date / Shift</th>
-                    <th className="px-3 py-2.5">Trolley</th>
-                    <th className="px-3 py-2.5">Machine &amp; Product</th>
-                    <th className="px-3 py-2.5">Operator / Assistant</th>
-                    <th className="px-3 py-2.5 text-right">Shift Qty</th>
-                    <th className="px-3 py-2.5 text-right">WH Qty</th>
-                    <th className="px-3 py-2.5 text-right">Var</th>
-                    <th className="px-3 py-2.5">WH Signed</th>
-                    <th className="px-3 py-2.5">HOD Final</th>
-                    <th className="px-3 py-2.5">Status</th>
-                    <th className="px-3 py-2.5 text-center">Audit</th>
+                    <th className="px-2.5 py-2.5">Date</th>
+                    <th className="px-2.5 py-2.5">Shift</th>
+                    <th className="px-2.5 py-2.5">Operator</th>
+                    <th className="px-2.5 py-2.5">Assistant</th>
+                    <th className="px-2.5 py-2.5">Product</th>
+                    <th className="px-2.5 py-2.5">Process</th>
+                    <th className="px-2.5 py-2.5">Machine</th>
+                    <th className="px-2.5 py-2.5 text-right">Qty</th>
+                    <th className="px-2.5 py-2.5 text-right">Qty (kg)</th>
+                    <th className="px-2.5 py-2.5 text-right">Scrap (kg)</th>
+                    <th className="px-2.5 py-2.5 text-right">Wastage (kg)</th>
+                    <th className="px-2.5 py-2.5">Issued To</th>
+                    <th className="px-2.5 py-2.5">Casual Assisted</th>
+                    <th className="px-2.5 py-2.5">Status</th>
+                    <th className="px-2.5 py-2.5 text-center">Audit</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/70 bg-slate-900/50">
+                <tbody className="divide-y divide-slate-800/70 bg-slate-900/50 tabular-nums">
                   {ledgerEntries.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="px-4 py-8 text-center text-slate-500">
+                      <td colSpan={15} className="px-4 py-8 text-center text-slate-500">
                         No dispatch records match the selected date range and filters.
                       </td>
                     </tr>
                   ) : (
                     ledgerEntries.map((item) => {
-                      const hasWH = typeof item.whReceivedQty === 'number';
-                      const variance = hasWH ? item.whReceivedQty! - item.recordedQty : null;
+                      const effectiveQty =
+                        typeof item.whReceivedQty === 'number'
+                          ? item.whReceivedQty
+                          : item.recordedQty;
+                      const weightKg =
+                        typeof item.unitWeightKg === 'number' && item.unitWeightKg > 0
+                          ? (effectiveQty * item.unitWeightKg).toFixed(2)
+                          : typeof item.totalWeightKg === 'number'
+                          ? item.totalWeightKg.toFixed(2)
+                          : '—';
+                      const linked = getLinkedScrapAndWastageForDispatch(item, sopProductionLogs);
+                      const casualDisplay =
+                        (item.casualAssistantName || '').trim() ||
+                        (item.isCasualAssistant ? item.assistantName : '') ||
+                        '—';
                       return (
                         <tr key={item.id} className="hover:bg-slate-800/40 transition">
-                          <td className="px-3 py-2.5 whitespace-nowrap">
-                            <div className="font-bold text-slate-200">{item.date}</div>
-                            <div className="text-[10px] text-slate-400">{item.shift}</div>
+                          <td className="px-2.5 py-2.5 whitespace-nowrap font-bold text-slate-200">
+                            {item.date}
                           </td>
-                          <td className="px-3 py-2.5 font-mono font-black text-amber-300 whitespace-nowrap">
-                            {item.trolleyNo}
+                          <td className="px-2.5 py-2.5 whitespace-nowrap text-slate-300">
+                            {item.shift}
                           </td>
-                          <td className="px-3 py-2.5">
-                            <div className="font-bold text-white">{item.product}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {item.machine} • SIC: {item.shiftInChargeName}
-                            </div>
+                          <td className="px-2.5 py-2.5 whitespace-nowrap text-slate-200">
+                            {item.operatorName}
                           </td>
-                          <td className="px-3 py-2.5">
-                            <div className="text-slate-200">{item.operatorName}</div>
-                            <div className="text-[10px] text-slate-400">{item.assistantName}</div>
+                          <td className="px-2.5 py-2.5 whitespace-nowrap text-slate-300">
+                            {item.assistantName}
                           </td>
-                          <td className="px-3 py-2.5 text-right font-black text-amber-300">
-                            {item.recordedQty}
+                          <td className="px-2.5 py-2.5 min-w-[150px] font-bold text-white">
+                            {item.product}
                           </td>
-                          <td className="px-3 py-2.5 text-right font-black text-emerald-400">
-                            {hasWH ? item.whReceivedQty : '—'}
+                          <td className="px-2.5 py-2.5 whitespace-nowrap font-semibold text-sky-300">
+                            Dispatch
                           </td>
-                          <td className="px-3 py-2.5 text-right font-bold">
-                            {variance === null ? (
-                              '—'
-                            ) : (
-                              <span
-                                className={
-                                  variance === 0 ? 'text-emerald-400' : 'text-rose-400'
-                                }
-                              >
-                                {variance > 0 ? `+${variance}` : variance}
-                              </span>
-                            )}
+                          <td className="px-2.5 py-2.5 whitespace-nowrap text-slate-200">
+                            {item.machine}
                           </td>
-                          <td className="px-3 py-2.5 text-slate-300">
-                            {item.whPersonnelName || 'Pending'}
+                          <td className="px-2.5 py-2.5 text-right font-black text-amber-300">
+                            {effectiveQty}
                           </td>
-                          <td className="px-3 py-2.5 text-slate-300">
-                            {item.hodConfirmedByName || 'Pending'}
+                          <td className="px-2.5 py-2.5 text-right font-black text-emerald-300">
+                            {weightKg}
                           </td>
-                          <td className="px-3 py-2.5 whitespace-nowrap">
+                          <td className="px-2.5 py-2.5 text-right font-bold text-rose-300">
+                            {linked.matchedCount > 0 ? linked.scrapKg : 0}
+                          </td>
+                          <td className="px-2.5 py-2.5 text-right font-bold text-amber-200">
+                            {linked.matchedCount > 0 ? linked.wastageKg : 0}
+                          </td>
+                          <td className="px-2.5 py-2.5 whitespace-nowrap text-slate-200">
+                            {item.whPersonnelName || 'Pending WH'}
+                          </td>
+                          <td className="px-2.5 py-2.5 whitespace-nowrap text-slate-300">
+                            {casualDisplay}
+                          </td>
+                          <td className="px-2.5 py-2.5 whitespace-nowrap">
                             <span
                               className={`rounded-md px-2 py-0.5 text-[10px] font-black uppercase border ${
                                 item.status === 'CONFIRMED'
@@ -2395,7 +2568,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                                 : 'PENDING WH'}
                             </span>
                           </td>
-                          <td className="px-3 py-2.5 text-center">
+                          <td className="px-2.5 py-2.5 text-center">
                             <button
                               type="button"
                               onClick={() => setPreviewEntry(item)}
@@ -2444,9 +2617,20 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                   1. Shift In Charge
                 </div>
                 <div>Qty Recorded: <b className="text-amber-300">{previewEntry.recordedQty}</b></div>
+                {typeof previewEntry.unitWeightKg === 'number' && (
+                  <div>
+                    Unit Wt: <b>{previewEntry.unitWeightKg} kg</b> • Total:{' '}
+                    <b className="text-emerald-300">
+                      {(previewEntry.recordedQty * previewEntry.unitWeightKg).toFixed(2)} kg
+                    </b>
+                  </div>
+                )}
                 <div>Name: <b>{previewEntry.shiftInChargeName}</b></div>
                 <div>Operator: <b>{previewEntry.operatorName}</b></div>
                 <div>Assistant: <b>{previewEntry.assistantName}</b></div>
+                {previewEntry.casualAssistantName && (
+                  <div>Casual Assisted: <b>{previewEntry.casualAssistantName}</b></div>
+                )}
                 {previewEntry.shiftInChargeSignature && (
                   <img
                     src={previewEntry.shiftInChargeSignature}

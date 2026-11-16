@@ -89,6 +89,7 @@ export const FACTORY_STAFF_ROSTER: FactoryStaffMember[] = [
   { id: 98, name: 'PASSION', designation: 'mixing' },
   { id: 100, name: 'EVANS', designation: 'stores' },
   { id: 73, name: 'Isa', designation: 'Cook' },
+  { id: 101, name: 'TINAYE ZHOU', designation: 'recycling' },
 ];
 
 /**
@@ -164,6 +165,59 @@ export const WH_PERSONNEL_OPTIONS: { label: string; value: string; designation: 
       des.includes('dispatch') ||
       des.includes('stores') ||
       des.includes('wh')
+    );
+  })
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((s) => ({
+      label: `${s.name} (${s.designation}) [ID: ${s.id}]`,
+      value: s.name,
+      designation: s.designation,
+    }));
+
+/**
+ * Filtered list of Recycling Team members
+ */
+export const RECYCLING_OPTIONS: { label: string; value: string; designation: string }[] =
+  FACTORY_STAFF_ROSTER.filter((s) => s.designation.toLowerCase().includes('recycling'))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((s) => ({
+      label: `${s.name} (${s.designation}) [ID: ${s.id}]`,
+      value: s.name,
+      designation: s.designation,
+    }));
+
+/**
+ * Filtered list of Mixer Operators & Mixing Assistants
+ */
+export const MIXING_OPTIONS: { label: string; value: string; designation: string }[] =
+  FACTORY_STAFF_ROSTER.filter((s) => {
+    const des = s.designation.toLowerCase();
+    return des.includes('mixing') || des.includes('mixer');
+  })
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((s) => ({
+      label: `${s.name} (${s.designation}) [ID: ${s.id}]`,
+      value: s.name,
+      designation: s.designation,
+    }));
+
+/**
+ * Combined Production Floor Personnel (Operators + Assistants + Mixing + Recycling + Maintenance)
+ */
+export const FLOOR_PRODUCTION_TEAM_OPTIONS: { label: string; value: string; designation: string }[] =
+  FACTORY_STAFF_ROSTER.filter((s) => {
+    const des = s.designation.toLowerCase();
+    return (
+      des.includes('operator') ||
+      des.includes('assistant') ||
+      des.includes('mixing') ||
+      des.includes('recycling') ||
+      des.includes('maintenance') ||
+      des.includes('electrician') ||
+      des.includes('plumber') ||
+      des.includes('mold setter') ||
+      des.includes('supervisor') ||
+      des.includes('shift in charge')
     );
   })
     .sort((a, b) => a.name.localeCompare(b.name))

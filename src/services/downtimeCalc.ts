@@ -89,7 +89,7 @@ export function calculateDayStats(
       o[catCode] += (y - x) / 36e5;
     }
 
-    if (ymd(new Date(s)) === day && e.jcn) {
+    if (ymd(new Date(s)) === day && e.jcn && e.cat !== 'Running Check') {
       o.jct++;
       if (e.jcp === 'Finished') o.jc++;
     }

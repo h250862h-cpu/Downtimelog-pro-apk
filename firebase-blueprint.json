@@ -77,6 +77,118 @@
         "status": { "type": "string", "maxLength": 30 }
       },
       "required": ["email", "displayName", "role"]
+    },
+    "dispatch_entry": {
+      "title": "Shift Dispatch & Verification Record",
+      "description": "Three-stage production dispatch movement form with unit weights, WH confirmation, and HOD final sign-off",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "product": { "type": "string", "maxLength": 200 },
+        "operatorName": { "type": "string", "maxLength": 120 },
+        "assistantName": { "type": "string", "maxLength": 120 },
+        "casualAssistantName": { "type": "string", "maxLength": 120 },
+        "trolleys": { "type": "number" },
+        "shiftQty": { "type": "number" },
+        "unitWeightKg": { "type": "number" },
+        "totalWeightKg": { "type": "number" },
+        "whConfirmedQty": { "type": "number" },
+        "hodConfirmedQty": { "type": "number" },
+        "status": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["date", "shift", "machine", "product", "shiftQty", "status"]
+    },
+    "sop_production_log": {
+      "title": "SOP Floor Production Job Card",
+      "description": "Shift production output, linked scrap, wastage, and downtime log from WhatsApp or floor form",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "product": { "type": "string", "maxLength": 200 },
+        "operator": { "type": "string", "maxLength": 120 },
+        "assistant": { "type": "string", "maxLength": 120 },
+        "actualQty": { "type": "number" },
+        "scrapKg": { "type": "number" },
+        "wastageKg": { "type": "number" },
+        "downtimeMins": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["date", "shift", "machine", "product"]
+    },
+    "sop_qc_check": {
+      "title": "SOP Quality Control Check",
+      "description": "Hourly or per-shift QC inspection record and pass/fail audit",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "product": { "type": "string", "maxLength": 200 },
+        "inspector": { "type": "string", "maxLength": 120 },
+        "result": { "type": "string", "maxLength": 20 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["date", "machine", "product", "result"]
+    },
+    "sop_scrap_record": {
+      "title": "SOP Closed-Loop Scrap Pipeline",
+      "description": "Multi-stage scrap handover from Operator Assistant to Recycling Team to Mixers",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "material": { "type": "string", "maxLength": 200 },
+        "weightKg": { "type": "number" },
+        "usableRegrindKg": { "type": "number" },
+        "allProcessedUsable": { "type": "boolean" },
+        "status": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["date", "machine", "weightKg", "status"]
+    },
+    "sop_mixing_report": {
+      "title": "SOP Mixing & WH Reserve Stock Report",
+      "description": "Mixer consumption of WH virgin material & recycled scrap, sweeping generation, batches, and HOD confirmation",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "mixerName": { "type": "string", "maxLength": 120 },
+        "materialType": { "type": "string", "maxLength": 200 },
+        "whReservedMaterialKg": { "type": "number" },
+        "scrapReceivedFromRecyclingKg": { "type": "number" },
+        "whMaterialUsedKg": { "type": "number" },
+        "scrapUsedInMixingKg": { "type": "number" },
+        "sweepingMaterialKg": { "type": "number" },
+        "batchesMixed": { "type": "number" },
+        "pendingMix": { "type": "number" },
+        "endOfMixingStockKg": { "type": "number" },
+        "status": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["date", "mixerName", "materialType", "status"]
+    },
+    "sop_shift_handover": {
+      "title": "SOP Shift Handover Log",
+      "description": "End-of-shift floor operational handover sign-off",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "outgoingShift": { "type": "string", "maxLength": 20 },
+        "outgoingSupervisor": { "type": "string", "maxLength": 120 },
+        "incomingSupervisor": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["date", "outgoingShift", "outgoingSupervisor"]
     }
   },
   "firestore": {
@@ -91,6 +203,30 @@
     "/plant_users/{userId}": {
       "schema": "plant_user",
       "description": "Registered operator accounts managed exclusively by Plant Administration"
+    },
+    "/dispatch_entries/{id}": {
+      "schema": "dispatch_entry",
+      "description": "3-stage Shift Dispatch entries with weights and linked casual/WH info"
+    },
+    "/sop_production_logs/{id}": {
+      "schema": "sop_production_log",
+      "description": "Production logger entries and WhatsApp production parser output"
+    },
+    "/sop_qc_checks/{id}": {
+      "schema": "sop_qc_check",
+      "description": "QC inspection records and WhatsApp QC parser output"
+    },
+    "/sop_scrap_pipeline/{id}": {
+      "schema": "sop_scrap_record",
+      "description": "Closed-loop scrap handover records from Operator to Recycling to Mixers"
+    },
+    "/sop_mixing_reports/{id}": {
+      "schema": "sop_mixing_report",
+      "description": "Mixing usage, sweeping, batches, WH stock balances, and HOD review records"
+    },
+    "/sop_shift_handovers/{id}": {
+      "schema": "sop_shift_handover",
+      "description": "Floor shift handover records"
     }
   }
 }

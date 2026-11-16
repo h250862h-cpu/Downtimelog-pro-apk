@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QC Report → Excel</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--text:#1a1a1a;--sub:#666;--border:#dcdfe4;--accent:#2563eb;--accentT:#fff;--head:#eef1f6;--bad:#dc2626;--good:#16a34a;color-scheme:light;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#17181a;--card:#232427;--text:#eee;--sub:#aaa;--border:#3a3b3e;--head:#2c2d30;--bad:#f87171;--good:#4ade80;color-scheme:dark;}}
+:root[data-theme="dark"]{--bg:#17181a;--card:#232427;--text:#eee;--sub:#aaa;--border:#3a3b3e;--head:#2c2d30;--bad:#f87171;--good:#4ade80;color-scheme:dark;}
+*{box-sizing:border-box}
+html,body{background:var(--bg);color:var(--text);margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+body{padding:16px;padding-top:calc(16px + env(safe-area-inset-top,0px));padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));max-width:1100px;margin:0 auto;}
+h1{font-size:1.25rem;margin:0 0 4px}
+p.sub{color:var(--sub);margin:0 0 16px;font-size:.9rem}
+textarea{width:100%;min-height:200px;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:.9rem;resize:vertical}
+.btns{display:flex;gap:10px;margin:12px 0;flex-wrap:wrap}
+button{background:var(--accent);color:var(--accentT);border:none;padding:10px 18px;border-radius:8px;font-size:.9rem;cursor:pointer}
+button.secondary{background:var(--card);color:var(--text);border:1px solid var(--border)}
+button:active{opacity:.8}
+#status{font-size:.85rem;color:var(--sub);margin-bottom:8px;min-height:1.2em}
+.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:.82rem;min-width:1300px}
+th,td{padding:7px 10px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+th{background:var(--head);position:sticky;top:0}
+tr:hover td{background:var(--head)}
+td.bad{color:var(--bad);font-weight:600}
+td.good{color:var(--good)}
+.empty{color:var(--sub);text-align:center;padding:24px;font-size:.85rem}
+</style>
+</head>
+<body>
+<h1>🧪 QC Report → Excel</h1>
+<p class="sub">Paste one or more WhatsApp QC check reports below. Misspelled field names are auto-corrected, and the date, shift, check number and reporter at the bottom are applied to every machine in that report.</p>
+<textarea id="input" placeholder="Paste the WhatsApp QC report(s) here..."></textarea>
+<div class="btns">
+<button onclick="runParse()">Parse Messages</button>
+<button class="secondary" onclick="downloadXlsx()">⬇ Download Excel</button>
+<button class="secondary" onclick="clearAll()">Clear</button>
+</div>
+<div id="status"></div>
+<div class="tablewrap"><table id="out"><thead></thead><tbody></tbody></table></div>
+
+<script>
+const COLS=["date","shift","qcno","machine","product","pph","pphunit","kgs","wtype","weight","printing","length","socket","drop","fitting","color","od","id","reporter"];
+const LABELS={date:"Date",shift:"Shift",qcno:"QC Check No",machine:"Machine",product:"Product",pph:"PPH",pphunit:"PPH Unit",kgs:"Kgs/Hr",wtype:"Weight Type",weight:"Weight (kg)",printing:"Printing",length:"Length (m)",socket:"Socket Size",drop:"Drop/Bend Test",fitting:"Fitting Test",color:"Uniform Colour",od:"O/D (mm)",id:"I/D (mm)",reporter:"Reported By"};
+const NUMCOLS=["pph","kgs","weight","length","od","id"];
+const KEYS={
+ "MACHINENUMBER":"machine","PRODUCTNAME":"product","PPH":"pph","KGSPERHR":"kgs",
+ "BUNDLEWEIGHT":"weight:Bundle","PIPEWEIGHT":"weight:Pipe","PRINTING":"printing","LENGTH":"length",
+ "SOCKETSIZE":"socket","DROPBENDTEST":"drop","FITTINGTEST":"fitting","UNIFORMCOLOR":"color","UNIFORMCOLOUR":"color",
+ "OD":"od","ID":"id","QCCHECKNUMBER":"qcno","SHIFT":"shift","REPORTEDBY":"reporter"
+};
+let rows=[];
+
+function lev(a,b){
+  const m=a.length,n=b.length;
+  const d=Array.from({length:m+1},()=>new Array(n+1).fill(0));
+  for(let i=0;i<=m;i++)d[i][0]=i;
+  for(let j=0;j<=n;j++)d[0][j]=j;
+  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)
+    d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+  return d[m][n];
+}
+function matchKey(raw){
+  const k=raw.toUpperCase().replace(/[^A-Z]/g,'');
+  if(!k)return null;
+  if(KEYS[k])return KEYS[k];
+  let best=null,bd=Infinity;
+  for(const key in KEYS){
+    const th=key.length<=4?0:key.length<=8?1:2;
+    const d=lev(k,key);
+    if(d<=th&&d<bd){bd=d;best=KEYS[key];}
+  }
+  return best;
+}
+function num(v){
+  const m=String(v).replace(/,/g,'').match(/-?\d+\.?\d*/);
+  return m?parseFloat(m[0]):'';
+}
+function newRow(ctx){
+  const r={open:true};COLS.forEach(c=>r[c]='');
+  r.date=ctx.date;return r;
+}
+function setField(r,field,val){
+  if(field.startsWith('weight:')){r.wtype=field.split(':')[1];r.weight=num(val);return;}
+  if(field==='pph'){
+    r.pph=num(val);
+    const u=val.toUpperCase();
+    if(/BUNDLE/.test(u))r.pphunit='Bundles/hr';
+    else if(/PIPE|PCS|PIECE/.test(u))r.pphunit='Pipes/hr';
+    return;
+  }
+  if(NUMCOLS.includes(field)){r[field]=num(val);return;}
+  r[field]=val;
+}
+function parseText(text){
+  const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const out=[];
+  const ctx={date:''};
+  let cur=null,footer=false;
+  for(const line of lines){
+    const dm=line.match(/(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/);
+    if(dm&&!line.includes(':')){ctx.date=dm[1].replace(/[.\-]/g,'/');continue;}
+    const ci=line.indexOf(':');
+    if(ci<0)continue;
+    const field=matchKey(line.slice(0,ci));
+    if(!field)continue;
+    const val=line.slice(ci+1).trim();
+    if(field==='machine'){
+      if(footer){out.forEach(r=>r.open=false);footer=false;}
+      cur=newRow(ctx);cur.machine=val;out.push(cur);continue;
+    }
+    if(['qcno','shift','reporter'].includes(field)){
+      footer=true;
+      let v=val;
+      if(field==='shift'){const u=val.toUpperCase();v=/N/.test(u[0]||'')?'Night':/D/.test(u[0]||'')?'Day':val;}
+      out.filter(r=>r.open).forEach(r=>r[field]=v);
+      continue;
+    }
+    if(cur)setField(cur,field,val);
+  }
+  return out;
+}
+function runParse(){
+  rows=parseText(document.getElementById('input').value);
+  render();
+  document.getElementById('status').textContent=rows.length?`Parsed ${rows.length} record(s).`:'No records found — check the pasted text.';
+}
+function render(){
+  const thead=document.querySelector('#out thead'),tbody=document.querySelector('#out tbody');
+  thead.innerHTML='';tbody.innerHTML='';
+  if(!rows.length){tbody.innerHTML=`<tr><td class="empty" colspan="${COLS.length}">Nothing parsed yet.</td></tr>`;return;}
+  const tr=document.createElement('tr');
+  COLS.forEach(c=>{const th=document.createElement('th');th.textContent=LABELS[c];tr.appendChild(th);});
+  thead.appendChild(tr);
+  rows.forEach(r=>{
+    const row=document.createElement('tr');
+    COLS.forEach(c=>{
+      const td=document.createElement('td');
+      td.textContent=r[c]===''?'':r[c];
+      if(c==='drop'||c==='fitting'){
+        const u=String(r[c]).toUpperCase();
+        if(/FAIL/.test(u))td.className='bad';else if(/PASS/.test(u))td.className='good';
+      }
+      row.appendChild(td);
+    });
+    tbody.appendChild(row);
+  });
+}
+
+/* ---- offline .xlsx writer (no libraries) ---- */
+const CRCT=(()=>{const t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+function crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=CRCT[(c^b[i])&255]^(c>>>8);return(c^0xFFFFFFFF)>>>0;}
+function zipStore(files){
+  const enc=new TextEncoder(),parts=[],cd=[];let off=0;
+  const u16=v=>[v&255,v>>8&255],u32=v=>[v&255,v>>8&255,v>>16&255,v>>24&255];
+  files.forEach(f=>{
+    const name=enc.encode(f.name),data=enc.encode(f.data),crc=crc32(data);
+    const lh=new Uint8Array([0x50,0x4B,3,4,...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),...u16(0)]);
+    parts.push(lh,name,data);
+    cd.push(new Uint8Array([0x50,0x4B,1,2,...u16(20),...u16(20),...u16(0x0800),...u16(0),...u16(0),...u16(0x21),...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(off)]),name);
+    off+=lh.length+name.length+data.length;
+  });
+  let cdSize=0;cd.forEach(x=>cdSize+=x.length);
+  const eocd=new Uint8Array([0x50,0x4B,5,6,...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(cdSize),...u32(off),...u16(0)]);
+  return new Blob([...parts,...cd,eocd],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+const esc=v=>String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function colL(i){return String.fromCharCode(65+i);}
+function buildXlsx(){
+  let sd='<row r="1">'+COLS.map((c,i)=>`<c r="${colL(i)}1" s="1" t="inlineStr"><is><t>${esc(LABELS[c])}</t></is></c>`).join('')+'</row>';
+  rows.forEach((r,ri)=>{
+    sd+=`<row r="${ri+2}">`+COLS.map((c,i)=>{
+      const v=r[c],ref=colL(i)+(ri+2);
+      if(v==='')return '';
+      if(typeof v==='number')return `<c r="${ref}"><v>${v}</v></c>`;
+      return `<c r="${ref}" t="inlineStr"><is><t>${esc(v)}</t></is></c>`;
+    }).join('')+'</row>';
+  });
+  const cols='<cols>'+COLS.map((c,i)=>`<col min="${i+1}" max="${i+1}" width="${Math.max(LABELS[c].length+3,c==='product'?28:c==='color'?24:12)}" customWidth="1"/>`).join('')+'</cols>';
+  const X='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  const ns='http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  return zipStore([
+    {name:'[Content_Types].xml',data:X+'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'},
+    {name:'_rels/.rels',data:X+'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'},
+    {name:'xl/workbook.xml',data:X+`<workbook xmlns="${ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="QC Checks" sheetId="1" r:id="rId1"/></sheets></workbook>`},
+    {name:'xl/_rels/workbook.xml.rels',data:X+'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'},
+    {name:'xl/styles.xml',data:X+`<styleSheet xmlns="${ns}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>`},
+    {name:'xl/worksheets/sheet1.xml',data:X+`<worksheet xmlns="${ns}">${cols}<sheetData>${sd}</sheetData></worksheet>`}
+  ]);
+}
+function downloadXlsx(){
+  if(!rows.length){document.getElementById('status').textContent='Parse messages first.';return;}
+  const blob=buildXlsx();
+  const filename='qc_report_'+(rows[0].date||'').replace(/\//g,'-')+'.xlsx';
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=filename;document.body.appendChild(a);a.click();
+  a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);
+  document.getElementById('status').textContent='Saved '+filename;
+}
+function clearAll(){
+  document.getElementById('input').value='';
+  rows=[];render();
+  document.getElementById('status').textContent='';
+}
+render();
+</script>
+</body>
+</html>

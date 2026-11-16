@@ -4,16 +4,23 @@ import {
   Activity,
   Bell,
   Calendar,
+  ClipboardCheck,
   CloudOff,
   FileSpreadsheet,
+  FlaskConical,
+  LayoutDashboard,
+  Layers,
   Lock,
   LogOut,
   Menu,
   Plus,
+  Recycle,
   RefreshCw,
+  Send,
   Share2,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   Truck,
   Users,
   X,
@@ -29,7 +36,15 @@ import { LoginGate } from './components/LoginGate';
 import { MachineStatusBoard } from './components/MachineStatusBoard';
 import { PeriodReportView } from './components/PeriodReportView';
 import { PWAInstallModal } from './components/PWAInstallModal';
+import {
+  ActiveScheduleSlot,
+  getActiveWeightOutputSlot,
+  getNextWeightOutputSlot,
+  ShiftWeightOutputPopupAlert,
+} from './components/ShiftWeightOutputPopupAlert';
 import { SignedCertificateModal } from './components/SignedCertificateModal';
+import { SopFloorApkView } from './components/SopFloorApkView';
+import { SopPopupAlert, SopSubTab } from './components/SopPopupAlert';
 import { SyncAndMachinesView } from './components/SyncAndMachinesView';
 import {
   auth,
@@ -54,7 +69,7 @@ import {
   pollDispatchEntries,
   subscribeDispatchEntries,
 } from './services/dispatchStore';
-import { dtl } from './services/downtimeCalc';
+import { dtl, ymd } from './services/downtimeCalc';
 import {
   flushPendingSyncQueue,
   getActiveMachines,
@@ -70,17 +85,71 @@ import {
   subscribeMachineryConfig,
   syncEntryToFirebase,
 } from './services/downtimeStore';
-import { DispatchEntry, DowntimeEntry, PlantUserAccount } from './types';
+import {
+  flushAllPendingSopData,
+  getLocalSopHandovers,
+  getLocalSopMixingReports,
+  getLocalSopProductionLogs,
+  getLocalSopQcChecks,
+  getLocalSopScrapRecords,
+  pollSopHandovers,
+  pollSopMixing,
+  pollSopProduction,
+  pollSopQc,
+  pollSopScrap,
+  subscribeSopHandovers,
+  subscribeSopMixing,
+  subscribeSopProduction,
+  subscribeSopQc,
+  subscribeSopScrap,
+} from './services/sopStore';
+import {
+  DispatchEntry,
+  DowntimeEntry,
+  PlantUserAccount,
+  SopMixingReport,
+  SopProductionRecord,
+  SopQcRecord,
+  SopScrapRecord,
+  SopShiftHandoverRecord,
+} from './types';
 import { ParsedAttendanceMessage } from './types/attendance';
 
 export type DowntimeTab =
   | 'status'
   | 'log'
   | 'daily'
-  | 'rep'
   | 'dispatch'
+  | 'sop_overview'
+  | 'sop_production'
+  | 'sop_qc'
+  | 'sop_scrap'
+  | 'sop_recycling'
+  | 'sop_mixing'
+  | 'sop_handover'
   | 'attendance'
+  | 'rep'
   | 'data';
+
+const SOP_TAB_TO_SUBTAB: Partial<Record<DowntimeTab, SopSubTab>> = {
+  sop_overview: 'overview',
+  sop_production: 'production',
+  sop_qc: 'qc',
+  sop_scrap: 'scrap_send',
+  sop_recycling: 'recycling',
+  sop_mixing: 'mixing',
+  sop_handover: 'handover',
+};
+
+const SUBTAB_TO_SOP_TAB: Record<SopSubTab, DowntimeTab> = {
+  overview: 'sop_overview',
+  production: 'sop_production',
+  qc: 'sop_qc',
+  scrap_send: 'sop_scrap',
+  recycling: 'sop_recycling',
+  mixing: 'sop_mixing',
+  handover: 'sop_handover',
+};
 
 export default function App() {
   const isOnline = useOnlineStatus();
@@ -96,15 +165,28 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [plantUsers, setPlantUsers] = useState<PlantUserAccount[]>(() => getLocalPlantUsers());
 
-  // Active Navigation Tab & Dispatch Sub-stage
+  // Active Navigation Tab & Sub-stage Navigation
   const [activeDowntimeTab, setActiveDowntimeTab] = useState<DowntimeTab>('status');
   const [requestedDispatchStage, setRequestedDispatchStage] = useState<DispatchSubStage | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Core Data State - Machinery Downtime, 3-Stage Dispatch & Attendance
+  // Core Data State - Machinery Downtime, 3-Stage Dispatch, SOP Floor APK & Attendance
   const [machines, setMachines] = useState<string[]>(getActiveMachines());
   const [entries, setEntries] = useState<DowntimeEntry[]>(getStoredEntries());
   const [dispatchEntries, setDispatchEntries] = useState<DispatchEntry[]>([]);
+  const [sopProductionLogs, setSopProductionLogs] = useState<SopProductionRecord[]>(() =>
+    getLocalSopProductionLogs()
+  );
+  const [sopQcChecks, setSopQcChecks] = useState<SopQcRecord[]>(() => getLocalSopQcChecks());
+  const [sopScrapPipeline, setSopScrapPipeline] = useState<SopScrapRecord[]>(() =>
+    getLocalSopScrapRecords()
+  );
+  const [sopMixingReports, setSopMixingReports] = useState<SopMixingReport[]>(() =>
+    getLocalSopMixingReports()
+  );
+  const [sopHandovers, setSopHandovers] = useState<SopShiftHandoverRecord[]>(() =>
+    getLocalSopHandovers()
+  );
   const [attendanceBatch, setAttendanceBatch] = useState<ParsedAttendanceMessage[]>(() =>
     getLocalAttendanceBatch()
   );
@@ -127,6 +209,9 @@ export default function App() {
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [certificateEntry, setCertificateEntry] = useState<DowntimeEntry | null>(null);
   const [isCertificateModalOpen, setIsCertificateModalOpen] = useState(false);
+  const [manualWeightCheckSlot, setManualWeightCheckSlot] = useState<ActiveScheduleSlot | null>(
+    null
+  );
 
   // Link copy toast
   const [copiedLink, setCopiedLink] = useState(false);
@@ -255,6 +340,22 @@ export default function App() {
       setAttendanceBatch(batches);
     });
 
+    const unsubSopProd = subscribeSopProduction((rows) => {
+      setSopProductionLogs(rows);
+    });
+    const unsubSopQc = subscribeSopQc((rows) => {
+      setSopQcChecks(rows);
+    });
+    const unsubSopScrap = subscribeSopScrap((rows) => {
+      setSopScrapPipeline(rows);
+    });
+    const unsubSopMixing = subscribeSopMixing((rows) => {
+      setSopMixingReports(rows);
+    });
+    const unsubSopHandovers = subscribeSopHandovers((rows) => {
+      setSopHandovers(rows);
+    });
+
     const pendingTimer = setInterval(() => {
       setPendingSyncCount(getPendingSyncQueue().length);
       const err = getLastSyncError();
@@ -273,13 +374,32 @@ export default function App() {
           flushPendingSyncQueue().catch(() => 0),
           flushPendingDispatches().catch(() => 0),
           flushPendingAttendanceBatches().catch(() => 0),
+          flushAllPendingSopData().catch(() => 0),
         ]);
-        const [updated, updatedDispatches] = await Promise.all([
+        const [
+          updated,
+          updatedDispatches,
+          updatedSopProd,
+          updatedSopQc,
+          updatedSopScrap,
+          updatedSopMixing,
+          updatedSopHandovers,
+        ] = await Promise.all([
           pollFirebaseEntries(),
           pollDispatchEntries().catch(() => null),
+          pollSopProduction().catch(() => null),
+          pollSopQc().catch(() => null),
+          pollSopScrap().catch(() => null),
+          pollSopMixing().catch(() => null),
+          pollSopHandovers().catch(() => null),
         ]);
         setEntries(updated);
         if (updatedDispatches) setDispatchEntries(updatedDispatches);
+        if (updatedSopProd) setSopProductionLogs(updatedSopProd);
+        if (updatedSopQc) setSopQcChecks(updatedSopQc);
+        if (updatedSopScrap) setSopScrapPipeline(updatedSopScrap);
+        if (updatedSopMixing) setSopMixingReports(updatedSopMixing);
+        if (updatedSopHandovers) setSopHandovers(updatedSopHandovers);
         setPendingSyncCount(getPendingSyncQueue().length);
         setLastLiveHeartbeat(
           new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -309,6 +429,11 @@ export default function App() {
       unsubUsers();
       unsubDispatch();
       unsubAttendance();
+      unsubSopProd();
+      unsubSopQc();
+      unsubSopScrap();
+      unsubSopMixing();
+      unsubSopHandovers();
       clearInterval(pendingTimer);
       clearInterval(keepAliveTimer);
       document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
@@ -418,6 +543,71 @@ export default function App() {
     return count;
   }, [dispatchEntries, effectivePermissions]);
 
+  const hasActiveDispatchPopup = useMemo(() => {
+    const whPending = effectivePermissions.dispatchWHConfirm
+      ? dispatchEntries.some(
+          (e) =>
+            e.status === 'PENDING_WH' && !dismissedPopupKeys.includes(`${e.id}_PENDING_WH`)
+        )
+      : false;
+    const hodPending = effectivePermissions.dispatchHODConfirm
+      ? dispatchEntries.some(
+          (e) =>
+            e.status === 'PENDING_HOD' && !dismissedPopupKeys.includes(`${e.id}_PENDING_HOD`)
+        )
+      : false;
+    return whPending || hodPending;
+  }, [dispatchEntries, effectivePermissions, dismissedPopupKeys]);
+
+  // Pending counts for spread SOP APKs
+  const sopRecyclingBadgeCount = useMemo(() => {
+    if (!isAdmin && !effectivePermissions.sopRecyclingConfirm) return 0;
+    return sopScrapPipeline.filter((s) => s.status === 'SENT_TO_RECYCLING').length;
+  }, [sopScrapPipeline, effectivePermissions.sopRecyclingConfirm, isAdmin]);
+
+  const sopMixingBadgeCount = useMemo(() => {
+    let count = 0;
+    if (effectivePermissions.sopMixingAccess) {
+      count += sopScrapPipeline.filter((s) => s.status === 'PROCESSED_FOR_MIXER').length;
+    }
+    if (isAdmin || effectivePermissions.dispatchHODConfirm) {
+      count += sopMixingReports.filter((m) => m.status === 'PENDING_HOD').length;
+    }
+    return count;
+  }, [sopScrapPipeline, sopMixingReports, effectivePermissions, isAdmin]);
+
+  const isShiftInChargeWeightCheckUser =
+    isRestrictedSIC ||
+    matchedUserRecord?.role === 'Shift In Charge' ||
+    user?.role === 'Shift In Charge' ||
+    (effectivePermissions.dispatchShiftEntry && effectivePermissions.logDowntime);
+
+  const hasActiveSopPopup = useMemo(() => {
+    const recycleAlert = effectivePermissions.sopRecyclingConfirm
+      ? sopScrapPipeline.some(
+          (s) =>
+            s.status === 'SENT_TO_RECYCLING' &&
+            !dismissedPopupKeys.includes(`SOP_${s.id}_SENT_TO_RECYCLING`)
+        )
+      : false;
+    const mixerAlert = effectivePermissions.sopMixingAccess
+      ? sopScrapPipeline.some(
+          (s) =>
+            s.status === 'PROCESSED_FOR_MIXER' &&
+            !dismissedPopupKeys.includes(`SOP_${s.id}_PROCESSED_FOR_MIXER`)
+        )
+      : false;
+    const hodMixAlert =
+      isAdmin || effectivePermissions.dispatchHODConfirm
+        ? sopMixingReports.some(
+            (m) =>
+              m.status === 'PENDING_HOD' &&
+              !dismissedPopupKeys.includes(`SOP_MIX_${m.id}_PENDING_HOD`)
+          )
+        : false;
+    return recycleAlert || mixerAlert || hodMixAlert;
+  }, [sopScrapPipeline, sopMixingReports, effectivePermissions, dismissedPopupKeys, isAdmin]);
+
   const hasDispatchAccess =
     effectivePermissions.dispatchShiftEntry ||
     effectivePermissions.dispatchWHConfirm ||
@@ -431,6 +621,21 @@ export default function App() {
     if (effectivePermissions.logDowntime) tabs.push('log');
     if (effectivePermissions.viewDailyHours) tabs.push('daily');
     if (hasDispatchAccess) tabs.push('dispatch');
+    if (isAdmin || effectivePermissions.sopFloorAccess) {
+      tabs.push('sop_overview', 'sop_production', 'sop_qc');
+    }
+    if (isAdmin || effectivePermissions.sopScrapSend || effectivePermissions.sopFloorAccess) {
+      tabs.push('sop_scrap');
+    }
+    if (isAdmin || effectivePermissions.sopRecyclingConfirm) {
+      tabs.push('sop_recycling');
+    }
+    if (isAdmin || effectivePermissions.sopMixingAccess || effectivePermissions.dispatchHODConfirm) {
+      tabs.push('sop_mixing');
+    }
+    if (isAdmin || effectivePermissions.dispatchShiftEntry || effectivePermissions.sopFloorAccess) {
+      tabs.push('sop_handover');
+    }
     if (effectivePermissions.attendanceLogger || isAdmin) tabs.push('attendance');
     if (isAdmin) tabs.push('rep');
     if (isAdmin || effectivePermissions.manageMachinesAndSync) tabs.push('data');
@@ -534,13 +739,32 @@ export default function App() {
         flushPendingSyncQueue(),
         flushPendingDispatches().catch(() => 0),
         flushPendingAttendanceBatches().catch(() => 0),
+        flushAllPendingSopData().catch(() => 0),
       ]);
-      const [updated, updatedDispatches] = await Promise.all([
+      const [
+        updated,
+        updatedDispatches,
+        updatedSopProd,
+        updatedSopQc,
+        updatedSopScrap,
+        updatedSopMixing,
+        updatedSopHandovers,
+      ] = await Promise.all([
         pollFirebaseEntries(),
         pollDispatchEntries().catch(() => dispatchEntries),
+        pollSopProduction().catch(() => sopProductionLogs),
+        pollSopQc().catch(() => sopQcChecks),
+        pollSopScrap().catch(() => sopScrapPipeline),
+        pollSopMixing().catch(() => sopMixingReports),
+        pollSopHandovers().catch(() => sopHandovers),
       ]);
       setEntries(updated);
       setDispatchEntries(updatedDispatches);
+      setSopProductionLogs(updatedSopProd);
+      setSopQcChecks(updatedSopQc);
+      setSopScrapPipeline(updatedSopScrap);
+      setSopMixingReports(updatedSopMixing);
+      setSopHandovers(updatedSopHandovers);
       setPendingSyncCount(getPendingSyncQueue().length);
       const err = getLastSyncError();
       setSyncErrorMsg(err);
@@ -624,6 +848,50 @@ export default function App() {
       subtitle: 'Shift → WH → HOD',
       icon: <Truck className="h-4 w-4" />,
       badge: actionableDispatchCount,
+    },
+    {
+      id: 'sop_overview',
+      label: 'SOP Floor Overview',
+      subtitle: 'KPIs & Downtime Pareto',
+      icon: <LayoutDashboard className="h-4 w-4" />,
+    },
+    {
+      id: 'sop_production',
+      label: 'Production Logger',
+      subtitle: 'Job Cards & WA Parser',
+      icon: <ClipboardCheck className="h-4 w-4" />,
+    },
+    {
+      id: 'sop_qc',
+      label: 'QC Check APK',
+      subtitle: 'Inspections & WA Parser',
+      icon: <Sparkles className="h-4 w-4" />,
+    },
+    {
+      id: 'sop_scrap',
+      label: 'Scrap Send APK',
+      subtitle: 'Operator → Recycling',
+      icon: <Send className="h-4 w-4" />,
+    },
+    {
+      id: 'sop_recycling',
+      label: 'Recycling Team APK',
+      subtitle: 'Process → Mixer Alert',
+      icon: <Recycle className="h-4 w-4" />,
+      badge: sopRecyclingBadgeCount,
+    },
+    {
+      id: 'sop_mixing',
+      label: 'Mixing & WH Stock',
+      subtitle: 'Batches · Sweeping · HOD',
+      icon: <FlaskConical className="h-4 w-4" />,
+      badge: sopMixingBadgeCount,
+    },
+    {
+      id: 'sop_handover',
+      label: 'Shift Handover APK',
+      subtitle: 'Supervisor Floor Log',
+      icon: <Layers className="h-4 w-4" />,
     },
     {
       id: 'attendance',
@@ -1019,8 +1287,40 @@ export default function App() {
                   <MachineStatusBoard
                     machines={machines}
                     entries={entries}
+                    dispatchEntries={dispatchEntries}
+                    sopProductionLogs={sopProductionLogs}
+                    sopScrapPipeline={sopScrapPipeline}
                     onLogStoppage={handleLogStoppageFromBoard}
                     onRestoreRunning={handleRestoreRunning}
+                    onSaveEntry={handleSaveEntry}
+                    onOpenWeightOutputSchedule={
+                      isShiftInChargeWeightCheckUser || isAdmin
+                        ? () => {
+                            const now = new Date();
+                            const active = getActiveWeightOutputSlot(now);
+                            if (active) {
+                              setManualWeightCheckSlot(active);
+                            } else {
+                              const next = getNextWeightOutputSlot(now);
+                              const todayLocal = ymd(now);
+                              setManualWeightCheckSlot({
+                                slot: next.slot,
+                                slotKey: `${todayLocal}_MANUAL_${next.slot}`,
+                                slotDateStr: todayLocal,
+                                shiftLabel:
+                                  now.getHours() >= 7 && now.getHours() < 19 ? 'Day' : 'Night',
+                                elapsedMins: 0,
+                              });
+                            }
+                          }
+                        : undefined
+                    }
+                    canQuickLog={
+                      isAdmin ||
+                      effectivePermissions.logDowntime ||
+                      effectivePermissions.sopFloorAccess ||
+                      effectivePermissions.sopScrapSend
+                    }
                     currentUserName={user.displayName || currentReporter}
                     currentUserEmail={user.email || ''}
                   />
@@ -1051,12 +1351,31 @@ export default function App() {
                   <DispatchSystemView
                     machines={machines}
                     dispatchEntries={dispatchEntries}
+                    sopProductionLogs={sopProductionLogs}
                     permissions={effectivePermissions}
                     isAdmin={isAdmin}
                     currentUserName={user.displayName || currentReporter}
                     currentUserEmail={user.email || ''}
                     requestedStage={requestedDispatchStage}
                     onStageHandled={() => setRequestedDispatchStage(null)}
+                  />
+                )}
+
+                {SOP_TAB_TO_SUBTAB[activeDowntimeTab] && (
+                  <SopFloorApkView
+                    machines={machines}
+                    downtimeEntries={entries}
+                    productionLogs={sopProductionLogs}
+                    qcChecks={sopQcChecks}
+                    scrapPipeline={sopScrapPipeline}
+                    mixingReports={sopMixingReports}
+                    handovers={sopHandovers}
+                    permissions={effectivePermissions}
+                    isAdmin={isAdmin}
+                    currentUserName={user.displayName || currentReporter}
+                    currentUserEmail={user.email || ''}
+                    forcedSubTab={SOP_TAB_TO_SUBTAB[activeDowntimeTab]}
+                    standaloneMode
                   />
                 )}
 
@@ -1107,6 +1426,37 @@ export default function App() {
           setActiveDowntimeTab('dispatch');
           setRequestedDispatchStage(stage);
         }}
+      />
+
+      {/* Real-Time SOP Closed-Loop Pop-Up Notifications (Operator -> Recycling -> Mixer -> HOD) */}
+      <SopPopupAlert
+        scrapRecords={sopScrapPipeline}
+        mixingReports={sopMixingReports}
+        permissions={effectivePermissions}
+        isAdmin={isAdmin}
+        hasActiveDispatchPopup={hasActiveDispatchPopup}
+        dismissedKeys={dismissedPopupKeys}
+        onDismissKey={(key) =>
+          setDismissedPopupKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))
+        }
+        onNavigateToSopTab={(subTab) => {
+          setActiveDowntimeTab(SUBTAB_TO_SOP_TAB[subTab]);
+        }}
+      />
+
+      {/* Scheduled Shift In Charge Pop-Up: Running Weight & Output Check (09:45, 12:45, 15:45, 23:45, 03:45, 06:45) */}
+      <ShiftWeightOutputPopupAlert
+        machines={machines}
+        entries={entries}
+        sopProductionLogs={sopProductionLogs}
+        isEligibleUser={isShiftInChargeWeightCheckUser}
+        hasBlockingPopup={hasActiveDispatchPopup || hasActiveSopPopup}
+        manualOpenSlot={manualWeightCheckSlot}
+        onCloseManual={() => setManualWeightCheckSlot(null)}
+        onSaveEntry={handleSaveEntry}
+        onOpenMachinesBoard={() => setActiveDowntimeTab('status')}
+        currentUserName={user.displayName || currentReporter}
+        currentUserEmail={user.email || ''}
       />
 
       {/* Modals */}

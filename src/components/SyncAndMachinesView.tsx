@@ -151,6 +151,10 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
       setNewOpDept('Warehouse & Dispatch (WH)');
     } else if (role === 'Production HOD' || role === 'Plant Administrator') {
       setNewOpDept('Production Management (HOD)');
+    } else if (role === 'Recycling Team') {
+      setNewOpDept('Polypipe & Crushing');
+    } else if (role === 'Mixer Operator') {
+      setNewOpDept('Mixing & Raw Materials');
     } else {
       setNewOpDept('Extrusion & Production');
     }
@@ -974,6 +978,9 @@ git push -u origin main`}
                     <option value="WH Personnel">WH Personnel (WH Confirm Goods Section Only)</option>
                     <option value="Shift In Charge">Shift In Charge (Machines &amp; Shift Trolley Dispatch Only)</option>
                     <option value="Production HOD">Production HOD (Admin — All Sections &amp; Reports)</option>
+                    <option value="Operator Assistant">Operator Assistant (SOP Prod, QC &amp; Send Scrap)</option>
+                    <option value="Recycling Team">Recycling Team (Receive &amp; Process Scrap → Mixers)</option>
+                    <option value="Mixer Operator">Mixer Operator (Receive Regrind, Mix &amp; Report to HOD)</option>
                     <option value="Machine Operator">Machine Operator (Machine Status &amp; Log)</option>
                     <option value="Maintenance Technician">Maintenance Technician</option>
                     <option value="QC Inspector">QC Inspector</option>
@@ -1021,6 +1028,10 @@ git push -u origin main`}
                       ['dispatchHODConfirm', 'Dispatch: Production HOD Final Confirm'],
                       ['exportDispatchExcel', 'Download Dispatch Excel (Confidential)'],
                       ['attendanceLogger', 'Attendance Logger (WhatsApp & Excel)'],
+                      ['sopFloorAccess', 'SOP Floor: Production, QC & Dashboard'],
+                      ['sopScrapSend', 'SOP Scrap: Operator Send (Alerts Recycling)'],
+                      ['sopRecyclingConfirm', 'SOP Recycling: Verify & Process (Alerts Mixers)'],
+                      ['sopMixingAccess', 'SOP Mixing: Mix & WH Stock (Alerts HOD)'],
                       ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                     ] as [keyof UserPermissions, string][]
                   ).map(([permKey, permLabel]) => (
@@ -1030,7 +1041,7 @@ git push -u origin main`}
                     >
                       <input
                         type="checkbox"
-                        checked={newOpPerms[permKey]}
+                        checked={Boolean(newOpPerms[permKey])}
                         onChange={(e) =>
                           setNewOpPerms((prev) => ({
                             ...prev,
@@ -1161,6 +1172,9 @@ git push -u origin main`}
                   <option value="Shift In Charge">Shift In Charge</option>
                   <option value="WH Personnel">WH Personnel</option>
                   <option value="Production HOD">Production HOD</option>
+                  <option value="Operator Assistant">Operator Assistant</option>
+                  <option value="Recycling Team">Recycling Team</option>
+                  <option value="Mixer Operator">Mixer Operator</option>
                   <option value="Machine Operator">Machine Operator</option>
                   <option value="Maintenance Technician">Maintenance Technician</option>
                   <option value="QC Inspector">QC Inspector</option>
@@ -1206,6 +1220,10 @@ git push -u origin main`}
                   ['dispatchHODConfirm', 'Dispatch: Production HOD Final Confirm'],
                   ['exportDispatchExcel', 'Download Dispatch Excel (Confidential)'],
                   ['attendanceLogger', 'Attendance Logger (WhatsApp & Excel)'],
+                  ['sopFloorAccess', 'SOP Floor: Production, QC & Dashboard'],
+                  ['sopScrapSend', 'SOP Scrap: Operator Send (Alerts Recycling)'],
+                  ['sopRecyclingConfirm', 'SOP Recycling: Verify & Process (Alerts Mixers)'],
+                  ['sopMixingAccess', 'SOP Mixing: Mix & WH Stock (Alerts HOD)'],
                   ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                 ] as [keyof UserPermissions, string][]
               ).map(([permKey, permLabel]) => (
@@ -1215,7 +1233,7 @@ git push -u origin main`}
                 >
                   <input
                     type="checkbox"
-                    checked={editPerms[permKey]}
+                    checked={Boolean(editPerms[permKey])}
                     onChange={(e) =>
                       setEditPerms((prev) => ({
                         ...prev,

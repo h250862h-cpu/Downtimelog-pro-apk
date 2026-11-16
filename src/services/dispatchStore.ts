@@ -7,8 +7,9 @@ import {
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { db, ensureFirebaseAuth } from '../firebase';
-import { DispatchEntry } from '../types';
+import { DispatchEntry, SopProductionRecord } from '../types';
 import { saveFileBlob, ymd } from './downtimeCalc';
+import { getLinkedScrapAndWastageForDispatch } from './sopStore';
 
 const DISPATCH_STORAGE_KEY = 'dt_dispatch_entries_v1';
 const DISPATCH_PENDING_KEY = 'dt_dispatch_pending_v1';
@@ -235,35 +236,83 @@ export function subscribeDispatchEntries(
 
 /**
  * Generates Confidential Multi-Sheet Dispatch Excel Report (.xlsx)
- * Includes all 3 sections: Shift In Charge -> WH Personnel -> Production HOD Confirmation
+ * Sheet 1: Standard Dispatch & Linked Production Scrap/Wastage Ledger
+ * Sheet 2: Full 3-Stage Verification Audit (Trolley, Signatures, WH Variance)
  */
 export function exportDispatchExcelWorkbook(
   entries: DispatchEntry[],
   fromDate: string,
-  toDate: string
+  toDate: string,
+  productionLogs: SopProductionRecord[] = []
 ) {
   const filtered = entries
     .filter((e) => e.date >= fromDate && e.date <= toDate)
     .sort((a, b) => (b.date + b.shiftSubmittedAt).localeCompare(a.date + a.shiftSubmittedAt));
 
-  const confirmedOnly = filtered.filter((e) => e.status === 'CONFIRMED');
+  const formatStandardRow = (e: DispatchEntry) => {
+    const effectiveQty =
+      typeof e.whReceivedQty === 'number' ? e.whReceivedQty : e.recordedQty;
+    const totalKg =
+      typeof e.unitWeightKg === 'number' && e.unitWeightKg > 0
+        ? Number((effectiveQty * e.unitWeightKg).toFixed(2))
+        : typeof e.totalWeightKg === 'number'
+        ? Number(e.totalWeightKg.toFixed(2))
+        : '';
+    const linked = getLinkedScrapAndWastageForDispatch(e, productionLogs);
+    const casualName =
+      (e.casualAssistantName || '').trim() ||
+      (e.isCasualAssistant ? e.assistantName : '') ||
+      '—';
 
-  const formatRow = (e: DispatchEntry) => {
+    return {
+      Date: e.date,
+      Shift: e.shift,
+      Operator: e.operatorName,
+      Assistant: e.assistantName,
+      Product: e.product,
+      Process: 'Dispatch',
+      Machine: e.machine,
+      Qty: effectiveQty,
+      'Qty (kg)': totalKg,
+      'Scrap (kg)': linked.matchedCount > 0 ? linked.scrapKg : 0,
+      'Wastage (kg)': linked.matchedCount > 0 ? linked.wastageKg : 0,
+      'Issued To': e.whPersonnelName || 'Pending WH',
+      'Casual Assisted': casualName,
+    };
+  };
+
+  const formatAuditRow = (e: DispatchEntry) => {
     const whQty = typeof e.whReceivedQty === 'number' ? e.whReceivedQty : '';
     const variance =
       typeof e.whReceivedQty === 'number' ? e.whReceivedQty - e.recordedQty : '';
+    const effectiveQty =
+      typeof e.whReceivedQty === 'number' ? e.whReceivedQty : e.recordedQty;
+    const totalKg =
+      typeof e.unitWeightKg === 'number' && e.unitWeightKg > 0
+        ? Number((effectiveQty * e.unitWeightKg).toFixed(2))
+        : typeof e.totalWeightKg === 'number'
+        ? Number(e.totalWeightKg.toFixed(2))
+        : '';
+    const linked = getLinkedScrapAndWastageForDispatch(e, productionLogs);
+
     return {
       'Dispatch ID': e.id,
       Date: e.date,
       Shift: e.shift,
       'Machine Name': e.machine,
       'Product Dispatched': e.product,
+      Process: 'Dispatch',
       'Trolley No.': e.trolleyNo,
       'Shift Qty Recorded': e.recordedQty,
+      'Unit Wt (kg)': typeof e.unitWeightKg === 'number' ? e.unitWeightKg : '',
+      'Total Qty (kg)': totalKg,
+      'Linked Production Scrap (kg)': linked.scrapKg,
+      'Linked Production Wastage (kg)': linked.wastageKg,
       'Operator Name': e.operatorName,
       'Assistant / General Hand': e.isCasualAssistant
         ? `${e.assistantName} (Casual)`
         : e.assistantName,
+      'Casual Who Assisted': e.casualAssistantName || (e.isCasualAssistant ? e.assistantName : '—'),
       'Shift In Charge': e.shiftInChargeName,
       'Shift Signature Captured': e.shiftInChargeSignature ? 'YES (Digitally Signed)' : 'No',
       'Shift Logged Time': e.shiftSubmittedAt ? new Date(e.shiftSubmittedAt).toLocaleString() : '',
@@ -275,12 +324,16 @@ export function exportDispatchExcelWorkbook(
       'WH Qty Edit Reason': e.whQtyEditReason || '',
       'WH Qty Edited By': e.whQtyEditedBy || '',
       'WH Qty Edited At': e.whQtyEditedAt ? new Date(e.whQtyEditedAt).toLocaleString() : '',
-      'WH Personnel Name': e.whPersonnelName || '',
+      'Issued To (WH Personnel)': e.whPersonnelName || '',
       'WH Signature Captured': e.whSignature ? 'YES (Digitally Signed)' : 'Pending',
       'WH Confirmed Time': e.whConfirmedAt ? new Date(e.whConfirmedAt).toLocaleString() : '',
       'WH Notes': e.whNotes || '',
       'Production HOD Final Confirmer': e.hodConfirmedByName || '',
-      'HOD Signature Captured': e.hodSignature ? 'YES (Digitally Signed)' : e.status === 'CONFIRMED' ? 'Verified' : 'Pending',
+      'HOD Signature Captured': e.hodSignature
+        ? 'YES (Digitally Signed)'
+        : e.status === 'CONFIRMED'
+        ? 'Verified'
+        : 'Pending',
       'HOD Final Confirmed Time': e.hodConfirmedAt ? new Date(e.hodConfirmedAt).toLocaleString() : '',
       'HOD Notes': e.hodNotes || '',
       'Workflow Status':
@@ -294,35 +347,35 @@ export function exportDispatchExcelWorkbook(
 
   const wb = XLSX.utils.book_new();
 
-  const confirmedRows =
-    confirmedOnly.length > 0
-      ? confirmedOnly.map(formatRow)
+  const standardRows =
+    filtered.length > 0
+      ? filtered.map(formatStandardRow)
       : [
           {
-            Notice: `No Production HOD confirmed dispatches found between ${fromDate} and ${toDate}.`,
+            Notice: `No dispatch entries found between ${fromDate} and ${toDate}.`,
           },
         ];
-  const wsConfirmed = XLSX.utils.aoa_to_sheet([
+  const wsStandard = XLSX.utils.aoa_to_sheet([
     ['LG PLAST — Affordable / Durable / Complete'],
-    ['CONFIDENTIAL SHIFT STOCK DISPATCH VERIFICATION LEDGER (CONFIRMED)'],
+    ['DISPATCH & LINKED PRODUCTION SCRAP / WASTAGE LEDGER'],
     [`Period: ${fromDate} to ${toDate}`, `Generated: ${new Date().toLocaleString()}`],
     [],
   ]);
-  XLSX.utils.sheet_add_json(wsConfirmed, confirmedRows, { origin: 'A5' });
-  XLSX.utils.book_append_sheet(wb, wsConfirmed, 'Confirmed Dispatch Ledger');
+  XLSX.utils.sheet_add_json(wsStandard, standardRows, { origin: 'A5' });
+  XLSX.utils.book_append_sheet(wb, wsStandard, 'Dispatch Ledger');
 
-  const allRows =
+  const auditRows =
     filtered.length > 0
-      ? filtered.map(formatRow)
+      ? filtered.map(formatAuditRow)
       : [{ Notice: `No dispatch entries found between ${fromDate} and ${toDate}.` }];
-  const wsAll = XLSX.utils.aoa_to_sheet([
+  const wsAudit = XLSX.utils.aoa_to_sheet([
     ['LG PLAST — Affordable / Durable / Complete'],
-    ['CONFIDENTIAL DISPATCH PIPELINE REPORT (ALL STAGES)'],
+    ['DISPATCH 3-STAGE VERIFICATION & AUDIT (TROLLEYS, WEIGHTS, SIGNATURES)'],
     [`Period: ${fromDate} to ${toDate}`, `Generated: ${new Date().toLocaleString()}`],
     [],
   ]);
-  XLSX.utils.sheet_add_json(wsAll, allRows, { origin: 'A5' });
-  XLSX.utils.book_append_sheet(wb, wsAll, 'All Dispatch Pipeline');
+  XLSX.utils.sheet_add_json(wsAudit, auditRows, { origin: 'A5' });
+  XLSX.utils.book_append_sheet(wb, wsAudit, 'Verification Audit');
 
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], {

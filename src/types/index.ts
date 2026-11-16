@@ -255,8 +255,11 @@ export type DowntimeStatus = string;
 
 export type PlantRole =
   | 'Machine Operator'
+  | 'Operator Assistant'
   | 'Maintenance Technician'
   | 'QC Inspector'
+  | 'Recycling Team'
+  | 'Mixer Operator'
   | 'Shift Supervisor'
   | 'Shift In Charge'
   | 'WH Personnel'
@@ -274,6 +277,10 @@ export interface UserPermissions {
   exportDispatchExcel: boolean;
   attendanceLogger: boolean;
   manageMachinesAndSync: boolean;
+  sopFloorAccess?: boolean;
+  sopScrapSend?: boolean;
+  sopRecyclingConfirm?: boolean;
+  sopMixingAccess?: boolean;
 }
 
 export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
@@ -287,6 +294,10 @@ export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
   exportDispatchExcel: true,
   attendanceLogger: true,
   manageMachinesAndSync: true,
+  sopFloorAccess: true,
+  sopScrapSend: true,
+  sopRecyclingConfirm: true,
+  sopMixingAccess: true,
 };
 
 export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
@@ -306,6 +317,10 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         exportDispatchExcel: false,
         attendanceLogger: false,
         manageMachinesAndSync: false,
+        sopFloorAccess: false,
+        sopScrapSend: false,
+        sopRecyclingConfirm: false,
+        sopMixingAccess: false,
       };
     case 'Shift In Charge':
       return {
@@ -319,6 +334,44 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         exportDispatchExcel: false,
         attendanceLogger: false,
         manageMachinesAndSync: false,
+        sopFloorAccess: false,
+        sopScrapSend: false,
+        sopRecyclingConfirm: false,
+        sopMixingAccess: false,
+      };
+    case 'Recycling Team':
+      return {
+        viewMachineStatus: true,
+        logDowntime: false,
+        viewDailyHours: false,
+        exportDowntimeExcel: false,
+        dispatchShiftEntry: false,
+        dispatchWHConfirm: false,
+        dispatchHODConfirm: false,
+        exportDispatchExcel: false,
+        attendanceLogger: false,
+        manageMachinesAndSync: false,
+        sopFloorAccess: true,
+        sopScrapSend: false,
+        sopRecyclingConfirm: true,
+        sopMixingAccess: false,
+      };
+    case 'Mixer Operator':
+      return {
+        viewMachineStatus: true,
+        logDowntime: true,
+        viewDailyHours: false,
+        exportDowntimeExcel: false,
+        dispatchShiftEntry: false,
+        dispatchWHConfirm: false,
+        dispatchHODConfirm: false,
+        exportDispatchExcel: false,
+        attendanceLogger: false,
+        manageMachinesAndSync: false,
+        sopFloorAccess: true,
+        sopScrapSend: true,
+        sopRecyclingConfirm: false,
+        sopMixingAccess: true,
       };
     case 'Shift Supervisor':
       return {
@@ -332,8 +385,13 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         exportDispatchExcel: false,
         attendanceLogger: true,
         manageMachinesAndSync: false,
+        sopFloorAccess: true,
+        sopScrapSend: true,
+        sopRecyclingConfirm: false,
+        sopMixingAccess: true,
       };
     case 'Machine Operator':
+    case 'Operator Assistant':
     case 'Maintenance Technician':
     case 'QC Inspector':
     default:
@@ -348,6 +406,10 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         exportDispatchExcel: false,
         attendanceLogger: false,
         manageMachinesAndSync: false,
+        sopFloorAccess: true,
+        sopScrapSend: true,
+        sopRecyclingConfirm: false,
+        sopMixingAccess: false,
       };
   }
 }
@@ -384,9 +446,12 @@ export interface DispatchEntry {
 
   // Stage 1: Shift In Charge
   recordedQty: number;
+  unitWeightKg?: number; // Weight of 1 item qty (kg)
+  totalWeightKg?: number; // Calculated weight (qty * unitWeightKg)
   operatorName: string;
   assistantName: string;
   isCasualAssistant?: boolean;
+  casualAssistantName?: string; // Name of casual who assisted
   shiftInChargeName: string;
   shiftInChargeSignature: string;
   shiftNotes?: string;
@@ -418,3 +483,172 @@ export interface DispatchEntry {
   upd: number;
   sy?: number;
 }
+
+// ======================================================
+// UNIFIED SOP FLOOR APK DATA TYPES (PRODUCTION, QC, SCRAP, MIXING, HANDOVER)
+// ======================================================
+
+export interface SopProductionRecord {
+  id: string;
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  dept: string; // Extrusion | Injection | Mixing | Maintenance
+  machine: string;
+  operator: string;
+  assistant: string;
+  product: string;
+  timeSlot?: string;
+  qty?: number;
+  unit?: string; // GOOD PIECES | BAGS | BUNDLES | PIPES | KG
+  prodKg: number;
+  scrapKg: number;
+  wastageCdKg: number; // Cut dust / wastage in kg
+  outputPerHour?: string;
+  runningWeight?: string;
+  scrapReason?: string;
+  bdStart?: string;
+  bdEnd?: string;
+  bdReason?: string;
+  mtncePerson?: string;
+  reporter?: string;
+  source: 'MANUAL' | 'WHATSAPP_PARSER';
+  loggedBy: string;
+  upd: number;
+  sy?: number;
+}
+
+export interface SopQcRecord {
+  id: string;
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  time?: string;
+  qcNo?: string;
+  machine: string;
+  product: string;
+  pph?: number | string;
+  pphUnit?: string;
+  kgsPerHr?: number | string;
+  weightType?: string;
+  weightKg?: number | string;
+  printing?: string;
+  lengthM?: number | string;
+  socketSize?: string;
+  dropBend: 'Pass' | 'Fail' | string;
+  fitting: 'Pass' | 'Fail' | string;
+  color: 'Pass' | 'Fail' | string;
+  od?: number | string;
+  idMm?: number | string;
+  reporter?: string;
+  source: 'MANUAL' | 'WHATSAPP_PARSER';
+  loggedBy: string;
+  upd: number;
+  sy?: number;
+}
+
+export type SopScrapPipelineStatus =
+  | 'SENT_TO_RECYCLING'
+  | 'RECEIVED_BY_RECYCLING'
+  | 'PROCESSED_FOR_MIXER'
+  | 'RECEIVED_BY_MIXER';
+
+export interface SopScrapRecord {
+  id: string;
+  date: string; // YYYY-MM-DD
+  time: string;
+  shift: 'Day' | 'Night';
+  shiftInCharge: string;
+  machine: string;
+  product: string;
+  sentByAssistant: string;
+  isCasualAssistant?: boolean;
+  scrapKg: number;
+  scrapReason?: string;
+  assignedRecycler: string;
+  sentAt: string;
+  sentByEmail: string;
+
+  // Stage 2A: Recycling Team Receipt
+  receivedBy?: string;
+  receivedAt?: string;
+  receivedKg?: number;
+  condition?: string;
+  varianceKg?: number;
+  verificationStatus?: 'Verified OK' | 'Discrepancy Flagged';
+
+  // Stage 2B: Recycling Confirms Processed into Usable Material -> Triggers Mixer Pop-up
+  usableMaterialKg?: number;
+  recyclingWasteKg?: number;
+  processedBy?: string;
+  processedAt?: string;
+  processingNotes?: string;
+
+  // Stage 3: Mixer Receipt Link -> Triggers Production HOD Pop-up
+  receivedByMixerName?: string;
+  mixerMachine?: string;
+  mixerReceivedAt?: string;
+  mixingReportId?: string;
+
+  status: SopScrapPipelineStatus;
+  upd: number;
+  sy?: number;
+}
+
+export interface SopMixingReport {
+  id: string;
+  date: string; // YYYY-MM-DD
+  time: string;
+  shift: 'Day' | 'Night';
+  machine: string;
+  mixerName: string;
+  assistantName: string;
+
+  // Linked Recycled Material & WH Reserved Stock Balance
+  linkedScrapIds: string[];
+  scrapReceivedFromRecyclingKg: number;
+  whReservedMaterialKg: number;
+  whMaterialUsedKg: number;
+  scrapUsedInMixingKg: number;
+  sweepingMaterialKg: number;
+  batchesMixed: number;
+  pendingMix: number;
+  endOfMixingStockKg: number;
+
+  // Technical Mixing Parameters
+  ratio?: string;
+  mixTimeMin?: number;
+  speedRpm?: number;
+  mixTempC?: number;
+  coolerTimeMin?: number;
+  coolerReleaseTempC?: number;
+  hotReleaseTempC?: number;
+  notes?: string;
+
+  // Stage 4: Production HOD Notification & Confirmation
+  status: 'PENDING_HOD' | 'HOD_CONFIRMED';
+  loggedByEmail: string;
+  submittedAt: string;
+  hodConfirmedBy?: string;
+  hodConfirmedAt?: string;
+  hodNotes?: string;
+  upd: number;
+  sy?: number;
+}
+
+export interface SopShiftHandoverRecord {
+  id: string;
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  inCharge: string;
+  totalProdKg: number;
+  totalScrapKg: number;
+  scrapPct: number;
+  breakdownNotes: string;
+  silo1Kg: number;
+  silo2Kg: number;
+  silo3Kg: number;
+  silo4Kg: number;
+  loggedBy: string;
+  upd: number;
+  sy?: number;
+}
+

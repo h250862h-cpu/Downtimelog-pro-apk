@@ -95,8 +95,18 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
     (acc, r) => acc + (typeof r.whReceivedQty === 'number' ? r.whReceivedQty : 0),
     0
   );
+  const totalWeightKg = rows.reduce((acc, r) => {
+    const qty = typeof r.whReceivedQty === 'number' ? r.whReceivedQty : r.recordedQty;
+    const kg =
+      typeof r.unitWeightKg === 'number' && r.unitWeightKg > 0
+        ? qty * r.unitWeightKg
+        : typeof r.totalWeightKg === 'number'
+        ? r.totalWeightKg
+        : 0;
+    return acc + kg;
+  }, 0);
   doc.text(
-    `Total Trolleys: ${rows.length}   |   Total Shift Qty: ${totalShiftQty}   |   Total WH Confirmed Qty: ${totalWhQty}`,
+    `Trolleys: ${rows.length}   |   Shift Qty: ${totalShiftQty}   |   WH Confirmed: ${totalWhQty}   |   Total Wt: ${totalWeightKg.toFixed(1)} kg`,
     pageWidth - 13,
     38.7,
     { align: 'right' }
@@ -107,6 +117,13 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
   // ===================================================
   const tableBody = rows.map((item, idx) => {
     const hasWh = typeof item.whReceivedQty === 'number';
+    const effectiveQty = hasWh ? item.whReceivedQty! : item.recordedQty;
+    const weightKg =
+      typeof item.unitWeightKg === 'number' && item.unitWeightKg > 0
+        ? (effectiveQty * item.unitWeightKg).toFixed(1)
+        : typeof item.totalWeightKg === 'number'
+        ? item.totalWeightKg.toFixed(1)
+        : '-';
     const variance = hasWh ? item.whReceivedQty! - item.recordedQty : null;
     const statusText =
       item.status === 'CONFIRMED'
@@ -120,6 +137,9 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
     ].join(' | ');
 
     const detailLines = [statusText, sigSummary];
+    if (item.casualAssistantName) {
+      detailLines.push(`Casual: ${item.casualAssistantName}`);
+    }
     if (item.whQtyEditReason) {
       const prevTxt =
         typeof item.whPreviousReceivedQty === 'number'
@@ -140,6 +160,7 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
       item.shiftInChargeName,
       String(item.recordedQty),
       hasWh ? String(item.whReceivedQty) : 'Pending',
+      weightKg,
       variance === null ? '-' : variance > 0 ? `+${variance}` : String(variance),
       item.whPersonnelName || 'Pending WH',
       detailLines.join('\n'),
@@ -155,6 +176,7 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
       '-',
       '-',
       '-',
+      '0',
       '0',
       '0',
       '-',
@@ -177,6 +199,7 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
         'Shift In Charge',
         'Shift Qty',
         'WH Qty',
+        'Qty (kg)',
         'Var',
         'WH Personnel',
         'Status, Qty Reason & Signs',
@@ -184,8 +207,8 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
     ],
     body: tableBody,
     styles: {
-      fontSize: 7.2,
-      cellPadding: 2,
+      fontSize: 7.0,
+      cellPadding: 1.9,
       textColor: [15, 23, 42],
       lineColor: [203, 213, 225],
       lineWidth: 0.15,
@@ -195,24 +218,25 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
       fillColor: [15, 47, 102],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
-      fontSize: 7.2,
+      fontSize: 7.0,
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252],
     },
     columnStyles: {
-      0: { cellWidth: 8, halign: 'center' },
-      1: { cellWidth: 19, fontStyle: 'bold' },
-      2: { cellWidth: 25 },
-      3: { cellWidth: 40 },
-      4: { cellWidth: 24 },
-      5: { cellWidth: 24 },
-      6: { cellWidth: 24 },
-      7: { cellWidth: 15, halign: 'right', fontStyle: 'bold' },
-      8: { cellWidth: 15, halign: 'right', fontStyle: 'bold' },
-      9: { cellWidth: 12, halign: 'right' },
-      10: { cellWidth: 23 },
-      11: { cellWidth: 48, fontSize: 6.5 },
+      0: { cellWidth: 7, halign: 'center' },
+      1: { cellWidth: 18, fontStyle: 'bold' },
+      2: { cellWidth: 23 },
+      3: { cellWidth: 38 },
+      4: { cellWidth: 22 },
+      5: { cellWidth: 22 },
+      6: { cellWidth: 22 },
+      7: { cellWidth: 14, halign: 'right', fontStyle: 'bold' },
+      8: { cellWidth: 14, halign: 'right', fontStyle: 'bold' },
+      9: { cellWidth: 15, halign: 'right', fontStyle: 'bold' },
+      10: { cellWidth: 11, halign: 'right' },
+      11: { cellWidth: 22 },
+      12: { cellWidth: 49, fontSize: 6.4 },
     },
   });
 
