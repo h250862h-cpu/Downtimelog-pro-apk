@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { DowntimeEntry, MachineDayStats, PeriodSummaryRow } from '../types';
+import { DowntimeEntry, MachineDayStats, normalizeMachineName, PeriodSummaryRow } from '../types';
 
 export function pad2(n: number): string {
   return n < 10 ? '0' + n : '' + n;
@@ -47,8 +47,9 @@ export function getCatCode(cat: string): 'bd' | 'co' | 'ot' {
 }
 
 export function getOpenEntry(m: string, entries: DowntimeEntry[]): DowntimeEntry | null {
+  const target = normalizeMachineName(m).toLowerCase();
   for (let i = 0; i < entries.length; i++) {
-    if (entries[i].m === m && !entries[i].end && !entries[i].del) {
+    if (normalizeMachineName(entries[i].m).toLowerCase() === target && !entries[i].end && !entries[i].del) {
       return entries[i];
     }
   }
@@ -76,8 +77,9 @@ export function calculateDayStats(
 
   const intervals: [number, number][] = [];
 
+  const target = normalizeMachineName(m).toLowerCase();
   entries.forEach((e) => {
-    if (e.m !== m || e.del) return;
+    if (normalizeMachineName(e.m).toLowerCase() !== target || e.del) return;
     const s = toTimestamp(e.start);
     const en = e.end ? toTimestamp(e.end) : now;
     const x = Math.max(s, a);
@@ -220,8 +222,9 @@ export function getSummaryRows(
     const jc = s.jc;
     const jct = s.jct;
 
+    const canonicalM = normalizeMachineName(m);
     structured.push({
-      machine: m,
+      machine: canonicalM,
       periodHrs: avail,
       runHrs: run,
       downHrs: down,
@@ -233,7 +236,7 @@ export function getSummaryRows(
       jobCardsLogged: jct,
     });
 
-    tableRows.push([m, avail, run, down, bd, co, ot, pct, jc, jct]);
+    tableRows.push([canonicalM, avail, run, down, bd, co, ot, pct, jc, jct]);
   });
 
   // Calculate TOTAL row
@@ -325,7 +328,7 @@ export function generateExcelWorkbook(
     const s = x[2];
     dailyData.push([
       x[0],
-      x[1],
+      normalizeMachineName(x[1]),
       r2(s.down),
       r2(s.run),
       r2(s.bd),
@@ -370,7 +373,7 @@ export function generateExcelWorkbook(
     const eTime = e.end ? toTimestamp(e.end) : Date.now();
     const hrs = r2((eTime - sTime) / 36e5);
     entriesData.push([
-      e.m,
+      normalizeMachineName(e.m),
       e.cat,
       fmtT(e.start),
       e.end ? fmtT(e.end) : 'still OFF',

@@ -2,12 +2,16 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   Activity,
+  BarChart3,
   Bell,
+  BellRing,
   Calendar,
   ClipboardCheck,
+  ClipboardList,
   CloudOff,
   FileSpreadsheet,
   FlaskConical,
+  Fuel,
   LayoutDashboard,
   Layers,
   Lock,
@@ -23,18 +27,24 @@ import {
   Sparkles,
   Truck,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { AttendanceLoggerApp } from './components/AttendanceLoggerApp';
 import { AuthModal } from './components/AuthModal';
 import { DailyHoursView } from './components/DailyHoursView';
+import { DieselBowserView } from './components/DieselBowserView';
+import { DieselPopupAlert, DieselSubTab } from './components/DieselPopupAlert';
 import { DispatchPopupAlert, DispatchSubStage } from './components/DispatchPopupAlert';
 import { DispatchSystemView } from './components/DispatchSystemView';
 import { LgplastLogo } from './components/LgplastLogo';
 import { LogDowntimeView } from './components/LogDowntimeView';
 import { LoginGate } from './components/LoginGate';
 import { MachineStatusBoard } from './components/MachineStatusBoard';
+import { PeriodProductionReportView } from './components/PeriodProductionReportView';
 import { PeriodReportView } from './components/PeriodReportView';
+import { ProductionPlanningView } from './components/ProductionPlanningView';
 import { PWAInstallModal } from './components/PWAInstallModal';
 import {
   ActiveScheduleSlot,
@@ -65,6 +75,18 @@ import {
   subscribeAttendanceBatches,
 } from './services/attendanceStore';
 import {
+  flushPendingDieselData,
+  getLocalDieselGrns,
+  getLocalDieselRequests,
+  getLocalDieselTank,
+  pollDieselGrns,
+  pollDieselRequests,
+  pollDieselTank,
+  subscribeDieselGrns,
+  subscribeDieselRequests,
+  subscribeDieselTank,
+} from './services/dieselStore';
+import {
   flushPendingDispatches,
   pollDispatchEntries,
   subscribeDispatchEntries,
@@ -86,6 +108,17 @@ import {
   syncEntryToFirebase,
 } from './services/downtimeStore';
 import {
+  flushPendingProductionPlans,
+  flushPendingUploadedBackgroundDispatches,
+  getLocalProductionPlans,
+  getLocalUploadedBackgroundDispatches,
+  mergeAllDispatchesWithBackground,
+  pollProductionPlans,
+  pollUploadedBackgroundDispatches,
+  subscribeProductionPlans,
+  subscribeUploadedBackgroundDispatches,
+} from './services/productionPlanStore';
+import {
   flushAllPendingSopData,
   getLocalSopHandovers,
   getLocalSopMixingReports,
@@ -104,9 +137,24 @@ import {
   subscribeSopScrap,
 } from './services/sopStore';
 import {
+  ensurePushServiceWorkerRegistration,
+  evaluateAndDispatchPushNotifications,
+  getPushPermissionStatus,
+  isPushSoundEnabled,
+  OsPushNavigationPayload,
+  requestPhonePushPermission,
+  sendTestPhonePushNotification,
+  setPushSoundEnabled,
+  updateAppBadgeCount,
+} from './services/pushNotifications';
+import {
+  DieselFuelRequest,
+  DieselGrnRecord,
+  DieselTankConfig,
   DispatchEntry,
   DowntimeEntry,
   PlantUserAccount,
+  ProductionPlanItem,
   SopMixingReport,
   SopProductionRecord,
   SopQcRecord,
@@ -120,6 +168,8 @@ export type DowntimeTab =
   | 'log'
   | 'daily'
   | 'dispatch'
+  | 'prod_planning'
+  | 'diesel'
   | 'sop_overview'
   | 'sop_production'
   | 'sop_qc'
@@ -128,6 +178,7 @@ export type DowntimeTab =
   | 'sop_mixing'
   | 'sop_handover'
   | 'attendance'
+  | 'prod_report'
   | 'rep'
   | 'data';
 
@@ -168,12 +219,24 @@ export default function App() {
   // Active Navigation Tab & Sub-stage Navigation
   const [activeDowntimeTab, setActiveDowntimeTab] = useState<DowntimeTab>('status');
   const [requestedDispatchStage, setRequestedDispatchStage] = useState<DispatchSubStage | null>(null);
+  const [requestedDieselSubTab, setRequestedDieselSubTab] = useState<DieselSubTab | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Core Data State - Machinery Downtime, 3-Stage Dispatch, SOP Floor APK & Attendance
+  // Core Data State - Machinery Downtime, 3-Stage Dispatch, Planning, Diesel Bowser, SOP Floor APK & Attendance
   const [machines, setMachines] = useState<string[]>(getActiveMachines());
   const [entries, setEntries] = useState<DowntimeEntry[]>(getStoredEntries());
   const [dispatchEntries, setDispatchEntries] = useState<DispatchEntry[]>([]);
+  const [uploadedBackgroundDispatches, setUploadedBackgroundDispatches] = useState<DispatchEntry[]>(
+    () => getLocalUploadedBackgroundDispatches()
+  );
+  const [monthlyPlans, setMonthlyPlans] = useState<ProductionPlanItem[]>(() =>
+    getLocalProductionPlans()
+  );
+  const [dieselTank, setDieselTank] = useState<DieselTankConfig>(() => getLocalDieselTank());
+  const [dieselRequests, setDieselRequests] = useState<DieselFuelRequest[]>(() =>
+    getLocalDieselRequests()
+  );
+  const [dieselGrns, setDieselGrns] = useState<DieselGrnRecord[]>(() => getLocalDieselGrns());
   const [sopProductionLogs, setSopProductionLogs] = useState<SopProductionRecord[]>(() =>
     getLocalSopProductionLogs()
   );
@@ -191,6 +254,11 @@ export default function App() {
     getLocalAttendanceBatch()
   );
   const [dismissedPopupKeys, setDismissedPopupKeys] = useState<string[]>([]);
+
+  const allDispatchesWithBackground = useMemo(
+    () => mergeAllDispatchesWithBackground(dispatchEntries, uploadedBackgroundDispatches),
+    [dispatchEntries, uploadedBackgroundDispatches]
+  );
 
   const [currentReporter, setCurrentReporter] = useState<string>(() => {
     const s = getActiveSessionUser();
@@ -217,11 +285,119 @@ export default function App() {
   const [copiedLink, setCopiedLink] = useState(false);
   const [syncErrorMsg, setSyncErrorMsg] = useState<string | null>(null);
 
-  // Wider display side interface colour theme (default: LG PLAST Royal Blue)
-  const [displayTheme, setDisplayTheme] = useState<'royal' | 'teal' | 'indigo'>(() => {
+  // Phone OS Push Notification State
+  const [pushPermission, setPushPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+    getPushPermissionStatus()
+  );
+  const [pushSoundOn, setPushSoundOn] = useState<boolean>(() => isPushSoundEnabled());
+  const [pushBannerDismissed, setPushBannerDismissed] = useState(false);
+  const [pushClockTick, setPushClockTick] = useState<number>(() => Date.now());
+  const [pushTestStatus, setPushTestStatus] = useState<string | null>(null);
+
+  // Wider display side interface colour theme (all colours selector — pure Tailwind gradients)
+  const DISPLAY_THEMES = [
+    {
+      id: 'royal',
+      label: 'Royal Blue',
+      swatchClass: 'bg-blue-600',
+      bgClass: 'bg-gradient-to-br from-[#0f2f66] via-[#14408a] to-[#0a214a]',
+    },
+    {
+      id: 'sky',
+      label: 'Sky Blue',
+      swatchClass: 'bg-sky-500',
+      bgClass: 'bg-gradient-to-br from-sky-950 via-sky-800 to-slate-950',
+    },
+    {
+      id: 'teal',
+      label: 'Ocean Teal',
+      swatchClass: 'bg-teal-500',
+      bgClass: 'bg-gradient-to-br from-teal-950 via-teal-800 to-slate-950',
+    },
+    {
+      id: 'cyan',
+      label: 'Cyan Surge',
+      swatchClass: 'bg-cyan-500',
+      bgClass: 'bg-gradient-to-br from-cyan-950 via-cyan-800 to-slate-950',
+    },
+    {
+      id: 'emerald',
+      label: 'Emerald Green',
+      swatchClass: 'bg-emerald-500',
+      bgClass: 'bg-gradient-to-br from-emerald-950 via-emerald-800 to-slate-950',
+    },
+    {
+      id: 'green',
+      label: 'Forest Green',
+      swatchClass: 'bg-green-600',
+      bgClass: 'bg-gradient-to-br from-green-950 via-green-800 to-slate-950',
+    },
+    {
+      id: 'lime',
+      label: 'Lime Olive',
+      swatchClass: 'bg-lime-500',
+      bgClass: 'bg-gradient-to-br from-lime-950 via-lime-900 to-slate-950',
+    },
+    {
+      id: 'indigo',
+      label: 'Cobalt Indigo',
+      swatchClass: 'bg-indigo-500',
+      bgClass: 'bg-gradient-to-br from-indigo-950 via-indigo-800 to-slate-950',
+    },
+    {
+      id: 'violet',
+      label: 'Deep Violet',
+      swatchClass: 'bg-violet-500',
+      bgClass: 'bg-gradient-to-br from-violet-950 via-violet-800 to-slate-950',
+    },
+    {
+      id: 'purple',
+      label: 'Royal Purple',
+      swatchClass: 'bg-purple-500',
+      bgClass: 'bg-gradient-to-br from-purple-950 via-purple-800 to-slate-950',
+    },
+    {
+      id: 'fuchsia',
+      label: 'Magenta Fuchsia',
+      swatchClass: 'bg-fuchsia-500',
+      bgClass: 'bg-gradient-to-br from-fuchsia-950 via-fuchsia-900 to-slate-950',
+    },
+    {
+      id: 'rose',
+      label: 'Crimson Rose',
+      swatchClass: 'bg-rose-500',
+      bgClass: 'bg-gradient-to-br from-rose-950 via-rose-800 to-slate-950',
+    },
+    {
+      id: 'red',
+      label: 'Cardinal Red',
+      swatchClass: 'bg-red-600',
+      bgClass: 'bg-gradient-to-br from-red-950 via-red-800 to-slate-950',
+    },
+    {
+      id: 'orange',
+      label: 'Burnt Orange',
+      swatchClass: 'bg-orange-500',
+      bgClass: 'bg-gradient-to-br from-orange-950 via-orange-800 to-slate-950',
+    },
+    {
+      id: 'amber',
+      label: 'Gold Amber',
+      swatchClass: 'bg-amber-500',
+      bgClass: 'bg-gradient-to-br from-amber-950 via-amber-800 to-slate-950',
+    },
+    {
+      id: 'slate',
+      label: 'Charcoal Slate',
+      swatchClass: 'bg-slate-500',
+      bgClass: 'bg-gradient-to-br from-slate-950 via-slate-800 to-zinc-950',
+    },
+  ] as const;
+
+  const [displayTheme, setDisplayTheme] = useState<string>(() => {
     try {
       const saved = localStorage.getItem('lgplast_display_theme');
-      if (saved === 'teal' || saved === 'indigo' || saved === 'royal') return saved;
+      if (saved && DISPLAY_THEMES.some((t) => t.id === saved)) return saved;
     } catch {}
     return 'royal';
   });
@@ -239,12 +415,15 @@ export default function App() {
     new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   );
 
-  const handleSelectDisplayTheme = (theme: 'royal' | 'teal' | 'indigo') => {
+  const handleSelectDisplayTheme = (theme: string) => {
     setDisplayTheme(theme);
     try {
       localStorage.setItem('lgplast_display_theme', theme);
     } catch {}
   };
+
+  const activeDisplayTheme =
+    DISPLAY_THEMES.find((t) => t.id === displayTheme) || DISPLAY_THEMES[0];
 
   const directAppUrl =
     typeof window !== 'undefined' && window.location.origin
@@ -355,6 +534,21 @@ export default function App() {
     const unsubSopHandovers = subscribeSopHandovers((rows) => {
       setSopHandovers(rows);
     });
+    const unsubHistBg = subscribeUploadedBackgroundDispatches((rows) => {
+      setUploadedBackgroundDispatches(rows);
+    });
+    const unsubPlans = subscribeProductionPlans((rows) => {
+      setMonthlyPlans(rows);
+    });
+    const unsubTank = subscribeDieselTank((t) => {
+      setDieselTank(t);
+    });
+    const unsubDieselReqs = subscribeDieselRequests((reqs) => {
+      setDieselRequests(reqs);
+    });
+    const unsubDieselGrns = subscribeDieselGrns((grns) => {
+      setDieselGrns(grns);
+    });
 
     const pendingTimer = setInterval(() => {
       setPendingSyncCount(getPendingSyncQueue().length);
@@ -375,6 +569,9 @@ export default function App() {
           flushPendingDispatches().catch(() => 0),
           flushPendingAttendanceBatches().catch(() => 0),
           flushAllPendingSopData().catch(() => 0),
+          flushPendingUploadedBackgroundDispatches().catch(() => 0),
+          flushPendingProductionPlans().catch(() => 0),
+          flushPendingDieselData().catch(() => 0),
         ]);
         const [
           updated,
@@ -384,6 +581,11 @@ export default function App() {
           updatedSopScrap,
           updatedSopMixing,
           updatedSopHandovers,
+          updatedHistBg,
+          updatedPlans,
+          updatedTank,
+          updatedDieselReqs,
+          updatedDieselGrns,
         ] = await Promise.all([
           pollFirebaseEntries(),
           pollDispatchEntries().catch(() => null),
@@ -392,6 +594,11 @@ export default function App() {
           pollSopScrap().catch(() => null),
           pollSopMixing().catch(() => null),
           pollSopHandovers().catch(() => null),
+          pollUploadedBackgroundDispatches().catch(() => null),
+          pollProductionPlans().catch(() => null),
+          pollDieselTank().catch(() => null),
+          pollDieselRequests().catch(() => null),
+          pollDieselGrns().catch(() => null),
         ]);
         setEntries(updated);
         if (updatedDispatches) setDispatchEntries(updatedDispatches);
@@ -400,6 +607,11 @@ export default function App() {
         if (updatedSopScrap) setSopScrapPipeline(updatedSopScrap);
         if (updatedSopMixing) setSopMixingReports(updatedSopMixing);
         if (updatedSopHandovers) setSopHandovers(updatedSopHandovers);
+        if (updatedHistBg) setUploadedBackgroundDispatches(updatedHistBg);
+        if (updatedPlans) setMonthlyPlans(updatedPlans);
+        if (updatedTank) setDieselTank(updatedTank);
+        if (updatedDieselReqs) setDieselRequests(updatedDieselReqs);
+        if (updatedDieselGrns) setDieselGrns(updatedDieselGrns);
         setPendingSyncCount(getPendingSyncQueue().length);
         setLastLiveHeartbeat(
           new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -434,6 +646,11 @@ export default function App() {
       unsubSopScrap();
       unsubSopMixing();
       unsubSopHandovers();
+      unsubHistBg();
+      unsubPlans();
+      unsubTank();
+      unsubDieselReqs();
+      unsubDieselGrns();
       clearInterval(pendingTimer);
       clearInterval(keepAliveTimer);
       document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
@@ -614,6 +831,203 @@ export default function App() {
     effectivePermissions.dispatchHODConfirm ||
     effectivePermissions.exportDispatchExcel;
 
+  const hasDieselAccess =
+    isAdmin ||
+    Boolean(effectivePermissions.dieselFuelRequest) ||
+    Boolean(effectivePermissions.dieselHODApprove) ||
+    Boolean(effectivePermissions.dieselGRN) ||
+    Boolean(effectivePermissions.dieselExportExcel);
+
+  const dieselBadgeCount = useMemo(() => {
+    let count = 0;
+    if (isAdmin || effectivePermissions.dieselHODApprove) {
+      count += dieselRequests.filter((r) => r.status === 'PENDING_HOD').length;
+    }
+    if (effectivePermissions.dieselFuelRequest) {
+      count += dieselRequests.filter(
+        (r) => r.status === 'APPROVED_FOR_DISPENSE' && r.pdfUnlockedDispense
+      ).length;
+    }
+    return count;
+  }, [dieselRequests, effectivePermissions, isAdmin]);
+
+  const hasActiveDieselPopup = useMemo(() => {
+    const hodAlert =
+      isAdmin || effectivePermissions.dieselHODApprove
+        ? dieselRequests.some(
+            (r) =>
+              r.status === 'PENDING_HOD' &&
+              !dismissedPopupKeys.includes(`DIESEL_${r.id}_PENDING_HOD`)
+          )
+        : false;
+    const driverAlert =
+      isAdmin || effectivePermissions.dieselFuelRequest
+        ? dieselRequests.some(
+            (r) =>
+              r.status === 'APPROVED_FOR_DISPENSE' &&
+              r.pdfUnlockedDispense &&
+              !dismissedPopupKeys.includes(`DIESEL_${r.id}_APPROVED_FOR_DISPENSE`)
+          )
+        : false;
+    return hodAlert || driverAlert;
+  }, [dieselRequests, effectivePermissions, dismissedPopupKeys, isAdmin]);
+
+  // 4. Phone OS Push Notification Engine + Deep-Link Tap Handling
+  useEffect(() => {
+    if (!user) return;
+
+    const navigateFromPushPayload = (payload: Partial<OsPushNavigationPayload> | null | undefined) => {
+      if (!payload) return;
+      const validTabs: DowntimeTab[] = [
+        'status',
+        'log',
+        'daily',
+        'dispatch',
+        'prod_planning',
+        'diesel',
+        'sop_overview',
+        'sop_production',
+        'sop_qc',
+        'sop_scrap',
+        'sop_recycling',
+        'sop_mixing',
+        'sop_handover',
+        'attendance',
+        'prod_report',
+        'rep',
+        'data',
+      ];
+      if (payload.targetTab && validTabs.includes(payload.targetTab as DowntimeTab)) {
+        setActiveDowntimeTab(payload.targetTab as DowntimeTab);
+      }
+      if (payload.dispatchStage) {
+        setRequestedDispatchStage(payload.dispatchStage);
+      }
+      if (payload.dieselSubTab) {
+        setRequestedDieselSubTab(payload.dieselSubTab);
+      }
+      if (payload.openWeightCheck) {
+        const now = new Date();
+        const active = getActiveWeightOutputSlot(now);
+        if (active) {
+          setManualWeightCheckSlot(active);
+        }
+      }
+    };
+
+    // Check URL query params when opened fresh from OS notification click
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const openTab = params.get('openTab');
+      if (openTab) {
+        navigateFromPushPayload({
+          targetTab: openTab,
+          dispatchStage: (params.get('dispatchStage') as DispatchSubStage) || undefined,
+          dieselSubTab: (params.get('dieselSubTab') as DieselSubTab) || undefined,
+          openWeightCheck: params.get('weightCheck') === '1',
+        });
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    } catch {}
+
+    const handleWindowPushNav = (ev: Event) => {
+      const customEv = ev as CustomEvent<OsPushNavigationPayload>;
+      navigateFromPushPayload(customEv.detail);
+    };
+
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'LGPLAST_NOTIFICATION_CLICK') {
+        navigateFromPushPayload(event.data.payload);
+      }
+    };
+
+    window.addEventListener('lgplast-nav-from-push', handleWindowPushNav);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    }
+
+    if (getPushPermissionStatus() === 'granted') {
+      ensurePushServiceWorkerRegistration().catch(() => {});
+    }
+
+    const syncPermAndClock = () => {
+      setPushPermission(getPushPermissionStatus());
+      setPushClockTick(Date.now());
+    };
+    const timer = setInterval(syncPermAndClock, 15000);
+    window.addEventListener('focus', syncPermAndClock);
+    document.addEventListener('visibilitychange', syncPermAndClock);
+
+    return () => {
+      window.removeEventListener('lgplast-nav-from-push', handleWindowPushNav);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
+      clearInterval(timer);
+      window.removeEventListener('focus', syncPermAndClock);
+      document.removeEventListener('visibilitychange', syncPermAndClock);
+    };
+  }, [user?.uid, user?.email]);
+
+  useEffect(() => {
+    if (!user?.email) return;
+    evaluateAndDispatchPushNotifications({
+      userEmail: user.email,
+      isAdmin,
+      isOnline,
+      permissions: effectivePermissions,
+      isShiftInChargeWeightCheckUser,
+      dispatchEntries,
+      sopScrapPipeline,
+      sopMixingReports,
+      dieselRequests,
+      entries,
+      now: new Date(pushClockTick),
+    }).catch(() => {});
+  }, [
+    user?.email,
+    isAdmin,
+    isOnline,
+    effectivePermissions,
+    isShiftInChargeWeightCheckUser,
+    dispatchEntries,
+    sopScrapPipeline,
+    sopMixingReports,
+    dieselRequests,
+    entries,
+    pushClockTick,
+    pushPermission,
+  ]);
+
+  const handleEnablePhonePush = async () => {
+    const res = await requestPhonePushPermission();
+    setPushPermission(res);
+    if (res === 'granted') {
+      setPushBannerDismissed(true);
+      setPushTestStatus('Phone Alerts Active');
+      setTimeout(() => setPushTestStatus(null), 3500);
+    } else if (res === 'denied') {
+      setPushTestStatus('Blocked in Browser Settings');
+      setTimeout(() => setPushTestStatus(null), 4000);
+    }
+  };
+
+  const handleTogglePushSound = () => {
+    const next = !pushSoundOn;
+    setPushSoundOn(next);
+    setPushSoundEnabled(next);
+  };
+
+  const handleTestPhonePush = async () => {
+    if (pushPermission !== 'granted') {
+      await handleEnablePhonePush();
+      return;
+    }
+    const ok = await sendTestPhonePushNotification();
+    setPushTestStatus(ok ? 'Test Alert Sent!' : 'Check Browser Permission');
+    setTimeout(() => setPushTestStatus(null), 3000);
+  };
+
   // Compute allowed sidebar navigation tabs strictly from effectivePermissions & Admin-only report policy
   const allowedTabs = useMemo<DowntimeTab[]>(() => {
     const tabs: DowntimeTab[] = [];
@@ -621,6 +1035,14 @@ export default function App() {
     if (effectivePermissions.logDowntime) tabs.push('log');
     if (effectivePermissions.viewDailyHours) tabs.push('daily');
     if (hasDispatchAccess) tabs.push('dispatch');
+    if (
+      isAdmin ||
+      effectivePermissions.productionPlanningAccess ||
+      effectivePermissions.dispatchShiftEntry
+    ) {
+      tabs.push('prod_planning');
+    }
+    if (hasDieselAccess) tabs.push('diesel');
     if (isAdmin || effectivePermissions.sopFloorAccess) {
       tabs.push('sop_overview', 'sop_production', 'sop_qc');
     }
@@ -637,10 +1059,11 @@ export default function App() {
       tabs.push('sop_handover');
     }
     if (effectivePermissions.attendanceLogger || isAdmin) tabs.push('attendance');
+    if (isAdmin || effectivePermissions.productionReportAccess) tabs.push('prod_report');
     if (isAdmin) tabs.push('rep');
     if (isAdmin || effectivePermissions.manageMachinesAndSync) tabs.push('data');
     return tabs;
-  }, [effectivePermissions, hasDispatchAccess, isAdmin]);
+  }, [effectivePermissions, hasDispatchAccess, hasDieselAccess, isAdmin]);
 
   // Automatically switch active view to the first permitted tab whenever permissions change
   useEffect(() => {
@@ -728,6 +1151,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    updateAppBadgeCount(0);
     await logoutUser();
     setUser(null);
   };
@@ -740,6 +1164,9 @@ export default function App() {
         flushPendingDispatches().catch(() => 0),
         flushPendingAttendanceBatches().catch(() => 0),
         flushAllPendingSopData().catch(() => 0),
+        flushPendingUploadedBackgroundDispatches().catch(() => 0),
+        flushPendingProductionPlans().catch(() => 0),
+        flushPendingDieselData().catch(() => 0),
       ]);
       const [
         updated,
@@ -749,6 +1176,11 @@ export default function App() {
         updatedSopScrap,
         updatedSopMixing,
         updatedSopHandovers,
+        updatedHistBg,
+        updatedPlans,
+        updatedTank,
+        updatedDieselReqs,
+        updatedDieselGrns,
       ] = await Promise.all([
         pollFirebaseEntries(),
         pollDispatchEntries().catch(() => dispatchEntries),
@@ -757,6 +1189,11 @@ export default function App() {
         pollSopScrap().catch(() => sopScrapPipeline),
         pollSopMixing().catch(() => sopMixingReports),
         pollSopHandovers().catch(() => sopHandovers),
+        pollUploadedBackgroundDispatches().catch(() => uploadedBackgroundDispatches),
+        pollProductionPlans().catch(() => monthlyPlans),
+        pollDieselTank().catch(() => dieselTank),
+        pollDieselRequests().catch(() => dieselRequests),
+        pollDieselGrns().catch(() => dieselGrns),
       ]);
       setEntries(updated);
       setDispatchEntries(updatedDispatches);
@@ -765,6 +1202,11 @@ export default function App() {
       setSopScrapPipeline(updatedSopScrap);
       setSopMixingReports(updatedSopMixing);
       setSopHandovers(updatedSopHandovers);
+      setUploadedBackgroundDispatches(updatedHistBg);
+      setMonthlyPlans(updatedPlans);
+      setDieselTank(updatedTank);
+      setDieselRequests(updatedDieselReqs);
+      setDieselGrns(updatedDieselGrns);
       setPendingSyncCount(getPendingSyncQueue().length);
       const err = getLastSyncError();
       setSyncErrorMsg(err);
@@ -816,6 +1258,7 @@ export default function App() {
 
   type NavItemConfig = {
     id: DowntimeTab;
+    group: '1. Live Floor Operations' | '2. Daily SOP Floor APKs' | '3. Reports, Attendance & Admin';
     label: string;
     subtitle: string;
     icon: React.ReactNode;
@@ -823,58 +1266,71 @@ export default function App() {
     adminTag?: boolean;
   };
 
+  // Arranged strictly by floor operational importance
   const allNavItems: NavItemConfig[] = [
+    // Priority 1: Live Floor Operations
     {
       id: 'status',
+      group: '1. Live Floor Operations',
       label: 'Machine Status',
-      subtitle: 'Live Floor Board',
+      subtitle: 'Live Floor Board & Weight',
       icon: <Activity className="h-4 w-4" />,
     },
     {
       id: 'log',
+      group: '1. Live Floor Operations',
       label: 'Log Downtime',
       subtitle: 'Single & All Machines',
       icon: <Plus className="h-4 w-4" />,
     },
     {
-      id: 'daily',
-      label: 'Daily Hours',
-      subtitle: 'Shift Availability',
-      icon: <Calendar className="h-4 w-4" />,
-    },
-    {
       id: 'dispatch',
+      group: '1. Live Floor Operations',
       label: 'Dispatch System',
       subtitle: 'Shift → WH → HOD',
       icon: <Truck className="h-4 w-4" />,
       badge: actionableDispatchCount,
     },
     {
-      id: 'sop_overview',
-      label: 'SOP Floor Overview',
-      subtitle: 'KPIs & Downtime Pareto',
-      icon: <LayoutDashboard className="h-4 w-4" />,
+      id: 'prod_planning',
+      group: '1. Live Floor Operations',
+      label: 'Production Planning',
+      subtitle: 'Monthly Plan & Uploads',
+      icon: <ClipboardList className="h-4 w-4" />,
     },
     {
+      id: 'diesel',
+      group: '1. Live Floor Operations',
+      label: 'Diesel Bowser & GRN',
+      subtitle: 'Fuel Issue · Meter · Tank',
+      icon: <Fuel className="h-4 w-4" />,
+      badge: dieselBadgeCount,
+    },
+    // Priority 2: Daily SOP Floor APKs
+    {
       id: 'sop_production',
+      group: '2. Daily SOP Floor APKs',
       label: 'Production Logger',
       subtitle: 'Job Cards & WA Parser',
       icon: <ClipboardCheck className="h-4 w-4" />,
     },
     {
       id: 'sop_qc',
+      group: '2. Daily SOP Floor APKs',
       label: 'QC Check APK',
       subtitle: 'Inspections & WA Parser',
       icon: <Sparkles className="h-4 w-4" />,
     },
     {
       id: 'sop_scrap',
+      group: '2. Daily SOP Floor APKs',
       label: 'Scrap Send APK',
       subtitle: 'Operator → Recycling',
       icon: <Send className="h-4 w-4" />,
     },
     {
       id: 'sop_recycling',
+      group: '2. Daily SOP Floor APKs',
       label: 'Recycling Team APK',
       subtitle: 'Process → Mixer Alert',
       icon: <Recycle className="h-4 w-4" />,
@@ -882,6 +1338,7 @@ export default function App() {
     },
     {
       id: 'sop_mixing',
+      group: '2. Daily SOP Floor APKs',
       label: 'Mixing & WH Stock',
       subtitle: 'Batches · Sweeping · HOD',
       icon: <FlaskConical className="h-4 w-4" />,
@@ -889,24 +1346,51 @@ export default function App() {
     },
     {
       id: 'sop_handover',
+      group: '2. Daily SOP Floor APKs',
       label: 'Shift Handover APK',
       subtitle: 'Supervisor Floor Log',
       icon: <Layers className="h-4 w-4" />,
     },
     {
+      id: 'sop_overview',
+      group: '2. Daily SOP Floor APKs',
+      label: 'SOP Floor Overview',
+      subtitle: 'KPIs & Downtime Pareto',
+      icon: <LayoutDashboard className="h-4 w-4" />,
+    },
+    // Priority 3: Reports, Attendance & Admin
+    {
+      id: 'daily',
+      group: '3. Reports, Attendance & Admin',
+      label: 'Daily Hours',
+      subtitle: 'Shift Availability',
+      icon: <Calendar className="h-4 w-4" />,
+    },
+    {
       id: 'attendance',
+      group: '3. Reports, Attendance & Admin',
       label: 'Attendance Logger',
       subtitle: 'WhatsApp Roll & Excel',
       icon: <Users className="h-4 w-4" />,
     },
     {
+      id: 'prod_report',
+      group: '3. Reports, Attendance & Admin',
+      label: 'Production Report',
+      subtitle: 'SUMIF · Shift · QC · Hrs',
+      icon: <BarChart3 className="h-4 w-4" />,
+      adminTag: isAdmin,
+    },
+    {
       id: 'rep',
+      group: '3. Reports, Attendance & Admin',
       label: 'Downtime Excel',
       subtitle: 'Confidential Report',
       icon: <FileSpreadsheet className="h-4 w-4" />,
     },
     {
       id: 'data',
+      group: '3. Reports, Attendance & Admin',
       label: isAdmin ? 'Admin Access & Sync' : 'Machines & Sync',
       subtitle: isAdmin ? 'Roles & Confidentiality' : 'Cloud Sync & Backup',
       icon: <RefreshCw className="h-4 w-4" />,
@@ -915,6 +1399,11 @@ export default function App() {
   ];
 
   const navItems = allNavItems.filter((item) => allowedTabs.includes(item.id));
+  const navGroups: Array<NavItemConfig['group']> = [
+    '1. Live Floor Operations',
+    '2. Daily SOP Floor APKs',
+    '3. Reports, Attendance & Admin',
+  ];
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -995,6 +1484,60 @@ export default function App() {
                 <span className="hidden sm:inline">Pending Dispatch:</span>
                 <span>{actionableDispatchCount}</span>
               </button>
+            )}
+
+            {/* Phone OS Push Notification Controls */}
+            {pushPermission !== 'unsupported' && (
+              <div className="flex items-center gap-1">
+                {pushPermission === 'granted' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleTestPhonePush}
+                      className="flex items-center gap-1 rounded-xl border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1.5 text-xs font-bold text-emerald-300 transition"
+                      title="Phone push notifications active like email alerts — click to send test alert"
+                    >
+                      <BellRing className="h-3.5 w-3.5 text-emerald-400" />
+                      <span className="hidden md:inline">
+                        {pushTestStatus || 'Phone Push: ON'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTogglePushSound}
+                      className="rounded-xl border border-slate-700 bg-slate-900 hover:bg-slate-800 p-1.5 text-slate-300 transition"
+                      title={pushSoundOn ? 'Mute alert chime' : 'Unmute alert chime'}
+                    >
+                      {pushSoundOn ? (
+                        <Volume2 className="h-3.5 w-3.5 text-sky-400" />
+                      ) : (
+                        <VolumeX className="h-3.5 w-3.5 text-slate-500" />
+                      )}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleEnablePhonePush}
+                    className={`flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-xs font-black transition ${
+                      pushPermission === 'denied'
+                        ? 'border-rose-500/40 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25'
+                        : 'border-amber-400/60 bg-amber-500 text-slate-950 hover:bg-amber-400 animate-pulse'
+                    }`}
+                    title={
+                      pushPermission === 'denied'
+                        ? 'Notifications blocked in browser settings — allow notifications for this site in Chrome/Safari settings'
+                        : 'Enable live OS phone push notifications like email alerts'
+                    }
+                  >
+                    <BellRing className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">
+                      {pushTestStatus ||
+                        (pushPermission === 'denied' ? 'Push Blocked' : 'Enable Push')}
+                    </span>
+                  </button>
+                )}
+              </div>
             )}
 
             <button
@@ -1102,58 +1645,65 @@ export default function App() {
               <div className="text-[10px] text-slate-400 truncate">{user.email}</div>
             </div>
 
-            {/* Section Menu Buttons */}
-            <nav className="space-y-1.5">
-              <div className="px-2 text-[10px] font-black uppercase tracking-wider text-slate-500">
-                Permitted Sections ({navItems.length})
-              </div>
-
-              {navItems.map((item) => {
-                const isActive = activeDowntimeTab === item.id;
+            {/* Section Menu Buttons (Arranged by Floor Operational Importance) */}
+            <nav className="space-y-3">
+              {navGroups.map((groupTitle) => {
+                const groupItems = navItems.filter((item) => item.group === groupTitle);
+                if (groupItems.length === 0) return null;
                 return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handleSelectNavTab(item.id)}
-                    className={`w-full flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition ${
-                      isActive
-                        ? 'bg-gradient-to-r from-[#0284c7] to-[#2e3192] text-white shadow-lg shadow-blue-950/50 border border-sky-400/40'
-                        : 'border border-transparent text-slate-300 hover:bg-slate-900 hover:border-slate-800 hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span
-                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-                          isActive ? 'bg-white/15 text-white' : 'bg-slate-900 text-slate-400'
-                        }`}
-                      >
-                        {item.icon}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold truncate flex items-center gap-1.5">
-                          <span>{item.label}</span>
-                          {item.adminTag && (
-                            <span className="rounded bg-amber-500/20 px-1 py-0.5 text-[8px] font-black text-amber-300 border border-amber-500/40">
-                              ADMIN
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          className={`text-[10px] truncate ${
-                            isActive ? 'text-sky-100' : 'text-slate-500'
+                  <div key={groupTitle} className="space-y-1">
+                    <div className="px-2 pt-1 text-[10px] font-black uppercase tracking-wider text-sky-400/80">
+                      {groupTitle}
+                    </div>
+                    {groupItems.map((item) => {
+                      const isActive = activeDowntimeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleSelectNavTab(item.id)}
+                          className={`w-full flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition ${
+                            isActive
+                              ? 'bg-gradient-to-r from-[#0284c7] to-[#2e3192] text-white shadow-lg shadow-blue-950/50 border border-sky-400/40'
+                              : 'border border-transparent text-slate-300 hover:bg-slate-900 hover:border-slate-800 hover:text-white'
                           }`}
                         >
-                          {item.subtitle}
-                        </div>
-                      </div>
-                    </div>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span
+                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                                isActive ? 'bg-white/15 text-white' : 'bg-slate-900 text-slate-400'
+                              }`}
+                            >
+                              {item.icon}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold truncate flex items-center gap-1.5">
+                                <span>{item.label}</span>
+                                {item.adminTag && (
+                                  <span className="rounded bg-amber-500/20 px-1 py-0.5 text-[8px] font-black text-amber-300 border border-amber-500/40">
+                                    ADMIN
+                                  </span>
+                                )}
+                              </div>
+                              <div
+                                className={`text-[10px] truncate ${
+                                  isActive ? 'text-sky-100' : 'text-slate-500'
+                                }`}
+                              >
+                                {item.subtitle}
+                              </div>
+                            </div>
+                          </div>
 
-                    {typeof item.badge === 'number' && item.badge > 0 && (
-                      <span className="shrink-0 rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-black text-white">
-                        {item.badge}
-                      </span>
-                    )}
-                  </button>
+                          {typeof item.badge === 'number' && item.badge > 0 && (
+                            <span className="shrink-0 rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-black text-white">
+                              {item.badge}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </nav>
@@ -1174,55 +1724,44 @@ export default function App() {
 
         {/* RIGHT WIDER DISPLAY INTERFACE (Distinct Colored Corporate Display Surface) */}
         <main
-          className={`flex-1 min-w-0 px-3 py-4 sm:px-6 overflow-y-auto transition-colors duration-300 ${
-            displayTheme === 'teal'
-              ? 'bg-gradient-to-br from-[#0b3b49] via-[#0f5265] to-[#082d38]'
-              : displayTheme === 'indigo'
-              ? 'bg-gradient-to-br from-[#1b1f5c] via-[#252b7a] to-[#131747]'
-              : 'bg-gradient-to-br from-[#0f2f66] via-[#14408a] to-[#0a214a]'
-          }`}
+          className={`flex-1 min-w-0 px-3 py-4 sm:px-6 overflow-y-auto transition-colors duration-300 ${activeDisplayTheme.bgClass}`}
         >
           <div className="mx-auto max-w-6xl space-y-4">
-            {/* Compact Display Bar: Theme Colour Switcher + Always-Live Screen Wake Toggle */}
+            {/* Compact Display Bar: Full-Spectrum Colour Switcher + Always-Live Screen Wake Toggle */}
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-sky-400/25 bg-slate-950/45 backdrop-blur-sm px-3 py-2 text-[11px]">
-              <div className="flex items-center gap-2 text-sky-100 font-semibold">
-                <span className="inline-block h-2 w-2 rounded-full bg-[#00aeef]" />
-                <span>LG PLAST Display</span>
-                <span className="text-sky-300/70">·</span>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleSelectDisplayTheme('royal')}
-                    className={`rounded-lg px-2 py-0.5 text-[10px] font-bold transition border ${
-                      displayTheme === 'royal'
-                        ? 'bg-[#00aeef] text-slate-950 border-sky-300'
-                        : 'bg-slate-900/70 text-sky-200 border-sky-400/20 hover:bg-slate-800'
-                    }`}
-                  >
-                    Royal Blue
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSelectDisplayTheme('teal')}
-                    className={`rounded-lg px-2 py-0.5 text-[10px] font-bold transition border ${
-                      displayTheme === 'teal'
-                        ? 'bg-teal-400 text-slate-950 border-teal-200'
-                        : 'bg-slate-900/70 text-teal-200 border-teal-400/20 hover:bg-slate-800'
-                    }`}
-                  >
-                    Ocean Teal
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSelectDisplayTheme('indigo')}
-                    className={`rounded-lg px-2 py-0.5 text-[10px] font-bold transition border ${
-                      displayTheme === 'indigo'
-                        ? 'bg-indigo-400 text-slate-950 border-indigo-200'
-                        : 'bg-slate-900/70 text-indigo-200 border-indigo-400/20 hover:bg-slate-800'
-                    }`}
-                  >
-                    Cobalt Indigo
-                  </button>
+              <div className="flex flex-wrap items-center gap-2 text-sky-100 font-semibold">
+                <span className={`inline-block h-2.5 w-2.5 rounded-full ${activeDisplayTheme.swatchClass}`} />
+                <span>Display Colour:</span>
+                <select
+                  aria-label="Select display background colour"
+                  value={activeDisplayTheme.id}
+                  onChange={(e) => handleSelectDisplayTheme(e.target.value)}
+                  className="rounded-lg border border-slate-700 bg-slate-900/90 px-2 py-0.5 text-[11px] font-bold text-white focus:border-sky-400 focus:outline-none"
+                >
+                  {DISPLAY_THEMES.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex flex-wrap items-center gap-1">
+                  {DISPLAY_THEMES.map((theme) => {
+                    const selected = activeDisplayTheme.id === theme.id;
+                    return (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        onClick={() => handleSelectDisplayTheme(theme.id)}
+                        title={theme.label}
+                        aria-label={`Select ${theme.label} background colour`}
+                        className={`h-4 w-4 rounded-full transition border ${theme.swatchClass} ${
+                          selected
+                            ? 'ring-2 ring-white scale-110 border-white'
+                            : 'border-white/30 opacity-80 hover:opacity-100 hover:scale-105'
+                        }`}
+                      />
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1249,6 +1788,42 @@ export default function App() {
                   : 'Keep Screen On: OFF'}
               </button>
             </div>
+
+            {/* One-Tap Phone Push Notification Opt-In Banner */}
+            {pushPermission === 'default' && !pushBannerDismissed && (
+              <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-amber-400/50 bg-amber-500/15 px-3.5 py-2.5 text-xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-400 text-slate-950">
+                    <BellRing className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-black text-amber-200">
+                      Turn On Phone Push Notifications (Like Email Alerts)
+                    </div>
+                    <div className="text-[11px] text-amber-100/90">
+                      Receive instant phone alerts for Dispatch, Diesel fuel approvals, Scrap/Mixing, 09:45–06:45 Weight Checks &amp; Breakdowns whenever connected to network.
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleEnablePhonePush}
+                    className="rounded-xl bg-amber-400 hover:bg-amber-300 px-3.5 py-1.5 text-xs font-black text-slate-950 shadow transition"
+                  >
+                    Allow Phone Alerts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPushBannerDismissed(true)}
+                    className="rounded-lg p-1 text-amber-200 hover:bg-amber-500/20 transition"
+                    title="Dismiss banner"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            )}
             {/* Quick Mobile Navigation Pills Bar (So phones also jump rapidly without opening drawer) */}
             <div className="flex md:hidden items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
               {navItems.map((item) => (
@@ -1351,6 +1926,8 @@ export default function App() {
                   <DispatchSystemView
                     machines={machines}
                     dispatchEntries={dispatchEntries}
+                    allDispatchesWithBackground={allDispatchesWithBackground}
+                    monthlyPlans={monthlyPlans}
                     sopProductionLogs={sopProductionLogs}
                     permissions={effectivePermissions}
                     isAdmin={isAdmin}
@@ -1358,6 +1935,34 @@ export default function App() {
                     currentUserEmail={user.email || ''}
                     requestedStage={requestedDispatchStage}
                     onStageHandled={() => setRequestedDispatchStage(null)}
+                  />
+                )}
+
+                {activeDowntimeTab === 'prod_planning' &&
+                  (isAdmin ||
+                    effectivePermissions.productionPlanningAccess ||
+                    effectivePermissions.dispatchShiftEntry) && (
+                    <ProductionPlanningView
+                      machines={machines}
+                      allDispatches={allDispatchesWithBackground}
+                      uploadedBackgroundDispatches={uploadedBackgroundDispatches}
+                      monthlyPlans={monthlyPlans}
+                      currentUserName={user.displayName || currentReporter}
+                      isAdmin={isAdmin}
+                    />
+                  )}
+
+                {activeDowntimeTab === 'diesel' && hasDieselAccess && (
+                  <DieselBowserView
+                    tank={dieselTank}
+                    requests={dieselRequests}
+                    grns={dieselGrns}
+                    permissions={effectivePermissions}
+                    isAdmin={isAdmin}
+                    currentUserName={user.displayName || currentReporter}
+                    currentUserEmail={user.email || ''}
+                    requestedSubTab={requestedDieselSubTab}
+                    onSubTabHandled={() => setRequestedDieselSubTab(null)}
                   />
                 )}
 
@@ -1386,6 +1991,19 @@ export default function App() {
                       onUpdateBatch={setAttendanceBatch}
                       userEmail={user.email || ''}
                       isAdmin={isAdmin}
+                    />
+                  )}
+
+                {activeDowntimeTab === 'prod_report' &&
+                  (isAdmin || effectivePermissions.productionReportAccess) && (
+                    <PeriodProductionReportView
+                      machines={machines}
+                      downtimeEntries={entries}
+                      allDispatches={allDispatchesWithBackground}
+                      sopProductionLogs={sopProductionLogs}
+                      sopQcChecks={sopQcChecks}
+                      currentUserName={user.displayName || currentReporter}
+                      canExport={isAdmin || Boolean(effectivePermissions.productionReportAccess)}
                     />
                   )}
 
@@ -1444,13 +2062,29 @@ export default function App() {
         }}
       />
 
-      {/* Scheduled Shift In Charge Pop-Up: Running Weight & Output Check (09:45, 12:45, 15:45, 23:45, 03:45, 06:45) */}
+      {/* Real-Time Diesel Bowser Request & Approval PDF Unlock Pop-Up Notifications */}
+      <DieselPopupAlert
+        requests={dieselRequests}
+        permissions={effectivePermissions}
+        isAdmin={isAdmin}
+        currentUserEmail={user.email || ''}
+        hasBlockingPopup={hasActiveDispatchPopup || hasActiveSopPopup}
+        dismissedKeys={dismissedPopupKeys}
+        onDismissKey={(key) =>
+          setDismissedPopupKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))
+        }
+        onNavigateToDieselTab={(subTab) => {
+          setActiveDowntimeTab('diesel');
+          setRequestedDieselSubTab(subTab);
+        }}
+      />
+
+      {/* Scheduled Shift In Charge Pop-Up: Running Weight & Output Check (09:45, 12:45, 18:00, 23:45, 03:45, 06:45) */}
       <ShiftWeightOutputPopupAlert
         machines={machines}
         entries={entries}
-        sopProductionLogs={sopProductionLogs}
         isEligibleUser={isShiftInChargeWeightCheckUser}
-        hasBlockingPopup={hasActiveDispatchPopup || hasActiveSopPopup}
+        hasBlockingPopup={hasActiveDispatchPopup || hasActiveSopPopup || hasActiveDieselPopup}
         manualOpenSlot={manualWeightCheckSlot}
         onCloseManual={() => setManualWeightCheckSlot(null)}
         onSaveEntry={handleSaveEntry}

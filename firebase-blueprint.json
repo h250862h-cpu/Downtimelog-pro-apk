@@ -189,6 +189,75 @@
         "createdAt": { "type": "number" }
       },
       "required": ["date", "outgoingShift", "outgoingSupervisor"]
+    },
+    "production_plan_item": {
+      "title": "Monthly Production Plan Item",
+      "description": "Uploaded monthly product planning targets tracked against month dispatch quantities with auto-red closure",
+      "type": "object",
+      "properties": {
+        "month": { "type": "string", "maxLength": 10 },
+        "product": { "type": "string", "maxLength": 200 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "plannedQty": { "type": "number" },
+        "plannedKg": { "type": "number" },
+        "jobCardNo": { "type": "string", "maxLength": 80 },
+        "updatedAt": { "type": "string", "maxLength": 50 },
+        "upd": { "type": "number" }
+      },
+      "required": ["month", "product", "plannedQty"]
+    },
+    "diesel_tank_config": {
+      "title": "Factory Diesel Bowser Tank Ledger",
+      "description": "Live diesel bowser fuel level and totalizer meter state",
+      "type": "object",
+      "properties": {
+        "tankName": { "type": "string", "maxLength": 120 },
+        "capacityLitres": { "type": "number" },
+        "currentLevelLitres": { "type": "number" },
+        "currentMeterReading": { "type": "number" },
+        "totalReceivedLitres": { "type": "number" },
+        "totalIssuedLitres": { "type": "number" },
+        "lastUpdatedAt": { "type": "string", "maxLength": 50 },
+        "upd": { "type": "number" }
+      },
+      "required": ["tankName", "currentLevelLitres", "currentMeterReading"]
+    },
+    "diesel_fuel_request": {
+      "title": "Diesel Fuel Issue Request",
+      "description": "3-stage Forklift Driver -> Production HOD Approval (1-time PDF unlock) -> Bowser Meter Reading dispense record with digital signatures",
+      "type": "object",
+      "properties": {
+        "requestNo": { "type": "string", "maxLength": 40 },
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "vehicleOrForklift": { "type": "string", "maxLength": 120 },
+        "driverName": { "type": "string", "maxLength": 120 },
+        "requestedLitres": { "type": "number" },
+        "status": { "type": "string", "maxLength": 40 },
+        "pdfGeneratedOnce": { "type": "boolean" },
+        "firstMeterReading": { "type": "number" },
+        "secondMeterReading": { "type": "number" },
+        "actualLitresTaken": { "type": "number" },
+        "upd": { "type": "number" }
+      },
+      "required": ["requestNo", "date", "vehicleOrForklift", "driverName", "requestedLitres", "status"]
+    },
+    "diesel_grn_record": {
+      "title": "Diesel Bowser GRN Record",
+      "description": "Goods Received Note adding bulk supplier diesel into bowser tank via dual meter readings & signatures",
+      "type": "object",
+      "properties": {
+        "grnNo": { "type": "string", "maxLength": 40 },
+        "date": { "type": "string", "maxLength": 20 },
+        "supplierName": { "type": "string", "maxLength": 150 },
+        "receiverName": { "type": "string", "maxLength": 120 },
+        "firstMeterReading": { "type": "number" },
+        "secondMeterReading": { "type": "number" },
+        "litresAdded": { "type": "number" },
+        "tankLevelAfter": { "type": "number" },
+        "upd": { "type": "number" }
+      },
+      "required": ["grnNo", "date", "supplierName", "firstMeterReading", "secondMeterReading", "litresAdded"]
     }
   },
   "firestore": {
@@ -207,6 +276,26 @@
     "/dispatch_entries/{id}": {
       "schema": "dispatch_entry",
       "description": "3-stage Shift Dispatch entries with weights and linked casual/WH info"
+    },
+    "/historical_dispatch_uploads/{id}": {
+      "schema": "dispatch_entry",
+      "description": "Uploaded previous months background dispatch records for production continuation"
+    },
+    "/monthly_production_plans/{id}": {
+      "schema": "production_plan_item",
+      "description": "Monthly production planning job cards tracked against month dispatches"
+    },
+    "/diesel_tank_config/{id}": {
+      "schema": "diesel_tank_config",
+      "description": "Main factory diesel bowser tank fuel level and flow meter totals"
+    },
+    "/diesel_fuel_requests/{id}": {
+      "schema": "diesel_fuel_request",
+      "description": "Forklift fuel requests, HOD approvals with single-PDF unlock, and bowser meter dispensing logs"
+    },
+    "/diesel_grn_records/{id}": {
+      "schema": "diesel_grn_record",
+      "description": "Signed fuel GRN bulk deliveries into the factory bowser tank"
     },
     "/sop_production_logs/{id}": {
       "schema": "sop_production_log",

@@ -18,6 +18,7 @@ import {
   DEFAULT_MACHINES,
   DEFAULT_REPORTERS,
   DowntimeEntry,
+  normalizeMachineName,
 } from '../types';
 import { dtl, ymd } from './downtimeCalc';
 
@@ -130,17 +131,23 @@ const OBSOLETE_MACHINES = [
   'extrusion machine 8',
   'extrusion machine 9',
   'line one',
+  'line 1',
   'line two',
+  'line 2',
+  'line six',
   'line 6',
+  'polypipe',
+  'poly pipe',
 ];
 
 export function getActiveMachines(): string[] {
-  const gone = getStoredGoneMachines().map((x) => x.toLowerCase());
-  const custom = getStoredCustomMachines();
+  const gone = getStoredGoneMachines().map((x) => normalizeMachineName(x).toLowerCase());
+  const custom = getStoredCustomMachines().map((m) => normalizeMachineName(m));
   const list: string[] = [...DEFAULT_MACHINES];
 
   custom.forEach((m) => {
     if (
+      m &&
       !list.some((existing) => existing.toLowerCase() === m.toLowerCase()) &&
       !OBSOLETE_MACHINES.includes(m.toLowerCase())
     ) {
@@ -346,6 +353,14 @@ export function setCurrentReporterName(name: string) {
   }
 }
 
+export function normalizeDowntimeEntry(e: DowntimeEntry): DowntimeEntry {
+  return {
+    ...e,
+    m: normalizeMachineName(e.m),
+    upd: e.upd || new Date(e.start).getTime() || Date.now(),
+  };
+}
+
 // Local entries management
 export function getStoredEntries(): DowntimeEntry[] {
   try {
@@ -354,13 +369,7 @@ export function getStoredEntries(): DowntimeEntry[] {
       return getInitialDemoEntries();
     }
     const arr: DowntimeEntry[] = JSON.parse(raw);
-    arr.forEach((e) => {
-      const g = /^(Mixer|Extrusion|Polypipe|Punching) (\d)$/.exec(e.m);
-      if (g) e.m = `${g[1]} Machine ${g[2]}`;
-      else if (e.m === 'Palletizer') e.m = 'Palletizer Machine';
-      if (!e.upd) e.upd = new Date(e.start).getTime() || Date.now();
-    });
-    return arr;
+    return arr.map((e) => normalizeDowntimeEntry(e));
   } catch {
     return getInitialDemoEntries();
   }
@@ -368,7 +377,7 @@ export function getStoredEntries(): DowntimeEntry[] {
 
 export function saveStoredEntries(entries: DowntimeEntry[]) {
   try {
-    localStorage.setItem(LOG_KEY, JSON.stringify(entries));
+    localStorage.setItem(LOG_KEY, JSON.stringify(entries.map((e) => normalizeDowntimeEntry(e))));
   } catch (e) {
     console.warn('Failed saving entries to localStorage:', e);
   }
@@ -649,7 +658,7 @@ export async function pollFirebaseEntries(
       const remoteMap: Record<string, DowntimeEntry> = {};
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as DowntimeEntry;
-        remoteMap[docSnap.id] = { ...data, id: docSnap.id };
+        remoteMap[docSnap.id] = normalizeDowntimeEntry({ ...data, id: docSnap.id });
       });
 
       const currentLocal = getStoredEntries();
@@ -721,7 +730,7 @@ export function subscribeFirebaseEntries(
           const remoteMap: Record<string, DowntimeEntry> = {};
           snapshot.forEach((docSnap) => {
             const data = docSnap.data() as DowntimeEntry;
-            remoteMap[docSnap.id] = { ...data, id: docSnap.id };
+            remoteMap[docSnap.id] = normalizeDowntimeEntry({ ...data, id: docSnap.id });
           });
 
           const currentLocal = getStoredEntries();
@@ -814,6 +823,7 @@ export function subscribeFirebaseEntries(
 export async function syncEntryToFirebase(
   entry: DowntimeEntry
 ): Promise<{ ok: boolean; error?: string }> {
+  entry.m = normalizeMachineName(entry.m);
   const now = Date.now();
   entry.upd = now;
   entry.sy = 0;

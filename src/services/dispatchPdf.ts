@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { DispatchEntry } from '../types';
+import { DispatchEntry, normalizeMachineName } from '../types';
+import { normalizeDispatchStaffAreas } from './dispatchStore';
 import { saveFileBlob } from './downtimeCalc';
 import { drawLgplastPdfHeader, ensureLgplastLogoLoaded } from './reportPdf';
 
@@ -58,7 +59,7 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
   }
 
   const doc = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
     format: 'a4',
   });
@@ -72,23 +73,23 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
   drawLgplastPdfHeader(
     doc,
     'SHIFT STOCK MOVEMENT FORM',
-    `GOODS READY FOR DISPATCH & MOVEMENT RECORD  •  ${windowLabel.toUpperCase()}`,
+    `GOODS READY FOR DISPATCH  •  ${windowLabel.toUpperCase()}`,
     [
       `Date: ${date}`,
       `Shift: ${shift}`,
-      `Generated: ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      `Gen: ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
     ]
   );
 
   // Sub-header audit bar
   doc.setFillColor(241, 245, 249);
-  doc.rect(10, 33, pageWidth - 20, 9, 'F');
+  doc.rect(10, 33, pageWidth - 20, 9.5, 'F');
   doc.setDrawColor(203, 213, 225);
-  doc.rect(10, 33, pageWidth - 20, 9, 'S');
+  doc.rect(10, 33, pageWidth - 20, 9.5, 'S');
   doc.setTextColor(30, 41, 59);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text(`Prepared / Downloaded By: ${generatedByName} (${generatedByRole})`, 13, 38.7);
+  doc.setFontSize(7);
+  doc.text(`Prepared By: ${generatedByName} (${generatedByRole})`, 12.5, 38.8);
 
   const totalShiftQty = rows.reduce((acc, r) => acc + (r.recordedQty || 0), 0);
   const totalWhQty = rows.reduce(
@@ -106,16 +107,17 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
     return acc + kg;
   }, 0);
   doc.text(
-    `Trolleys: ${rows.length}   |   Shift Qty: ${totalShiftQty}   |   WH Confirmed: ${totalWhQty}   |   Total Wt: ${totalWeightKg.toFixed(1)} kg`,
-    pageWidth - 13,
-    38.7,
+    `Trolleys: ${rows.length} | Shift: ${totalShiftQty} | WH: ${totalWhQty} | Wt: ${totalWeightKg.toFixed(1)} kg`,
+    pageWidth - 12.5,
+    38.8,
     { align: 'right' }
   );
 
   // ===================================================
-  // MOVEMENT RECORDS TABLE
+  // MOVEMENT RECORDS TABLE (PORTRAIT 190MM)
   // ===================================================
-  const tableBody = rows.map((item, idx) => {
+  const tableBody = rows.map((rawItem, idx) => {
+    const { entry: item } = normalizeDispatchStaffAreas(rawItem);
     const hasWh = typeof item.whReceivedQty === 'number';
     const effectiveQty = hasWh ? item.whReceivedQty! : item.recordedQty;
     const weightKg =
@@ -130,36 +132,39 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
         ? 'CONFIRMED'
         : item.status === 'PENDING_HOD'
         ? 'WH CONFIRMED'
-        : 'READY / SENT TO WH';
+        : 'SENT TO WH';
     const sigSummary = [
-      item.shiftInChargeSignature ? 'SIC Signed' : 'SIC Pending',
-      item.whSignature ? 'WH Signed' : 'WH Pending',
-    ].join(' | ');
+      item.shiftInChargeSignature ? 'SIC Signed' : 'SIC Open',
+      item.whSignature ? 'WH Signed' : 'WH Open',
+    ].join(' / ');
+
+    const staffBlock = [
+      `Op: ${item.operatorName}`,
+      `Asst: ${item.isCasualAssistant ? `${item.assistantName} (Cas)` : item.assistantName}`,
+      item.casualAssistantName ? `Cas: ${item.casualAssistantName}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const detailLines = [statusText, sigSummary];
-    if (item.casualAssistantName) {
-      detailLines.push(`Casual: ${item.casualAssistantName}`);
-    }
     if (item.whQtyEditReason) {
       const prevTxt =
         typeof item.whPreviousReceivedQty === 'number'
           ? `${item.whPreviousReceivedQty}->${item.whReceivedQty}`
           : `->${item.whReceivedQty}`;
-      detailLines.push(`Qty Edit (${prevTxt}): ${item.whQtyEditReason}`);
+      detailLines.push(`Edit(${prevTxt}): ${item.whQtyEditReason}`);
     } else if (item.whNotes) {
-      detailLines.push(`WH Note: ${item.whNotes}`);
+      detailLines.push(`WH: ${item.whNotes}`);
     }
 
     return [
       String(idx + 1),
       item.trolleyNo,
-      item.machine,
+      normalizeMachineName(item.machine),
       item.product,
-      item.operatorName,
-      item.isCasualAssistant ? `${item.assistantName} (Casual)` : item.assistantName,
-      item.shiftInChargeName,
+      staffBlock,
       String(item.recordedQty),
-      hasWh ? String(item.whReceivedQty) : 'Pending',
+      hasWh ? String(item.whReceivedQty) : 'Pend',
       weightKg,
       variance === null ? '-' : variance > 0 ? `+${variance}` : String(variance),
       item.whPersonnelName || 'Pending WH',
@@ -173,8 +178,6 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
       '-',
       '-',
       `No dispatch entries found for ${date} (${shift} Shift).`,
-      '-',
-      '-',
       '-',
       '0',
       '0',
@@ -191,24 +194,22 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
     head: [
       [
         '#',
-        'Trolley No',
+        'Trolley',
         'Machine',
         'Product Dispatched',
-        'Operator',
-        'Assistant',
-        'Shift In Charge',
-        'Shift Qty',
-        'WH Qty',
-        'Qty (kg)',
+        'Floor Crew',
+        'Shift',
+        'WH',
+        'Kg',
         'Var',
-        'WH Personnel',
-        'Status, Qty Reason & Signs',
+        'Issued To',
+        'Status & Signs',
       ],
     ],
     body: tableBody,
     styles: {
-      fontSize: 7.0,
-      cellPadding: 1.9,
+      fontSize: 6.3,
+      cellPadding: 1.5,
       textColor: [15, 23, 42],
       lineColor: [203, 213, 225],
       lineWidth: 0.15,
@@ -218,41 +219,39 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
       fillColor: [15, 47, 102],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
-      fontSize: 7.0,
+      fontSize: 6.4,
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252],
     },
     columnStyles: {
       0: { cellWidth: 7, halign: 'center' },
-      1: { cellWidth: 18, fontStyle: 'bold' },
-      2: { cellWidth: 23 },
-      3: { cellWidth: 38 },
-      4: { cellWidth: 22 },
-      5: { cellWidth: 22 },
-      6: { cellWidth: 22 },
+      1: { cellWidth: 15, fontStyle: 'bold' },
+      2: { cellWidth: 20 },
+      3: { cellWidth: 34 },
+      4: { cellWidth: 28, fontSize: 5.9 },
+      5: { cellWidth: 12, halign: 'right', fontStyle: 'bold' },
+      6: { cellWidth: 12, halign: 'right', fontStyle: 'bold' },
       7: { cellWidth: 14, halign: 'right', fontStyle: 'bold' },
-      8: { cellWidth: 14, halign: 'right', fontStyle: 'bold' },
-      9: { cellWidth: 15, halign: 'right', fontStyle: 'bold' },
-      10: { cellWidth: 11, halign: 'right' },
-      11: { cellWidth: 22 },
-      12: { cellWidth: 49, fontSize: 6.4 },
+      8: { cellWidth: 10, halign: 'right' },
+      9: { cellWidth: 16 },
+      10: { cellWidth: 22, fontSize: 5.8 },
     },
   });
 
   // ===================================================
-  // SIGN-OFF & VERIFICATION FOOTER BLOCK
+  // SIGN-OFF & VERIFICATION FOOTER BLOCK (PORTRAIT 190MM)
   // ===================================================
   const finalY = (doc as any).lastAutoTable?.finalY || 120;
   let footerY = finalY + 8;
-  if (footerY + 34 > pageHeight - 10) {
+  if (footerY + 36 > pageHeight - 10) {
     doc.addPage();
     footerY = 16;
   }
 
   doc.setDrawColor(148, 163, 184);
   doc.setFillColor(248, 250, 252);
-  doc.roundedRect(10, footerY, pageWidth - 20, 30, 2, 2, 'FD');
+  doc.roundedRect(10, footerY, pageWidth - 20, 32, 2, 2, 'FD');
 
   const latestSicSigned = [...rows].reverse().find((r) => r.shiftInChargeSignature);
   const latestWhSigned = [...rows].reverse().find((r) => r.whSignature);
@@ -260,62 +259,62 @@ export async function generateShiftStockMovementPdf(options: GenerateShiftMoveme
 
   // Col 1: Shift In Charge Sign
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
+  doc.setFontSize(7.2);
   doc.setTextColor(15, 23, 42);
-  doc.text('1. SHIFT IN CHARGE HANDOVER', 14, footerY + 6);
+  doc.text('1. SHIFT IN CHARGE', 13, footerY + 6);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(6.8);
   doc.text(
-    `Name: ${latestSicSigned?.shiftInChargeName || '_______________________'}`,
-    14,
+    `Name: ${latestSicSigned?.shiftInChargeName || '__________________'}`,
+    13,
     footerY + 11.5
   );
   if (latestSicSigned?.shiftInChargeSignature) {
     try {
-      doc.addImage(latestSicSigned.shiftInChargeSignature, 'PNG', 14, footerY + 13, 36, 13);
+      doc.addImage(latestSicSigned.shiftInChargeSignature, 'PNG', 13, footerY + 13.5, 42, 13);
     } catch {}
   } else {
-    doc.text('Signature: _______________________', 14, footerY + 23);
+    doc.text('Sign: __________________', 13, footerY + 24);
   }
 
   // Col 2: WH Personnel Confirm Sign
-  const col2X = pageWidth / 3 + 5;
+  const col2X = 76;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text('2. WH PERSONNEL RECEIPT CONFIRMATION', col2X, footerY + 6);
+  doc.setFontSize(7.2);
+  doc.text('2. WH PERSONNEL RECEIPT', col2X, footerY + 6);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(6.8);
   doc.text(
-    `Name: ${latestWhSigned?.whPersonnelName || '_______________________'}`,
+    `Name: ${latestWhSigned?.whPersonnelName || '__________________'}`,
     col2X,
     footerY + 11.5
   );
   if (latestWhSigned?.whSignature) {
     try {
-      doc.addImage(latestWhSigned.whSignature, 'PNG', col2X, footerY + 13, 36, 13);
+      doc.addImage(latestWhSigned.whSignature, 'PNG', col2X, footerY + 13.5, 42, 13);
     } catch {}
   } else {
-    doc.text('Signature: _______________________', col2X, footerY + 23);
+    doc.text('Sign: __________________', col2X, footerY + 24);
   }
 
   // Col 3: Production HOD Sign
-  const col3X = (pageWidth / 3) * 2 + 5;
+  const col3X = 139;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text('3. PRODUCTION HOD VERIFICATION', col3X, footerY + 6);
+  doc.setFontSize(7.2);
+  doc.text('3. PRODUCTION HOD VERIFY', col3X, footerY + 6);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(6.8);
   doc.text(
-    `Name: ${latestHodSigned?.hodConfirmedByName || '_______________________'}`,
+    `Name: ${latestHodSigned?.hodConfirmedByName || '__________________'}`,
     col3X,
     footerY + 11.5
   );
   if (latestHodSigned?.hodSignature) {
     try {
-      doc.addImage(latestHodSigned.hodSignature, 'PNG', col3X, footerY + 13, 36, 13);
+      doc.addImage(latestHodSigned.hodSignature, 'PNG', col3X, footerY + 13.5, 42, 13);
     } catch {}
   } else {
-    doc.text('Signature: _______________________', col3X, footerY + 23);
+    doc.text('Sign: __________________', col3X, footerY + 24);
   }
 
   // Save PDF Blob

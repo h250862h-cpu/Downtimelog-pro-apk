@@ -25,6 +25,7 @@ import {
   saveLocalQCLogs,
   syncQCLogToFirebase,
 } from '../services/attendanceStore';
+import { normalizeMachineName } from '../types';
 import { QCInspectionRecord } from '../types/attendance';
 import { LgplastLogo } from './LgplastLogo';
 
@@ -182,7 +183,7 @@ Status: Hold`;
         id: `QC-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         date: parsedDate,
         shift: parsedShift,
-        machineOrLine: machineName,
+        machineOrLine: normalizeMachineName(machineName),
         product: productName,
         samplesTested: tested,
         passedCount: passed,
@@ -229,7 +230,7 @@ Status: Hold`;
       id: `QC-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       date,
       shift,
-      machineOrLine,
+      machineOrLine: normalizeMachineName(machineOrLine),
       product: product.trim() || 'Standard Part',
       samplesTested: Number(samplesTested) || 1,
       passedCount: Number(passedCount) || 0,
@@ -305,7 +306,7 @@ Status: Hold`;
       data.push([
         l.date,
         l.shift,
-        l.machineOrLine,
+        normalizeMachineName(l.machineOrLine),
         l.product,
         l.samplesTested,
         l.passedCount,

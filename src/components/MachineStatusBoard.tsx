@@ -51,6 +51,7 @@ import {
   INJECTION_MACHINES,
   MachineDepartment,
   MIXER_MACHINES,
+  normalizeMachineName,
   RECYCLING_MACHINES,
   SopProductionRecord,
   SopScrapRecord,
@@ -158,14 +159,15 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
   let changeoverCount = 0;
 
   const machineStates = orderedMachines.map((m) => {
-    const open = getOpenEntry(m, entries);
-    const dept = getMachineDepartment(m);
+    const canonicalName = normalizeMachineName(m);
+    const open = getOpenEntry(canonicalName, entries);
+    const dept = getMachineDepartment(canonicalName);
     const isUtility = dept === 'Utility';
-    const mKey = normalizeMachineMatchKey(m);
+    const mKey = normalizeMachineMatchKey(canonicalName);
 
     // Latest historical entries for this machine
     const machineEntries = entries
-      .filter((e) => e.m.toLowerCase() === m.toLowerCase() && !e.del)
+      .filter((e) => normalizeMachineName(e.m).toLowerCase() === canonicalName.toLowerCase() && !e.del)
       .sort((a, b) => (b.upd || 0) - (a.upd || 0));
 
     const latestEntry = open || machineEntries[0];
@@ -249,10 +251,10 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
     if (isNoPlan) noPlanningCount++;
     if (isPlanDone) planFinishCount++;
 
-    const todayStats = calculateDayStats(m, todayStr, entries);
+    const todayStats = calculateDayStats(canonicalName, todayStr, entries);
 
     return {
-      name: m,
+      name: canonicalName,
       dept,
       isUtility,
       openEntry: open,
@@ -274,6 +276,23 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
     };
   });
 
+  // Dynamically rearrange machines: all RUNNING machines first, all OFF/stopped machines last.
+  // Inside each group, preserve factory section order (Extrusion -> Injection -> Mixer -> Recycling -> Utility) and name.
+  const deptOrderRank: Record<MachineDepartment, number> = {
+    Extrusion: 1,
+    Injection: 2,
+    Mixer: 3,
+    Recycling: 4,
+    Utility: 5,
+  };
+  const sortedMachineStates = [...machineStates].sort((a, b) => {
+    if (a.isOff !== b.isOff) return a.isOff ? 1 : -1;
+    if (deptOrderRank[a.dept] !== deptOrderRank[b.dept]) {
+      return deptOrderRank[a.dept] - deptOrderRank[b.dept];
+    }
+    return a.name.localeCompare(b.name);
+  });
+
   const runningCount = machines.length - offCount;
   const totalWaitingDispatchQty = machineStates.reduce((s, m) => s + m.waitingQty, 0);
   const totalWaitingDispatchWeight = r2(
@@ -283,37 +302,24 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
 
   const openQuickLogModal = (machineItem: (typeof machineStates)[number]) => {
     const latest = machineItem.latestEntry;
-    const prod = machineItem.latestProdLog;
-    const prodNewer = (prod?.upd || 0) > (latest?.upd || 0);
 
-    const detectedProduct = prodNewer
-      ? prod?.product || latest?.jcn || ''
-      : (latest?.jcn && latest.jcn !== 'JC-RUNNING' ? latest.jcn : prod?.product) || '';
+    // Machine Dashboard reads strictly from Machine Board entries (never altered by Production Logger)
+    const detectedProduct =
+      latest?.jcn && latest.jcn !== 'JC-RUNNING' ? latest.jcn : latest?.jcn || '';
 
     const inMaster = MASTER_JOB_CARDS.includes(detectedProduct);
     setQlProduct(inMaster ? detectedProduct : detectedProduct ? '__CUSTOM__' : MASTER_JOB_CARDS[0] || '');
     setQlCustomProduct(inMaster ? '' : detectedProduct);
-    setQlRunningWeight(
-      (prodNewer ? prod?.runningWeight : latest?.runningWeight) ||
-        latest?.runningWeight ||
-        prod?.runningWeight ||
-        ''
-    );
-    setQlRunningOutput(
-      (prodNewer ? prod?.outputPerHour : latest?.outputPerHour) ||
-        latest?.outputPerHour ||
-        prod?.outputPerHour ||
-        ''
-    );
+    setQlRunningWeight(latest?.runningWeight || '');
+    setQlRunningOutput(latest?.outputPerHour || '');
 
-    const detectedOp = (prodNewer ? prod?.operator : latest?.operator) || latest?.operator || '';
+    const detectedOp = latest?.operator || '';
     const opMatch = OPERATOR_OPTIONS.find(
       (o) => o.value.toLowerCase() === detectedOp.toLowerCase()
     );
     setQlOperator(opMatch ? opMatch.value : OPERATOR_OPTIONS[0]?.value || '');
 
-    const detectedAst =
-      (prodNewer ? prod?.assistant : latest?.generalHand) || latest?.generalHand || '';
+    const detectedAst = latest?.generalHand || '';
     const astMatch = GENERAL_HAND_OPTIONS.find(
       (a) => a.value.toLowerCase() === detectedAst.toLowerCase()
     );
@@ -410,32 +416,34 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
         }
       }
 
-      // 2. Save to SOP Background Production Log (syncs Product, Weight, Output, Scrap & Wastage to Dispatch & Reports)
-      const parsedWeightNumeric = parseFloat(weightText.replace(/[^0-9.]/g, '')) || 0;
-      const effectiveProdKg = prodKgNum > 0 ? prodKgNum : parsedWeightNumeric;
-      await saveSopProductionToFirebase({
-        id: `PROD_M_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        date: todayStr,
-        shift: currentShift.shift,
-        dept,
-        machine: quickLogMachine,
-        operator: qlOperator,
-        assistant: resolvedAssistant,
-        product: resolvedProduct,
-        timeSlot: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        qty: prodQtyNum > 0 ? prodQtyNum : undefined,
-        unit: prodQtyNum > 0 ? 'PCS' : 'KG',
-        prodKg: effectiveProdKg,
-        scrapKg: scrapNum,
-        wastageCdKg: wastageNum,
-        outputPerHour: outputText || undefined,
-        runningWeight: weightText || undefined,
-        scrapReason: qlScrapReason.trim() || undefined,
-        reporter: currentUserName || currentUserEmail || qlOperator,
-        source: 'MANUAL',
-        loggedBy: currentUserEmail || currentUserName || 'Floor User',
-        upd: Date.now(),
-      });
+      // 2. Only write to SOP Production Log when Scrap, Wastage, or Production Qty/Kg is explicitly logged
+      if (scrapNum > 0 || wastageNum > 0 || prodQtyNum > 0 || prodKgNum > 0) {
+        const parsedWeightNumeric = parseFloat(weightText.replace(/[^0-9.]/g, '')) || 0;
+        const effectiveProdKg = prodKgNum > 0 ? prodKgNum : parsedWeightNumeric;
+        await saveSopProductionToFirebase({
+          id: `PROD_M_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          date: todayStr,
+          shift: currentShift.shift,
+          dept,
+          machine: quickLogMachine,
+          operator: qlOperator,
+          assistant: resolvedAssistant,
+          product: resolvedProduct,
+          timeSlot: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          qty: prodQtyNum > 0 ? prodQtyNum : undefined,
+          unit: prodQtyNum > 0 ? 'PCS' : 'KG',
+          prodKg: effectiveProdKg,
+          scrapKg: scrapNum,
+          wastageCdKg: wastageNum,
+          outputPerHour: outputText || undefined,
+          runningWeight: weightText || undefined,
+          scrapReason: qlScrapReason.trim() || undefined,
+          reporter: currentUserName || currentUserEmail || qlOperator,
+          source: 'MANUAL',
+          loggedBy: currentUserEmail || currentUserName || 'Floor User',
+          upd: Date.now(),
+        });
+      }
 
       // 3. If Assistant SOP Scrap > 0 & pop-up toggle enabled, send live handover to Recycling Team
       if (scrapNum > 0 && qlSendScrapPopup) {
@@ -481,8 +489,8 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
     }
   };
 
-  // Filter machines based on search, status and department
-  const filteredMachines = machineStates.filter((item) => {
+  // Filter machines based on search, status and department (sorted Running first, OFF last)
+  const filteredMachines = sortedMachineStates.filter((item) => {
     const matchesSearch = item.name.toLowerCase().includes(filterQuery.toLowerCase());
 
     const matchesDept = deptFilter === 'ALL' ? true : item.dept === deptFilter;
@@ -498,10 +506,18 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
     return matchesSearch && matchesDept && matchesStatus;
   });
 
+  const firstOffIndex = filteredMachines.findIndex((item) => item.isOff);
+  const runningFilteredCount = filteredMachines.filter((item) => !item.isOff).length;
+  const offFilteredCount = filteredMachines.filter((item) => item.isOff).length;
+
   // History modal entries for selected machine
   const activeMachineHistory = selectedHistoryMachine
     ? entries
-        .filter((e) => e.m.toLowerCase() === selectedHistoryMachine.toLowerCase() && !e.del)
+        .filter(
+          (e) =>
+            normalizeMachineName(e.m).toLowerCase() ===
+              normalizeMachineName(selectedHistoryMachine).toLowerCase() && !e.del
+        )
         .filter((e) => {
           if (!historySearch) return true;
           const q = historySearch.toLowerCase();
@@ -558,10 +574,10 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                   type="button"
                   onClick={onOpenWeightOutputSchedule}
                   className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 px-2 py-0.5 text-[11px] font-bold text-amber-200 transition"
-                  title="Open Scheduled Shift In Charge Running Weight & Output Update (09:45, 12:45, 15:45, 23:45, 03:45, 06:45)"
+                  title="Open Scheduled Shift In Charge Running Weight & Output Update (09:45, 12:45, 18:00, 23:45, 03:45, 06:45)"
                 >
                   <AlarmClock className="h-3 w-3 text-amber-300" />
-                  <span>Weight &amp; Output Check (09:45 · 12:45 · 15:45 · 23:45 · 03:45 · 06:45)</span>
+                  <span>Weight &amp; Output Check (09:45 · 12:45 · 18:00 · 23:45 · 03:45 · 06:45)</span>
                 </button>
               )}
               <span>•</span>
@@ -707,9 +723,13 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
         </button>
       </div>
 
-      {/* Grid of Machine Small Interfaces */}
+      {/* Grid of Machine Small Interfaces (Running Machines First -> OFF Machines Last) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-4" id="board">
-        {filteredMachines.map((item) => {
+        {filteredMachines.map((item, idx) => {
+          const showRunningBanner =
+            idx === 0 && runningFilteredCount > 0 && offFilteredCount > 0;
+          const showOffBanner =
+            idx === firstOffIndex && offFilteredCount > 0 && runningFilteredCount > 0;
           const isOff = item.isOff;
           const open = item.openEntry;
           const stats = item.stats;
@@ -770,44 +790,45 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
             statusLabel = 'OFF';
           }
 
-          // Operational fields resolved from newest of DowntimeEntry vs SOP Production Log
-          const prodLog = item.latestProdLog;
-          const prodIsNewer = (prodLog?.upd || 0) > (latest?.upd || 0);
-          const runningJobCard =
-            (prodIsNewer ? prodLog?.product : latest?.jcn && latest.jcn !== 'JC-RUNNING' ? latest.jcn : prodLog?.product) ||
-            open?.jcn ||
-            latest?.jcn ||
-            'Not Set';
+          // Machine Dashboard state resolved strictly from Machine Board entries
+          // (Production Logger updates NEVER overwrite Machine Dashboard values)
+          const runningJobCard = open?.jcn || latest?.jcn || 'Not Set';
           const runningPlan = open?.jcp || latest?.jcp || (isOff ? 'In progress' : 'On Target');
-          const runningOperator =
-            (prodIsNewer ? prodLog?.operator : latest?.operator) ||
-            open?.operator ||
-            latest?.operator ||
-            'Plant Operator';
-          const runningGeneralHand =
-            (prodIsNewer ? prodLog?.assistant : latest?.generalHand) ||
-            open?.generalHand ||
-            latest?.generalHand ||
-            'General Hand';
+          const runningOperator = open?.operator || latest?.operator || 'Plant Operator';
+          const runningGeneralHand = open?.generalHand || latest?.generalHand || 'General Hand';
           const runningOutput =
-            (prodIsNewer ? prodLog?.outputPerHour : latest?.outputPerHour) ||
-            open?.outputPerHour ||
-            latest?.outputPerHour ||
-            prodLog?.outputPerHour ||
-            (isUtility ? 'Normal' : '150 kg/hr');
+            open?.outputPerHour || latest?.outputPerHour || (isUtility ? 'Normal' : '150 kg/hr');
           const runningWeight =
-            (prodIsNewer ? prodLog?.runningWeight : latest?.runningWeight) ||
-            open?.runningWeight ||
-            latest?.runningWeight ||
-            prodLog?.runningWeight ||
-            (isUtility ? '-' : '650 kg');
+            open?.runningWeight || latest?.runningWeight || (isUtility ? '-' : '650 kg');
           const shiftText = open?.shift || latest?.shift || currentShift.label;
 
           return (
-            <div
-              key={item.name}
-              className={`flex flex-col justify-between rounded-2xl border p-4 transition-all duration-200 hover:shadow-lg ${borderAccentClass}`}
-            >
+            <React.Fragment key={item.name}>
+              {showRunningBanner && (
+                <div className="col-span-full flex items-center justify-between rounded-xl border border-emerald-500/30 bg-emerald-950/25 px-3.5 py-2 text-xs font-black uppercase tracking-wider text-emerald-300">
+                  <span className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                    Running Machines ({runningFilteredCount})
+                  </span>
+                  <span className="text-[10px] font-semibold text-emerald-300/80 normal-case">
+                    Active units shown first • Auto-reorders when machine status changes
+                  </span>
+                </div>
+              )}
+              {showOffBanner && (
+                <div className="col-span-full mt-2 flex items-center justify-between rounded-xl border border-rose-500/35 bg-rose-950/25 px-3.5 py-2 text-xs font-black uppercase tracking-wider text-rose-300">
+                  <span className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-rose-400 animate-pulse" />
+                    Off / Stopped Machines ({offFilteredCount})
+                  </span>
+                  <span className="text-[10px] font-semibold text-rose-200/80 normal-case">
+                    Moves up to Running automatically once switched ON
+                  </span>
+                </div>
+              )}
+              <div
+                className={`flex flex-col justify-between rounded-2xl border p-4 transition-all duration-200 hover:shadow-lg ${borderAccentClass}`}
+              >
               <div>
                 {/* Header Line */}
                 <div className="flex items-start justify-between gap-2 mb-2.5">
@@ -919,8 +940,9 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                   </div>
                 )}
 
-                {/* Small Interface Floor Data Grid */}
+                {/* Small Interface Floor Data Grid — Ordered by Floor Priority */}
                 <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-950/80 p-2.5 border border-slate-800 text-xs text-slate-300 mb-2.5">
+                  {/* Priority 1: Running Product, Output & Weight */}
                   <div className="col-span-2">
                     <span className="text-[10px] uppercase font-bold text-slate-500 block">Running Product</span>
                     <span className="font-mono font-bold text-amber-300 text-[11px] truncate block" title={runningJobCard}>
@@ -931,6 +953,56 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                     </span>
                   </div>
 
+                  <div className="pt-1 border-t border-slate-800/80">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Running Output</span>
+                    <b className="text-emerald-400 font-mono text-xs">{runningOutput}</b>
+                  </div>
+
+                  <div className="pt-1 border-t border-slate-800/80">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Running Weight</span>
+                    <b className="text-white font-mono text-xs">{runningWeight}</b>
+                  </div>
+
+                  {/* Priority 2: Stock Waiting Dispatch */}
+                  {!isUtility && (
+                    <div
+                      className={`col-span-2 mt-0.5 rounded-lg border px-2 py-1.5 flex items-center justify-between gap-2 ${
+                        item.waitingDispatches.length > 0
+                          ? 'border-sky-500/40 bg-sky-950/35 text-sky-200'
+                          : 'border-slate-800/90 bg-slate-900/60 text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Truck className={`h-3.5 w-3.5 shrink-0 ${item.waitingDispatches.length > 0 ? 'text-sky-400' : 'text-slate-500'}`} />
+                        <div className="min-w-0">
+                          <span className="text-[9px] uppercase font-black tracking-wider block text-slate-400">
+                            Stock Waiting Dispatch
+                          </span>
+                          <span className="text-[11px] font-black truncate block">
+                            {item.waitingDispatches.length > 0
+                              ? `${item.waitingQty.toLocaleString()} pcs${item.waitingWeightKg > 0 ? ` (${item.waitingWeightKg} kg)` : ''}`
+                              : '0 waiting'}
+                          </span>
+                        </div>
+                      </div>
+                      {item.waitingDispatches.length > 0 && (
+                        <div className="text-right shrink-0 text-[9px] font-bold space-y-0.5">
+                          {item.waitingWhCount > 0 && (
+                            <span className="block rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-300 border border-amber-500/30">
+                              {item.waitingWhCount} WH Wait
+                            </span>
+                          )}
+                          {item.waitingHodCount > 0 && (
+                            <span className="block rounded bg-sky-500/20 px-1.5 py-0.5 text-sky-300 border border-sky-500/30">
+                              {item.waitingHodCount} HOD Wait
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Priority 3: Operator & Assistant Crew */}
                   <div className="pt-1 border-t border-slate-800/80">
                     <span className="text-[10px] uppercase font-bold text-slate-500 block">Operator</span>
                     <span className="font-semibold text-slate-200 text-[11px] truncate block">
@@ -945,74 +1017,25 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                     </span>
                   </div>
 
-                  <div className="pt-1 border-t border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Running Output</span>
-                    <b className="text-emerald-400 font-mono text-[11px]">{runningOutput}</b>
-                  </div>
-
-                  <div className="pt-1 border-t border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Running Weight</span>
-                    <b className="text-slate-100 font-mono text-[11px]">{runningWeight}</b>
-                  </div>
-
+                  {/* Priority 4: Assistant SOP Scrap & Wastage */}
                   {!isUtility && (
-                    <>
-                      {/* Dispatch Stock Waiting Live Strip */}
-                      <div
-                        className={`col-span-2 mt-0.5 rounded-lg border px-2 py-1.5 flex items-center justify-between gap-2 ${
-                          item.waitingDispatches.length > 0
-                            ? 'border-sky-500/40 bg-sky-950/35 text-sky-200'
-                            : 'border-slate-800/90 bg-slate-900/60 text-slate-400'
-                        }`}
-                      >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <Truck className={`h-3.5 w-3.5 shrink-0 ${item.waitingDispatches.length > 0 ? 'text-sky-400' : 'text-slate-500'}`} />
-                          <div className="min-w-0">
-                            <span className="text-[9px] uppercase font-black tracking-wider block text-slate-400">
-                              Stock Waiting Dispatch
-                            </span>
-                            <span className="text-[11px] font-black truncate block">
-                              {item.waitingDispatches.length > 0
-                                ? `${item.waitingQty.toLocaleString()} pcs${item.waitingWeightKg > 0 ? ` (${item.waitingWeightKg} kg)` : ''}`
-                                : '0 waiting'}
-                            </span>
-                          </div>
-                        </div>
-                        {item.waitingDispatches.length > 0 && (
-                          <div className="text-right shrink-0 text-[9px] font-bold space-y-0.5">
-                            {item.waitingWhCount > 0 && (
-                              <span className="block rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-300 border border-amber-500/30">
-                                {item.waitingWhCount} WH Wait
-                              </span>
-                            )}
-                            {item.waitingHodCount > 0 && (
-                              <span className="block rounded bg-sky-500/20 px-1.5 py-0.5 text-sky-300 border border-sky-500/30">
-                                {item.waitingHodCount} HOD Wait
-                              </span>
-                            )}
-                          </div>
+                    <div className="col-span-2 pt-1 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
+                      <div className="flex items-center gap-1">
+                        <Recycle className="h-3 w-3 text-amber-400 shrink-0" />
+                        <span className="text-[10px] uppercase font-bold text-slate-500">SOP Scrap:</span>
+                        <b className="text-amber-300 font-mono">{item.todayScrapKg} kg</b>
+                        {item.pendingRecycleCount > 0 && (
+                          <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300 border border-amber-500/30">
+                            {item.pendingRecycleCount} pending
+                          </span>
                         )}
                       </div>
-
-                      {/* Assistant SOP Scrap & Wastage Today */}
-                      <div className="col-span-2 pt-1 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
-                        <div className="flex items-center gap-1">
-                          <Recycle className="h-3 w-3 text-amber-400 shrink-0" />
-                          <span className="text-[10px] uppercase font-bold text-slate-500">SOP Scrap:</span>
-                          <b className="text-amber-300 font-mono">{item.todayScrapKg} kg</b>
-                          {item.pendingRecycleCount > 0 && (
-                            <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300 border border-amber-500/30">
-                              {item.pendingRecycleCount} pending
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Trash2 className="h-3 w-3 text-rose-400 shrink-0" />
-                          <span className="text-[10px] uppercase font-bold text-slate-500">Wastage:</span>
-                          <b className="text-rose-300 font-mono">{item.todayWastageKg} kg</b>
-                        </div>
+                      <div className="flex items-center gap-1">
+                        <Trash2 className="h-3 w-3 text-rose-400 shrink-0" />
+                        <span className="text-[10px] uppercase font-bold text-slate-500">Wastage:</span>
+                        <b className="text-rose-300 font-mono">{item.todayWastageKg} kg</b>
                       </div>
-                    </>
+                    </div>
                   )}
                 </div>
               </div>
@@ -1067,6 +1090,7 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                 </div>
               </div>
             </div>
+            </React.Fragment>
           );
         })}
       </div>

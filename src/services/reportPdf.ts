@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { DowntimeEntry } from '../types';
+import { DowntimeEntry, normalizeMachineName } from '../types';
 import {
   calculateDayStats,
   fmtT,
@@ -72,6 +72,7 @@ export function drawLgplastPdfHeader(
   metaRightLines: string[]
 ) {
   const pageWidth = doc.internal.pageSize.getWidth();
+  const isPortrait = pageWidth < 230;
 
   // LG PLAST Royal Cobalt Header Bar
   doc.setFillColor(15, 47, 102); // #0f2f66
@@ -81,9 +82,9 @@ export function drawLgplastPdfHeader(
   doc.rect(10, 31.2, pageWidth - 20, 1.1, 'F');
 
   // Crisp White LG PLAST Logo Box (Top Left)
-  const boxX = 12.5;
+  const boxX = 12;
   const boxY = 10;
-  const boxW = 36;
+  const boxW = isPortrait ? 30 : 36;
   const boxH = 19.5;
   doc.setFillColor(255, 255, 255);
   doc.roundedRect(boxX, boxY, boxW, boxH, 2, 2, 'F');
@@ -105,22 +106,23 @@ export function drawLgplastPdfHeader(
     drawFallbackVectorLogo(doc, boxX, boxY, boxW, boxH);
   }
 
-  // Center Report Title
+  // Center Report Title (bounded safely between Logo and Right Meta)
+  const centerX = isPortrait ? pageWidth / 2 - 2 : pageWidth / 2 + 6;
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14.5);
-  doc.text(title, pageWidth / 2 + 6, 18.5, { align: 'center' });
+  doc.setFontSize(isPortrait ? 11.2 : 14.5);
+  doc.text(title, centerX, 17.8, { align: 'center', maxWidth: isPortrait ? 105 : 170 });
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
+  doc.setFontSize(isPortrait ? 6.8 : 8);
   doc.setTextColor(186, 230, 253); // Sky-200
-  doc.text(subtitle, pageWidth / 2 + 6, 25.2, { align: 'center' });
+  doc.text(subtitle, centerX, 24.8, { align: 'center', maxWidth: isPortrait ? 108 : 175 });
 
   // Right Metadata Lines
-  doc.setFontSize(7.5);
+  doc.setFontSize(isPortrait ? 6.6 : 7.5);
   metaRightLines.slice(0, 3).forEach((line, idx) => {
     doc.setTextColor(idx === 2 ? 226 : 125, idx === 2 ? 232 : 211, idx === 2 ? 240 : 252);
-    doc.text(line, pageWidth - 13, 14.2 + idx * 5, { align: 'right' });
+    doc.text(line, pageWidth - 12, 14.2 + idx * 5, { align: 'right' });
   });
 }
 
@@ -148,7 +150,7 @@ function drawFallbackVectorLogo(
 }
 
 /**
- * Generates an official LG PLAST-branded PDF for the Plant Downtime & Running Hours Period Report
+ * Generates an official LG PLAST-branded PORTRAIT PDF for the Plant Downtime & Running Hours Period Report
  */
 export async function generateDowntimePeriodPdf(
   from: string,
@@ -159,18 +161,14 @@ export async function generateDowntimePeriodPdf(
 ) {
   await ensureLgplastLogoLoaded();
   const data = getSummaryRows(from, to, machines, entries);
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
 
   drawLgplastPdfHeader(
     doc,
-    'PLANT DOWNTIME & RUNNING HOURS REPORT',
+    'PLANT DOWNTIME & RUNNING HOURS',
     `PERIOD: ${from} TO ${to}  •  BASIS: 24 HRS/DAY`,
-    [
-      `From: ${from}`,
-      `To: ${to}`,
-      `Generated: ${fmtT(new Date())}`,
-    ]
+    [`From: ${from}`, `To: ${to}`, `Gen: ${fmtT(new Date())}`]
   );
 
   // KPI Sub-bar
@@ -180,17 +178,17 @@ export async function generateDowntimePeriodPdf(
   doc.rect(10, 33, pageWidth - 20, 9, 'S');
   doc.setTextColor(30, 41, 59);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text(`Approver / Supervisor: ${supervisorName || 'Plant Management'}`, 13, 38.7);
+  doc.setFontSize(7.2);
+  doc.text(`Supervisor: ${supervisorName || 'Plant Management'}`, 12.5, 38.7);
   doc.text(
-    `Total Run: ${data.totalRow[2]} hrs  |  Total Down: ${data.totalRow[3]} hrs  |  Availability: ${data.totalRow[7]}%`,
-    pageWidth - 13,
+    `Run: ${data.totalRow[2]}h  |  Down: ${data.totalRow[3]}h  |  Avail: ${data.totalRow[7]}%`,
+    pageWidth - 12.5,
     38.7,
     { align: 'right' }
   );
 
   const summaryBody = data.structured.map((r) => [
-    r.machine,
+    normalizeMachineName(r.machine),
     String(r.periodHrs),
     String(r.runHrs),
     String(r.downHrs),
@@ -221,21 +219,21 @@ export async function generateDowntimePeriodPdf(
     head: [
       [
         'Machine',
-        'Period Hrs',
-        'Hrs Running',
-        'Hrs OFF (Total)',
-        'Breakdown Hrs',
-        'Changeover Hrs',
-        'Other Stoppage Hrs',
-        'Availability %',
-        'JC Finished',
-        'JC Logged',
+        'Period',
+        'Run Hrs',
+        'OFF Hrs',
+        'B/Down',
+        'C/Over',
+        'Other',
+        'Avail %',
+        'JC Fin',
+        'JC Log',
       ],
     ],
     body: summaryBody,
     styles: {
-      fontSize: 7.5,
-      cellPadding: 2,
+      fontSize: 6.8,
+      cellPadding: 1.7,
       textColor: [15, 23, 42],
       lineColor: [203, 213, 225],
       lineWidth: 0.15,
@@ -244,9 +242,22 @@ export async function generateDowntimePeriodPdf(
       fillColor: [15, 47, 102],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
+      fontSize: 6.8,
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252],
+    },
+    columnStyles: {
+      0: { cellWidth: 42 },
+      1: { cellWidth: 16, halign: 'right' },
+      2: { cellWidth: 16, halign: 'right' },
+      3: { cellWidth: 16, halign: 'right' },
+      4: { cellWidth: 16, halign: 'right' },
+      5: { cellWidth: 16, halign: 'right' },
+      6: { cellWidth: 16, halign: 'right' },
+      7: { cellWidth: 18, halign: 'right' },
+      8: { cellWidth: 17, halign: 'center' },
+      9: { cellWidth: 17, halign: 'center' },
     },
     didParseCell: (hookData) => {
       if (hookData.row.index === summaryBody.length - 1) {
@@ -277,12 +288,12 @@ export async function generateDowntimePeriodPdf(
     autoTable(doc, {
       startY: 36,
       margin: { left: 10, right: 10 },
-      head: [['Machine', 'Category', 'Stopped', 'Running Again', 'Hrs Down', 'Reason', 'Reported By', 'Job Card']],
+      head: [['Machine', 'Category', 'Stopped', 'Running', 'Hrs', 'Reason', 'Reporter', 'JC']],
       body: rangeEntries.map((e) => {
         const sTime = toTimestamp(e.start);
         const eTime = e.end ? toTimestamp(e.end) : Date.now();
         return [
-          e.m,
+          normalizeMachineName(e.m),
           e.cat,
           fmtT(e.start),
           e.end ? fmtT(e.end) : 'Still OFF',
@@ -292,10 +303,17 @@ export async function generateDowntimePeriodPdf(
           e.jcn || '-',
         ];
       }),
-      styles: { fontSize: 7, cellPadding: 1.8, textColor: [15, 23, 42] },
+      styles: { fontSize: 6.4, cellPadding: 1.5, textColor: [15, 23, 42] },
       headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
       columnStyles: {
-        5: { cellWidth: 72 },
+        0: { cellWidth: 26 },
+        1: { cellWidth: 20 },
+        2: { cellWidth: 23 },
+        3: { cellWidth: 23 },
+        4: { cellWidth: 11, halign: 'right' },
+        5: { cellWidth: 46 },
+        6: { cellWidth: 23 },
+        7: { cellWidth: 18 },
       },
     });
   }
@@ -304,11 +322,11 @@ export async function generateDowntimePeriodPdf(
 }
 
 /**
- * Generates an official LGPLAST-branded PDF for Daily Machine Hours
+ * Generates an official LGPLAST-branded PORTRAIT PDF for Daily Machine Hours
  */
 export async function generateDailyHoursPdf(selectedDate: string, machines: string[], entries: DowntimeEntry[]) {
   await ensureLgplastLogoLoaded();
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
 
   let totalDown = 0;
@@ -334,7 +352,7 @@ export async function generateDailyHoursPdf(selectedDate: string, machines: stri
     totalJct += s.jct;
 
     return [
-      m,
+      normalizeMachineName(m),
       isOff ? 'OFF' : 'RUNNING',
       String(r2(s.down)),
       String(r2(s.run)),
@@ -359,7 +377,7 @@ export async function generateDailyHoursPdf(selectedDate: string, machines: stri
     doc,
     'DAILY MACHINE HOURS REPORT',
     `DATE: ${selectedDate}  •  PLANT AVAILABILITY: ${availPct}%`,
-    [`Date: ${selectedDate}`, `Machines: ${machines.length}`, `Generated: ${fmtT(new Date())}`]
+    [`Date: ${selectedDate}`, `Machines: ${machines.length}`, `Gen: ${fmtT(new Date())}`]
   );
 
   doc.setFillColor(241, 245, 249);
@@ -368,11 +386,11 @@ export async function generateDailyHoursPdf(selectedDate: string, machines: stri
   doc.rect(10, 33, pageWidth - 20, 9, 'S');
   doc.setTextColor(30, 41, 59);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text(`Running: ${runningMachines} | Stopped: ${offMachines}`, 13, 38.7);
+  doc.setFontSize(7.3);
+  doc.text(`Running: ${runningMachines} | Stopped: ${offMachines}`, 12.5, 38.7);
   doc.text(
-    `Run Hrs: ${r2(totalRun)}  |  Down Hrs: ${r2(totalDown)}  |  Availability: ${availPct}%`,
-    pageWidth - 13,
+    `Run: ${r2(totalRun)}h  |  Down: ${r2(totalDown)}h  |  Avail: ${availPct}%`,
+    pageWidth - 12.5,
     38.7,
     { align: 'right' }
   );
@@ -380,11 +398,20 @@ export async function generateDailyHoursPdf(selectedDate: string, machines: stri
   autoTable(doc, {
     startY: 45,
     margin: { left: 10, right: 10 },
-    head: [['Machine', 'Status', 'Hrs Down', 'Hrs Running', 'Breakdown Hrs', 'Changeover Hrs', 'Job Cards Finished']],
+    head: [['Machine', 'Status', 'Down Hrs', 'Run Hrs', 'B/Down', 'C/Over', 'Job Cards']],
     body: tableRows,
-    styles: { fontSize: 8, cellPadding: 2.2, textColor: [15, 23, 42] },
+    styles: { fontSize: 7.4, cellPadding: 2, textColor: [15, 23, 42] },
     headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { cellWidth: 46 },
+      1: { cellWidth: 28 },
+      2: { cellWidth: 22, halign: 'right' },
+      3: { cellWidth: 22, halign: 'right' },
+      4: { cellWidth: 22, halign: 'right' },
+      5: { cellWidth: 22, halign: 'right' },
+      6: { cellWidth: 28, halign: 'center' },
+    },
     didParseCell: (hookData) => {
       if (hookData.row.index === tableRows.length - 1) {
         hookData.cell.styles.fontStyle = 'bold';
@@ -395,3 +422,272 @@ export async function generateDailyHoursPdf(selectedDate: string, machines: stri
 
   saveFileBlob(`LGPLAST_Daily_Hours_${selectedDate}.pdf`, doc.output('blob'));
 }
+
+/**
+ * Generates Portrait A4 Unified Period Production Report PDF with Official LG PLAST Logo
+ */
+export async function generatePeriodProductionReportPdf(
+  report: {
+    fromDate: string;
+    toDate: string;
+    totals: {
+      totalPcs: number;
+      totalKg: number;
+      totalScrapKg: number;
+      totalWastageKg: number;
+      totalProdHrs: number;
+      totalDownHrs: number;
+    };
+    productRows: Array<{
+      product: string;
+      prodPcs: number;
+      prodKg: number;
+      scrapKg: number;
+      wastageKg: number;
+    }>;
+    machineRows: Array<{
+      machine: string;
+      prodPcs: number;
+      prodKg: number;
+      scrapKg: number;
+      wastageKg: number;
+      prodHrs: number;
+      downHrs: number;
+    }>;
+    shiftProductionRows: Array<{
+      date: string;
+      shift: string;
+      machine: string;
+      product: string;
+      qty?: number;
+      unit?: string;
+      prodKg: number;
+      scrapKg: number;
+      wastageCdKg: number;
+      operator: string;
+    }>;
+    qcRows: Array<{
+      date: string;
+      shift: string;
+      time?: string;
+      machine: string;
+      product: string;
+      pph?: number | string;
+      weightKg?: number | string;
+      dropBend: string;
+      fitting: string;
+      color: string;
+    }>;
+  },
+  preparedBy: string
+) {
+  await ensureLgplastLogoLoaded();
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  drawLgplastPdfHeader(
+    doc,
+    'UNIFIED PERIOD PRODUCTION REPORT',
+    `SUMIF PRODUCTION, SCRAP, MACHINE HOURS & QC  •  ${report.fromDate} TO ${report.toDate}`,
+    [`From: ${report.fromDate}`, `To: ${report.toDate}`, `By: ${preparedBy}`]
+  );
+
+  // KPI Bar
+  doc.setFillColor(241, 245, 249);
+  doc.rect(10, 33, pageWidth - 20, 10, 'F');
+  doc.setDrawColor(203, 213, 225);
+  doc.rect(10, 33, pageWidth - 20, 10, 'S');
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.0);
+  doc.text(
+    `Prod Pcs: ${report.totals.totalPcs.toLocaleString()}   |   Weight: ${report.totals.totalKg.toLocaleString()} kg   |   Scrap: ${report.totals.totalScrapKg.toLocaleString()} kg   |   Wastage: ${report.totals.totalWastageKg.toLocaleString()} kg`,
+    13,
+    37.2
+  );
+  doc.text(
+    `Total Prod Hrs: ${report.totals.totalProdHrs.toLocaleString()} h   |   Total Downtime Hrs: ${report.totals.totalDownHrs.toLocaleString()} h`,
+    13,
+    41.3
+  );
+
+  // Table 1: Product SUMIF
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 47, 102);
+  doc.text('1. PRODUCTION SUMMARY BY PRODUCT (SUMIF)', 10, 49);
+
+  const prodBody = report.productRows.map((p) => [
+    p.product,
+    String(p.prodPcs),
+    String(p.prodKg),
+    String(p.scrapKg),
+    String(p.wastageKg),
+  ]);
+  prodBody.push([
+    'TOTAL PRODUCTION',
+    String(report.totals.totalPcs),
+    String(report.totals.totalKg),
+    String(report.totals.totalScrapKg),
+    String(report.totals.totalWastageKg),
+  ]);
+
+  autoTable(doc, {
+    startY: 51,
+    margin: { left: 10, right: 10 },
+    head: [['Product Type', 'Prod. Pcs', 'Prod Kg', 'Scrap (kg)', 'Wastage (kg)']],
+    body: prodBody,
+    styles: { fontSize: 6.7, cellPadding: 1.6, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { cellWidth: 94 },
+      1: { cellWidth: 24, halign: 'right' },
+      2: { cellWidth: 26, halign: 'right' },
+      3: { cellWidth: 23, halign: 'right' },
+      4: { cellWidth: 23, halign: 'right' },
+    },
+    didParseCell: (hookData) => {
+      if (hookData.row.index === prodBody.length - 1) {
+        hookData.cell.styles.fontStyle = 'bold';
+        hookData.cell.styles.fillColor = [226, 232, 240];
+      }
+    },
+  });
+
+  // Table 2: Machine SUMIF + Run/Down Hours
+  let nextY = ((doc as any).lastAutoTable?.finalY || 120) + 7;
+  if (nextY > 235) {
+    doc.addPage();
+    nextY = 16;
+  }
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 47, 102);
+  doc.text('2. PRODUCTION & HOURS PER MACHINE (SUMIF + DOWNTIME LOG)', 10, nextY);
+
+  const machBody = report.machineRows.map((m) => [
+    normalizeMachineName(m.machine),
+    String(m.prodPcs),
+    String(m.prodKg),
+    String(m.scrapKg),
+    String(m.wastageKg),
+    String(m.prodHrs),
+    String(m.downHrs),
+  ]);
+  machBody.push([
+    'TOTAL PRODUCTION',
+    String(report.totals.totalPcs),
+    String(report.totals.totalKg),
+    String(report.totals.totalScrapKg),
+    String(report.totals.totalWastageKg),
+    String(report.totals.totalProdHrs),
+    String(report.totals.totalDownHrs),
+  ]);
+
+  autoTable(doc, {
+    startY: nextY + 2,
+    margin: { left: 10, right: 10 },
+    head: [['Machine', 'Prod Pcs', 'Weight (kg)', 'Scrap', 'Wastage', 'Prod Hrs', 'Down Hrs']],
+    body: machBody,
+    styles: { fontSize: 6.7, cellPadding: 1.6, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { cellWidth: 52 },
+      1: { cellWidth: 22, halign: 'right' },
+      2: { cellWidth: 26, halign: 'right' },
+      3: { cellWidth: 22, halign: 'right' },
+      4: { cellWidth: 22, halign: 'right' },
+      5: { cellWidth: 23, halign: 'right' },
+      6: { cellWidth: 23, halign: 'right' },
+    },
+    didParseCell: (hookData) => {
+      if (hookData.row.index === machBody.length - 1) {
+        hookData.cell.styles.fontStyle = 'bold';
+        hookData.cell.styles.fillColor = [226, 232, 240];
+      }
+    },
+  });
+
+  // Table 3 & 4 on fresh Portrait Page(s) if present
+  if (report.shiftProductionRows.length > 0) {
+    doc.addPage();
+    drawLgplastPdfHeader(
+      doc,
+      'PRODUCTION PER SHIFT (LOGGER)',
+      `${report.fromDate} TO ${report.toDate}  •  RECORDS: ${report.shiftProductionRows.length}`,
+      [`Period: ${report.fromDate}`, `To: ${report.toDate}`, `Rows: ${report.shiftProductionRows.length}`]
+    );
+    autoTable(doc, {
+      startY: 36,
+      margin: { left: 10, right: 10 },
+      head: [['Date', 'Shift', 'Machine', 'Product', 'Qty', 'Scrap', 'Cut Dust', 'Operator']],
+      body: report.shiftProductionRows.map((r) => [
+        r.date,
+        r.shift,
+        normalizeMachineName(r.machine),
+        r.product,
+        `${r.qty ?? r.prodKg} ${r.unit || 'kg'}`,
+        String(r.scrapKg),
+        String(r.wastageCdKg),
+        r.operator,
+      ]),
+      styles: { fontSize: 6.4, cellPadding: 1.5, textColor: [15, 23, 42] },
+      headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+      columnStyles: {
+        0: { cellWidth: 20 },
+        1: { cellWidth: 13 },
+        2: { cellWidth: 28 },
+        3: { cellWidth: 42 },
+        4: { cellWidth: 24, halign: 'right' },
+        5: { cellWidth: 16, halign: 'right' },
+        6: { cellWidth: 17, halign: 'right' },
+        7: { cellWidth: 30 },
+      },
+    });
+  }
+
+  if (report.qcRows.length > 0) {
+    doc.addPage();
+    drawLgplastPdfHeader(
+      doc,
+      'QC INSPECTION REPORT (PERIOD)',
+      `${report.fromDate} TO ${report.toDate}  •  CHECKS: ${report.qcRows.length}`,
+      [`Period: ${report.fromDate}`, `To: ${report.toDate}`, `Checks: ${report.qcRows.length}`]
+    );
+    autoTable(doc, {
+      startY: 36,
+      margin: { left: 10, right: 10 },
+      head: [['Date', 'Shift', 'Time', 'Machine', 'Product', 'PPH', 'Wt', 'Drop', 'Fit', 'Col']],
+      body: report.qcRows.map((q) => [
+        q.date,
+        q.shift,
+        q.time || '-',
+        normalizeMachineName(q.machine),
+        q.product,
+        String(q.pph ?? '-'),
+        String(q.weightKg ?? '-'),
+        q.dropBend,
+        q.fitting,
+        q.color,
+      ]),
+      styles: { fontSize: 6.4, cellPadding: 1.5, textColor: [15, 23, 42] },
+      headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+      columnStyles: {
+        0: { cellWidth: 20 },
+        1: { cellWidth: 12 },
+        2: { cellWidth: 13 },
+        3: { cellWidth: 28 },
+        4: { cellWidth: 45 },
+        5: { cellWidth: 14, halign: 'right' },
+        6: { cellWidth: 14, halign: 'right' },
+        7: { cellWidth: 15, halign: 'center' },
+        8: { cellWidth: 15, halign: 'center' },
+        9: { cellWidth: 14, halign: 'center' },
+      },
+    });
+  }
+
+  saveFileBlob(`LGPLAST_Production_Report_${report.fromDate}_to_${report.toDate}.pdf`, doc.output('blob'));
+}
+

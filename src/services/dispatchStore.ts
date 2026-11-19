@@ -7,9 +7,124 @@ import {
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { db, ensureFirebaseAuth } from '../firebase';
-import { DispatchEntry, SopProductionRecord } from '../types';
+import { DispatchEntry, normalizeMachineName, SopProductionRecord } from '../types';
+import { FACTORY_STAFF_ROSTER } from '../types/factoryStaff';
 import { saveFileBlob, ymd } from './downtimeCalc';
 import { getLinkedScrapAndWastageForDispatch } from './sopStore';
+
+/**
+ * Matches a typed/saved name against the official Factory Staff Roster.
+ * Supports exact case-insensitive match or unambiguous prefix/full-token match (min 4 chars).
+ */
+export function matchFactoryRosterStaff(rawName?: string) {
+  const clean = (rawName || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!clean || clean === '—' || clean === '-') return null;
+
+  const exact = FACTORY_STAFF_ROSTER.find(
+    (s) => s.name.trim().toLowerCase().replace(/\s+/g, ' ') === clean
+  );
+  if (exact) return exact;
+
+  if (clean.length >= 4) {
+    const tokenMatches = FACTORY_STAFF_ROSTER.filter((s) => {
+      const full = s.name.trim().toLowerCase().replace(/\s+/g, ' ');
+      const firstWord = full.split(' ')[0];
+      return full.startsWith(clean) || (firstWord.length >= 4 && firstWord === clean);
+    });
+    if (tokenMatches.length === 1) return tokenMatches[0];
+  }
+  return null;
+}
+
+/**
+ * If an Operator or Assistant from the permanent factory staff list was mistakenly
+ * entered as Casual Help (`isCasualAssistant` or `casualAssistantName`), returns them
+ * cleanly to their proper area (Operator or Assistant) and clears the Casual tag.
+ */
+export function normalizeDispatchStaffAreas(entry: DispatchEntry): {
+  entry: DispatchEntry;
+  corrected: boolean;
+} {
+  let operatorName = (entry.operatorName || '').trim();
+  let assistantName = (entry.assistantName || '').trim();
+  let isCasualAssistant = Boolean(entry.isCasualAssistant);
+  let casualAssistantName = (entry.casualAssistantName || '').trim();
+  let corrected = false;
+
+  const inspectCandidate = (rawName: string) => {
+    const matched = matchFactoryRosterStaff(rawName);
+    if (!matched) return null;
+    const des = matched.designation.toLowerCase();
+    const isOperator = des.includes('operator');
+    const isAssistant = des.includes('assistant');
+    return { matched, isOperator, isAssistant };
+  };
+
+  // 1. Check casualAssistantName field first
+  if (casualAssistantName) {
+    const res = inspectCandidate(casualAssistantName);
+    if (res) {
+      corrected = true;
+      if (res.isOperator) {
+        if (
+          !operatorName ||
+          operatorName.toLowerCase() === 'plant operator' ||
+          operatorName.toLowerCase() === res.matched.name.toLowerCase()
+        ) {
+          operatorName = res.matched.name;
+        } else if (!operatorName.toLowerCase().includes(res.matched.name.toLowerCase())) {
+          operatorName = `${operatorName} / ${res.matched.name}`;
+        }
+        if (
+          isCasualAssistant &&
+          assistantName.toLowerCase().replace(/\s+/g, ' ') ===
+            casualAssistantName.toLowerCase().replace(/\s+/g, ' ')
+        ) {
+          assistantName = '—';
+        }
+      } else {
+        assistantName = res.matched.name;
+      }
+      casualAssistantName = '';
+      isCasualAssistant = false;
+    }
+  }
+
+  // 2. Check assistantName if marked as Casual or if an Operator was placed in Assistant
+  if (assistantName && (isCasualAssistant || inspectCandidate(assistantName)?.isOperator)) {
+    const res = inspectCandidate(assistantName);
+    if (res) {
+      corrected = true;
+      if (res.isOperator) {
+        if (
+          !operatorName ||
+          operatorName.toLowerCase() === 'plant operator' ||
+          operatorName.toLowerCase() === res.matched.name.toLowerCase()
+        ) {
+          operatorName = res.matched.name;
+        } else if (!operatorName.toLowerCase().includes(res.matched.name.toLowerCase())) {
+          operatorName = `${operatorName} / ${res.matched.name}`;
+        }
+        assistantName = '—';
+      } else {
+        assistantName = res.matched.name;
+      }
+      isCasualAssistant = false;
+      casualAssistantName = '';
+    }
+  }
+
+  return {
+    corrected,
+    entry: {
+      ...entry,
+      operatorName,
+      assistantName,
+      isCasualAssistant,
+      casualAssistantName: casualAssistantName || undefined,
+    },
+  };
+}
 
 const DISPATCH_STORAGE_KEY = 'dt_dispatch_entries_v1';
 const DISPATCH_PENDING_KEY = 'dt_dispatch_pending_v1';
@@ -21,12 +136,20 @@ export function getLastDispatchSyncError(): string | null {
   return lastDispatchSyncError;
 }
 
+export function normalizeDispatchEntry(entry: DispatchEntry): DispatchEntry {
+  const { entry: areaNormalized } = normalizeDispatchStaffAreas(entry);
+  return {
+    ...areaNormalized,
+    machine: normalizeMachineName(areaNormalized.machine),
+  };
+}
+
 export function getStoredDispatches(): DispatchEntry[] {
   try {
     const raw = localStorage.getItem(DISPATCH_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeDispatchEntry) : [];
   } catch {
     return [];
   }
@@ -79,13 +202,14 @@ function sanitizeDispatchForFirestore<T extends Record<string, any>>(obj: T): T 
 function mergeDispatches(local: DispatchEntry[], remote: DispatchEntry[]): DispatchEntry[] {
   const map: Record<string, DispatchEntry> = {};
   local.forEach((e) => {
-    if (e && e.id) map[e.id] = e;
+    if (e && e.id) map[e.id] = normalizeDispatchEntry(e);
   });
   remote.forEach((r) => {
     if (!r || !r.id) return;
-    const existing = map[r.id];
-    if (!existing || (r.upd || 0) >= (existing.upd || 0)) {
-      map[r.id] = r;
+    const normR = normalizeDispatchEntry(r);
+    const existing = map[normR.id];
+    if (!existing || (normR.upd || 0) >= (existing.upd || 0)) {
+      map[normR.id] = normR;
     }
   });
   return Object.values(map).sort((a, b) => (b.upd || 0) - (a.upd || 0));
@@ -94,8 +218,9 @@ function mergeDispatches(local: DispatchEntry[], remote: DispatchEntry[]): Dispa
 export async function saveDispatchEntryToFirebase(
   entry: DispatchEntry
 ): Promise<{ ok: boolean; error?: string }> {
+  const normEntry = normalizeDispatchEntry(entry);
   const updatedEntry: DispatchEntry = {
-    ...entry,
+    ...normEntry,
     upd: Date.now(),
   };
 
@@ -249,7 +374,8 @@ export function exportDispatchExcelWorkbook(
     .filter((e) => e.date >= fromDate && e.date <= toDate)
     .sort((a, b) => (b.date + b.shiftSubmittedAt).localeCompare(a.date + a.shiftSubmittedAt));
 
-  const formatStandardRow = (e: DispatchEntry) => {
+  const formatStandardRow = (rawEntry: DispatchEntry) => {
+    const { entry: e } = normalizeDispatchStaffAreas(rawEntry);
     const effectiveQty =
       typeof e.whReceivedQty === 'number' ? e.whReceivedQty : e.recordedQty;
     const totalKg =
@@ -271,17 +397,18 @@ export function exportDispatchExcelWorkbook(
       Assistant: e.assistantName,
       Product: e.product,
       Process: 'Dispatch',
-      Machine: e.machine,
+      Machine: normalizeMachineName(e.machine),
       Qty: effectiveQty,
       'Qty (kg)': totalKg,
-      'Scrap (kg)': linked.matchedCount > 0 ? linked.scrapKg : 0,
-      'Wastage (kg)': linked.matchedCount > 0 ? linked.wastageKg : 0,
+      'Scrap (kg)': linked.matchedCount > 0 ? linked.scrapKg : (e.backgroundScrapKg ?? 0),
+      'Wastage (kg)': linked.matchedCount > 0 ? linked.wastageKg : (e.backgroundWastageKg ?? 0),
       'Issued To': e.whPersonnelName || 'Pending WH',
       'Casual Assisted': casualName,
     };
   };
 
-  const formatAuditRow = (e: DispatchEntry) => {
+  const formatAuditRow = (rawEntry: DispatchEntry) => {
+    const { entry: e } = normalizeDispatchStaffAreas(rawEntry);
     const whQty = typeof e.whReceivedQty === 'number' ? e.whReceivedQty : '';
     const variance =
       typeof e.whReceivedQty === 'number' ? e.whReceivedQty - e.recordedQty : '';
@@ -299,15 +426,15 @@ export function exportDispatchExcelWorkbook(
       'Dispatch ID': e.id,
       Date: e.date,
       Shift: e.shift,
-      'Machine Name': e.machine,
+      'Machine Name': normalizeMachineName(e.machine),
       'Product Dispatched': e.product,
       Process: 'Dispatch',
       'Trolley No.': e.trolleyNo,
       'Shift Qty Recorded': e.recordedQty,
       'Unit Wt (kg)': typeof e.unitWeightKg === 'number' ? e.unitWeightKg : '',
       'Total Qty (kg)': totalKg,
-      'Linked Production Scrap (kg)': linked.scrapKg,
-      'Linked Production Wastage (kg)': linked.wastageKg,
+      'Linked Production Scrap (kg)': linked.matchedCount > 0 ? linked.scrapKg : (e.backgroundScrapKg ?? 0),
+      'Linked Production Wastage (kg)': linked.matchedCount > 0 ? linked.wastageKg : (e.backgroundWastageKg ?? 0),
       'Operator Name': e.operatorName,
       'Assistant / General Hand': e.isCasualAssistant
         ? `${e.assistantName} (Casual)`

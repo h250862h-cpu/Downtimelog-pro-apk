@@ -10,18 +10,17 @@ import {
   X,
 } from 'lucide-react';
 import { dtl, getCurrentShift, getOpenEntry, ymd } from '../services/downtimeCalc';
-import { normalizeMachineMatchKey, saveSopProductionToFirebase } from '../services/sopStore';
 import {
   DowntimeEntry,
   getMachineDepartment,
-  SopProductionRecord,
+  normalizeMachineName,
 } from '../types';
 
-// Exact scheduled check times requested for Shift In Charge
+// Exact scheduled check times requested for Shift In Charge (Day: 09:45, 12:45, 18:00 | Night: 23:45, 03:45, 06:45)
 export const WEIGHT_OUTPUT_SCHEDULE_SLOTS = [
   '09:45',
   '12:45',
-  '15:45',
+  '18:00',
   '23:45',
   '03:45',
   '06:45',
@@ -144,7 +143,6 @@ interface MachineRowDraft {
 interface ShiftWeightOutputPopupAlertProps {
   machines: string[];
   entries: DowntimeEntry[];
-  sopProductionLogs: SopProductionRecord[];
   isEligibleUser: boolean; // Shift In Charge (and optionally Admin/HOD if configured)
   hasBlockingPopup?: boolean;
   manualOpenSlot?: ActiveScheduleSlot | null;
@@ -158,7 +156,6 @@ interface ShiftWeightOutputPopupAlertProps {
 export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertProps> = ({
   machines,
   entries,
-  sopProductionLogs,
   isEligibleUser,
   hasBlockingPopup = false,
   manualOpenSlot = null,
@@ -178,7 +175,7 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  // Check clock every 15 seconds so pop-up fires right at 09:45, 12:45, 15:45, 23:45, 03:45, 06:45
+  // Check clock every 15 seconds so pop-up fires right at 09:45, 12:45, 18:00, 23:45, 03:45, 06:45
   useEffect(() => {
     const checkClock = () => setNow(new Date());
     const timer = setInterval(checkClock, 15000);
@@ -212,60 +209,26 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
     [machines]
   );
 
-  // Sync drafts cleanly whenever pop-up opens
+  // Sync drafts strictly from Machine Board entries (never altered by Production Logger updates)
   useEffect(() => {
     if (!activeSlot) return;
     const nextDrafts: Record<string, MachineRowDraft> = {};
     productionMachines.forEach((m) => {
-      const mKey = normalizeMachineMatchKey(m);
       const open = getOpenEntry(m, entries);
+      const normM = normalizeMachineName(m).toLowerCase();
       const machineEntries = entries
-        .filter((e) => e.m.toLowerCase() === m.toLowerCase() && !e.del)
+        .filter((e) => normalizeMachineName(e.m).toLowerCase() === normM && !e.del)
         .sort((a, b) => (b.upd || 0) - (a.upd || 0));
       const latest = open || machineEntries[0];
-
-      const latestProd = sopProductionLogs
-        .filter(
-          (p) =>
-            normalizeMachineMatchKey(p.machine) === mKey ||
-            p.machine.trim().toLowerCase() === m.trim().toLowerCase()
-        )
-        .sort((a, b) => (b.upd || 0) - (a.upd || 0))[0];
-
-      const prodNewer = (latestProd?.upd || 0) > (latest?.upd || 0);
-      const resolvedProduct =
-        (prodNewer
-          ? latestProd?.product
-          : latest?.jcn && latest.jcn !== 'JC-RUNNING'
-          ? latest.jcn
-          : latestProd?.product) ||
-        latest?.jcn ||
-        '';
-      const resolvedWeight =
-        (prodNewer ? latestProd?.runningWeight : latest?.runningWeight) ||
-        latest?.runningWeight ||
-        latestProd?.runningWeight ||
-        '';
-      const resolvedOutput =
-        (prodNewer ? latestProd?.outputPerHour : latest?.outputPerHour) ||
-        latest?.outputPerHour ||
-        latestProd?.outputPerHour ||
-        '';
 
       nextDrafts[m] = {
         machine: m,
         dept: getMachineDepartment(m),
-        product: resolvedProduct,
-        weight: resolvedWeight,
-        output: resolvedOutput,
-        operator:
-          (prodNewer ? latestProd?.operator : latest?.operator) ||
-          latest?.operator ||
-          '',
-        assistant:
-          (prodNewer ? latestProd?.assistant : latest?.generalHand) ||
-          latest?.generalHand ||
-          '',
+        product: latest?.jcn && latest.jcn !== 'JC-RUNNING' ? latest.jcn : latest?.jcn || '',
+        weight: latest?.runningWeight || '',
+        output: latest?.outputPerHour || '',
+        operator: latest?.operator || '',
+        assistant: latest?.generalHand || '',
         dirty: false,
       };
     });
@@ -333,12 +296,7 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
     try {
       const nowDate = new Date();
       const nowDtl = dtl(nowDate);
-      const todayStr = ymd(nowDate);
       const shiftInfo = getCurrentShift(nowDate);
-      const timeLabel = nowDate.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      });
 
       for (const row of dirtyRows) {
         const open = getOpenEntry(row.machine, entries);
@@ -378,28 +336,6 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
             upd: Date.now(),
           });
         }
-
-        const numericWeight = parseFloat(weightTrim.replace(/[^0-9.]/g, '')) || 0;
-        await saveSopProductionToFirebase({
-          id: `PROD_SIC_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          date: todayStr,
-          shift: shiftInfo.shift,
-          dept: row.dept,
-          machine: row.machine,
-          operator: row.operator || 'Plant Operator',
-          assistant: row.assistant || 'General Hand',
-          product: prodTrim,
-          timeSlot: activeSlot.slot || timeLabel,
-          prodKg: numericWeight,
-          scrapKg: 0,
-          wastageCdKg: 0,
-          outputPerHour: outputTrim || undefined,
-          runningWeight: weightTrim || undefined,
-          reporter: currentUserName || 'Shift In Charge',
-          source: 'MANUAL',
-          loggedBy: currentUserEmail || currentUserName || 'Shift In Charge',
-          upd: Date.now(),
-        });
       }
 
       markWeightSlotCompleted(activeSlot.slotKey);
@@ -438,7 +374,7 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 mt-0.5">
-                Daily Check Times: <b>09:45 · 12:45 · 15:45</b> (Day) &amp; <b>23:45 · 03:45 · 06:45</b> (Night). Enter updated running weight &amp; machine output below.
+                Daily Check Times: <b>09:45 · 12:45 · 18:00</b> (Day) &amp; <b>23:45 · 03:45 · 06:45</b> (Night). Enter updated running weight &amp; machine output below.
               </p>
             </div>
           </div>

@@ -23,7 +23,12 @@ import {
   X,
 } from 'lucide-react';
 import { getCurrentShift, ymd } from '../services/downtimeCalc';
-import { exportDispatchExcelWorkbook, saveDispatchEntryToFirebase } from '../services/dispatchStore';
+import {
+  exportDispatchExcelWorkbook,
+  normalizeDispatchStaffAreas,
+  saveDispatchEntryToFirebase,
+} from '../services/dispatchStore';
+import { computeMonthlyPlanProgress } from '../services/productionPlanStore';
 import { getLinkedScrapAndWastageForDispatch } from '../services/sopStore';
 import {
   DispatchShiftWindow,
@@ -31,7 +36,12 @@ import {
   getWindowDisplayLabel,
   getWindowShift,
 } from '../services/dispatchPdf';
-import { DispatchEntry, SopProductionRecord, UserPermissions } from '../types';
+import {
+  DispatchEntry,
+  ProductionPlanItem,
+  SopProductionRecord,
+  UserPermissions,
+} from '../types';
 import {
   GENERAL_HAND_OPTIONS,
   OPERATOR_OPTIONS,
@@ -173,6 +183,8 @@ const ReusableSignaturePad: React.FC<ReusableSignaturePadProps> = ({
 interface DispatchSystemViewProps {
   machines: string[];
   dispatchEntries: DispatchEntry[];
+  allDispatchesWithBackground?: DispatchEntry[];
+  monthlyPlans?: ProductionPlanItem[];
   sopProductionLogs?: SopProductionRecord[];
   permissions: UserPermissions;
   isAdmin?: boolean;
@@ -185,6 +197,8 @@ interface DispatchSystemViewProps {
 export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   machines,
   dispatchEntries,
+  allDispatchesWithBackground,
+  monthlyPlans = [],
   sopProductionLogs = [],
   permissions,
   isAdmin = false,
@@ -249,6 +263,16 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
     () => MASTER_JOB_CARDS.filter((p) => p.toLowerCase().includes(productSearch.toLowerCase())),
     [productSearch]
   );
+
+  const combinedDispatches = allDispatchesWithBackground || dispatchEntries;
+
+  const selectedProductPlanStatus = useMemo(() => {
+    const planMonth = (date || '').slice(0, 7);
+    if (!planMonth || !monthlyPlans.length || !product) return null;
+    const rows = computeMonthlyPlanProgress(monthlyPlans, combinedDispatches, planMonth);
+    const pNorm = product.trim().toUpperCase().replace(/\s+/g, ' ');
+    return rows.find((r) => r.product.trim().toUpperCase().replace(/\s+/g, ' ') === pNorm) || null;
+  }, [date, monthlyPlans, combinedDispatches, product]);
 
   // =====================================
   // STAGE 2: WH PERSONNEL FORM STATE (PER PENDING CARD)
@@ -329,9 +353,37 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   const [ledgerStatusFilter, setLedgerStatusFilter] = useState<'ALL' | 'CONFIRMED' | 'PENDING_HOD' | 'PENDING_WH'>('ALL');
   const [ledgerShiftFilter, setLedgerShiftFilter] = useState<'ALL' | 'Day' | 'Night'>('ALL');
   const [ledgerMachineFilter, setLedgerMachineFilter] = useState<string>('ALL');
+  const [ledgerIncludeArchive, setLedgerIncludeArchive] = useState<boolean>(true);
   const [ledgerSearch, setLedgerSearch] = useState<string>('');
   const [previewEntry, setPreviewEntry] = useState<DispatchEntry | null>(null);
   const [excelNotice, setExcelNotice] = useState<string | null>(null);
+  const [fixingRosterCasuals, setFixingRosterCasuals] = useState(false);
+
+  const misclassifiedCasualEntries = useMemo(
+    () => dispatchEntries.filter((e) => normalizeDispatchStaffAreas(e).corrected),
+    [dispatchEntries]
+  );
+
+  const handleBatchFixRosterCasuals = async () => {
+    if (misclassifiedCasualEntries.length === 0 || fixingRosterCasuals) return;
+    setFixingRosterCasuals(true);
+    setExcelNotice(null);
+    let updatedCount = 0;
+    try {
+      for (const raw of misclassifiedCasualEntries) {
+        const { entry: fixed, corrected } = normalizeDispatchStaffAreas(raw);
+        if (corrected) {
+          await saveDispatchEntryToFirebase({ ...fixed, upd: Date.now() });
+          updatedCount += 1;
+        }
+      }
+      setExcelNotice(
+        `Returned ${updatedCount} roster Operator/Assistant record(s) from Casual Help back to their proper area and synced to cloud.`
+      );
+    } finally {
+      setFixingRosterCasuals(false);
+    }
+  };
 
   const handleDispatchDatePreset = (
     preset: 'all' | 'today' | '7days' | '30days' | 'thisMonth' | 'lastMonth'
@@ -379,8 +431,10 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
     );
   }, [dispatchEntries, shiftLogSearch]);
 
+  const ledgerSource = ledgerIncludeArchive ? combinedDispatches : dispatchEntries;
+
   const ledgerEntries = useMemo(() => {
-    return dispatchEntries.filter((e) => {
+    return ledgerSource.filter((e) => {
       if (fromDate && e.date < fromDate) return false;
       if (toDate && e.date > toDate) return false;
       if (ledgerStatusFilter !== 'ALL' && e.status !== ledgerStatusFilter) return false;
@@ -401,7 +455,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
       return true;
     });
   }, [
-    dispatchEntries,
+    ledgerSource,
     fromDate,
     toDate,
     ledgerStatusFilter,
@@ -609,7 +663,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
 
     setSavingShift(true);
     try {
-      const entry: DispatchEntry = {
+      const rawEntry: DispatchEntry = {
         id: `DSP-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`,
         date,
         shift,
@@ -632,6 +686,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
         upd: Date.now(),
       };
 
+      const { entry, corrected } = normalizeDispatchStaffAreas(rawEntry);
       const res = await saveDispatchEntryToFirebase(entry);
       setTrolleyNo('');
       setRecordedQty('');
@@ -640,10 +695,14 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
       setShiftNotes('');
       setShiftSignature('');
       setCasualAssistantText('');
+      setIsCasualAssistant(false);
+      const autoMoveNote = corrected
+        ? ' (Factory roster Operator/Assistant automatically returned from Casual Help to their proper area.)'
+        : '';
       setShiftBanner({
         text: res.ok
-          ? `Dispatch ${entry.trolleyNo} (${entry.recordedQty} units • ${totalWtNum} kg) logged & Pop-up Message sent to WH Personnel!`
-          : `Saved locally (${entry.trolleyNo}); cloud retry queued (${res.error || 'offline'}).`,
+          ? `Dispatch ${entry.trolleyNo} (${entry.recordedQty} units • ${totalWtNum} kg) logged & Pop-up Message sent to WH Personnel!${autoMoveNote}`
+          : `Saved locally (${entry.trolleyNo}); cloud retry queued (${res.error || 'offline'}).${autoMoveNote}`,
         isError: false,
       });
     } finally {
@@ -1295,6 +1354,30 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                       </option>
                     ))}
                   </select>
+                  {selectedProductPlanStatus && (
+                    <div
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold ${
+                        selectedProductPlanStatus.isClosed
+                          ? 'border-rose-500 bg-rose-950/70 text-rose-200'
+                          : 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300'
+                      }`}
+                    >
+                      {selectedProductPlanStatus.isClosed ? (
+                        <span>
+                          JOB CARD CLOSED ({selectedProductPlanStatus.month}): Planned{' '}
+                          {selectedProductPlanStatus.plannedQty.toLocaleString()} pcs reached (
+                          {selectedProductPlanStatus.dispatchedQty.toLocaleString()} dispatched)
+                        </span>
+                      ) : (
+                        <span>
+                          Plan ({selectedProductPlanStatus.month}):{' '}
+                          {selectedProductPlanStatus.dispatchedQty.toLocaleString()} /{' '}
+                          {selectedProductPlanStatus.plannedQty.toLocaleString()} pcs • Remaining:{' '}
+                          {selectedProductPlanStatus.remainingQty.toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -2300,21 +2383,40 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                 </p>
               </div>
 
-              {isAdmin ? (
-                <button
-                  type="button"
-                  onClick={handleDownloadDispatchExcel}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-4 py-2.5 text-xs font-black text-white shadow-md transition"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>Download Dispatch Excel ({ledgerEntries.length})</span>
-                </button>
-              ) : (
-                <div className="flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-300">
-                  <Lock className="h-4 w-4" />
-                  <span>Excel Download Locked (Admin Only)</span>
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {(isAdmin || permissions.dispatchShiftEntry) &&
+                  misclassifiedCasualEntries.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleBatchFixRosterCasuals}
+                      disabled={fixingRosterCasuals}
+                      className="flex items-center justify-center gap-1.5 rounded-xl border border-amber-400/40 bg-amber-500/15 hover:bg-amber-500/25 px-3 py-2 text-xs font-black text-amber-200 transition disabled:opacity-60"
+                    >
+                      <UserCheck className="h-4 w-4" />
+                      <span>
+                        {fixingRosterCasuals
+                          ? 'Updating...'
+                          : `Fix Roster Staff Marked as Casual (${misclassifiedCasualEntries.length})`}
+                      </span>
+                    </button>
+                  )}
+
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={handleDownloadDispatchExcel}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-4 py-2.5 text-xs font-black text-white shadow-md transition"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span>Download Dispatch Excel ({ledgerEntries.length})</span>
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-300">
+                    <Lock className="h-4 w-4" />
+                    <span>Excel Download Locked (Admin Only)</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {excelNotice && (
@@ -2326,6 +2428,19 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
+                onClick={() => setLedgerIncludeArchive((v) => !v)}
+                className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${
+                  ledgerIncludeArchive
+                    ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200'
+                    : 'border-slate-700 bg-slate-950 text-slate-300'
+                }`}
+              >
+                {ledgerIncludeArchive
+                  ? `Continuation: Live + Archive (${combinedDispatches.length})`
+                  : `Live Only (${dispatchEntries.length})`}
+              </button>
+              <button
+                type="button"
                 onClick={() => handleDispatchDatePreset('all')}
                 className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${
                   !fromDate && !toDate
@@ -2333,7 +2448,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                     : 'border-slate-700 bg-slate-950 text-slate-300 hover:bg-slate-800'
                 }`}
               >
-                All Dispatches ({dispatchEntries.length})
+                All Filtered ({ledgerSource.length})
               </button>
               <button
                 type="button"
@@ -2494,7 +2609,8 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                       </td>
                     </tr>
                   ) : (
-                    ledgerEntries.map((item) => {
+                    ledgerEntries.map((rawItem) => {
+                      const item = normalizeDispatchStaffAreas(rawItem).entry;
                       const effectiveQty =
                         typeof item.whReceivedQty === 'number'
                           ? item.whReceivedQty
@@ -2540,10 +2656,14 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                             {weightKg}
                           </td>
                           <td className="px-2.5 py-2.5 text-right font-bold text-rose-300">
-                            {linked.matchedCount > 0 ? linked.scrapKg : 0}
+                            {linked.matchedCount > 0
+                              ? linked.scrapKg
+                              : item.backgroundScrapKg ?? 0}
                           </td>
                           <td className="px-2.5 py-2.5 text-right font-bold text-amber-200">
-                            {linked.matchedCount > 0 ? linked.wastageKg : 0}
+                            {linked.matchedCount > 0
+                              ? linked.wastageKg
+                              : item.backgroundWastageKg ?? 0}
                           </td>
                           <td className="px-2.5 py-2.5 whitespace-nowrap text-slate-200">
                             {item.whPersonnelName || 'Pending WH'}
@@ -2554,14 +2674,18 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                           <td className="px-2.5 py-2.5 whitespace-nowrap">
                             <span
                               className={`rounded-md px-2 py-0.5 text-[10px] font-black uppercase border ${
-                                item.status === 'CONFIRMED'
+                                item.isHistoricalBackground
+                                  ? 'border-slate-600 bg-slate-800 text-slate-300'
+                                  : item.status === 'CONFIRMED'
                                   ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
                                   : item.status === 'PENDING_HOD'
                                   ? 'border-blue-500/40 bg-blue-500/15 text-blue-300'
                                   : 'border-amber-500/40 bg-amber-500/15 text-amber-300'
                               }`}
                             >
-                              {item.status === 'CONFIRMED'
+                              {item.isHistoricalBackground
+                                ? 'ARCHIVE'
+                                : item.status === 'CONFIRMED'
                                 ? 'CONFIRMED'
                                 : item.status === 'PENDING_HOD'
                                 ? 'PENDING HOD'

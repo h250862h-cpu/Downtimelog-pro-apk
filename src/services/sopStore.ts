@@ -9,6 +9,7 @@ import * as XLSX from 'xlsx';
 import { db, ensureFirebaseAuth } from '../firebase';
 import {
   DispatchEntry,
+  normalizeMachineName,
   SopMixingReport,
   SopProductionRecord,
   SopQcRecord,
@@ -101,12 +102,18 @@ function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
   return clean as T;
 }
 
-function mergeRecords<T extends { id: string; upd?: number }>(local: T[], remote: T[]): T[] {
+function mergeRecords<T extends { id: string; upd?: number }>(
+  local: T[],
+  remote: T[],
+  normalizeFn?: (item: T) => T
+): T[] {
   const map: Record<string, T> = {};
-  local.forEach((item) => {
+  local.forEach((raw) => {
+    const item = normalizeFn ? normalizeFn(raw) : raw;
     if (item && item.id) map[item.id] = item;
   });
-  remote.forEach((item) => {
+  remote.forEach((raw) => {
+    const item = normalizeFn ? normalizeFn(raw) : raw;
     if (!item || !item.id) return;
     const existing = map[item.id];
     if (!existing || (item.upd || 0) >= (existing.upd || 0)) {
@@ -119,15 +126,17 @@ function mergeRecords<T extends { id: string; upd?: number }>(local: T[], remote
 function createCollectionStore<T extends { id: string; upd?: number; sy?: number }>(
   storageKey: string,
   pendingKey: string,
-  collectionName: string
+  collectionName: string,
+  normalizeFn?: (item: T) => T
 ) {
-  const getLocal = () => readLocalList<T>(storageKey);
+  const norm = (item: T): T => (normalizeFn ? normalizeFn(item) : item);
+  const getLocal = () => readLocalList<T>(storageKey).map(norm);
 
   const save = async (item: T): Promise<{ ok: boolean; error?: string }> => {
-    const updatedItem: T = {
+    const updatedItem: T = norm({
       ...item,
       upd: Date.now(),
-    };
+    });
 
     const local = getLocal();
     const idx = local.findIndex((x) => x.id === updatedItem.id);
@@ -182,9 +191,9 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
       const snap = await getDocs(collection(db, collectionName));
       const remote: T[] = [];
       snap.forEach((d) => {
-        remote.push(d.data() as T);
+        remote.push(norm(d.data() as T));
       });
-      const merged = mergeRecords(getLocal(), remote);
+      const merged = mergeRecords(getLocal(), remote, normalizeFn);
       writeLocalList(storageKey, merged);
       return merged;
     } catch {
@@ -207,9 +216,9 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
           (snapshot) => {
             const remote: T[] = [];
             snapshot.forEach((d) => {
-              remote.push(d.data() as T);
+              remote.push(norm(d.data() as T));
             });
-            const merged = mergeRecords(getLocal(), remote);
+            const merged = mergeRecords(getLocal(), remote, normalizeFn);
             writeLocalList(storageKey, merged);
             onUpdate(merged);
             flush().catch(() => {});
@@ -249,10 +258,23 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
   return { getLocal, save, flush, poll, subscribe };
 }
 
-const prodStore = createCollectionStore<SopProductionRecord>(PROD_KEY, PROD_PENDING_KEY, PROD_COLLECTION);
-const qcStore = createCollectionStore<SopQcRecord>(QC_KEY, QC_PENDING_KEY, QC_COLLECTION);
-const scrapStore = createCollectionStore<SopScrapRecord>(SCRAP_KEY, SCRAP_PENDING_KEY, SCRAP_COLLECTION);
-const mixingStore = createCollectionStore<SopMixingReport>(MIXING_KEY, MIXING_PENDING_KEY, MIXING_COLLECTION);
+const prodStore = createCollectionStore<SopProductionRecord>(PROD_KEY, PROD_PENDING_KEY, PROD_COLLECTION, (r) => ({
+  ...r,
+  machine: normalizeMachineName(r.machine),
+}));
+const qcStore = createCollectionStore<SopQcRecord>(QC_KEY, QC_PENDING_KEY, QC_COLLECTION, (q) => ({
+  ...q,
+  machine: normalizeMachineName(q.machine),
+}));
+const scrapStore = createCollectionStore<SopScrapRecord>(SCRAP_KEY, SCRAP_PENDING_KEY, SCRAP_COLLECTION, (s) => ({
+  ...s,
+  machine: normalizeMachineName(s.machine),
+  mixerMachine: s.mixerMachine ? normalizeMachineName(s.mixerMachine) : undefined,
+}));
+const mixingStore = createCollectionStore<SopMixingReport>(MIXING_KEY, MIXING_PENDING_KEY, MIXING_COLLECTION, (m) => ({
+  ...m,
+  machine: normalizeMachineName(m.machine),
+}));
 const handoverStore = createCollectionStore<SopShiftHandoverRecord>(HANDOVER_KEY, HANDOVER_PENDING_KEY, HANDOVER_COLLECTION);
 
 export const getLocalSopProductionLogs = prodStore.getLocal;
@@ -316,7 +338,8 @@ export function normalizeToIsoDate(raw: string): string {
 }
 
 export function normalizeMachineMatchKey(name: string): string {
-  const up = (name || '').toUpperCase().replace(/\s+/g, ' ').trim();
+  const canonical = normalizeMachineName(name);
+  const up = (canonical || name || '').toUpperCase().replace(/\s+/g, ' ').trim();
   if (!up) return '';
 
   // Injection machines: IM1, IM 1, I.M. 1, Injection 1 -> IM1
@@ -332,8 +355,9 @@ export function normalizeMachineMatchKey(name: string): string {
   if (mix) return `MIX${Number(mix[1])}`;
 
   // Polypipe machines
-  const poly = up.match(/POLYPIPE(?:\s*MACHINE)?\s*0*(\d+)/);
-  if (poly) return `POLY${Number(poly[1])}`;
+  if (/POLY\s*PIPE\s*CRUSHER|POLYPIPE\s*CRUSHER/.test(up)) return 'POLYPIPECRUSHER';
+  const poly = up.match(/POLY\s*PIPE(?:\s*MACHINE)?(?:\s*0*(\d+))?/);
+  if (poly) return `POLY${Number(poly[1] || 1)}`;
 
   // Punching machines
   const punch = up.match(/PUNCHING(?:\s*MACHINE)?\s*0*(\d+)/);
@@ -343,13 +367,16 @@ export function normalizeMachineMatchKey(name: string): string {
 }
 
 export function mapParsedMachineToPlantMachine(rawMachine: string, plantMachines: string[]): string {
-  const key = normalizeMachineMatchKey(rawMachine);
-  if (!key) return plantMachines[0] || rawMachine;
-  const exact = plantMachines.find((m) => m.toLowerCase() === rawMachine.trim().toLowerCase());
+  const canonical = normalizeMachineName(rawMachine);
+  const key = normalizeMachineMatchKey(canonical || rawMachine);
+  if (!key) return plantMachines[0] || canonical || rawMachine;
+  const exact = plantMachines.find(
+    (m) => m.toLowerCase() === (canonical || rawMachine).trim().toLowerCase()
+  );
   if (exact) return exact;
   const byKey = plantMachines.find((m) => normalizeMachineMatchKey(m) === key);
   if (byKey) return byKey;
-  return rawMachine;
+  return canonical || rawMachine;
 }
 
 function normalizeProductTokens(product: string): string[] {
@@ -452,13 +479,19 @@ function extractProdMachine(line: string, dept: string): { machine: string; rest
     const rest = (line.slice(0, idx) + line.slice(idx + m[0].length))
       .replace(/^[\s.,-]+/, '')
       .trim();
-    return { machine: fmt(m), rest };
+    return { machine: normalizeMachineName(fmt(m)), rest };
   };
   if (dept !== 'Extrusion') {
     const r = tryLine(/I\.?\s*M\.?\s*(\d+)/, (m) => `IM ${m[1]}`);
     if (r) return r;
   }
-  const r2 = tryLine(/LINE\s*0?(\d+)/, (m) => `Extrusion Machine ${Number(m[1])}`);
+  const rPoly = tryLine(/POLY\s*PIPE(?:\s*(?:MACHINE|LINE))?(?:\s*0?(\d+))?/, (m) =>
+    m[1] ? `Polypipe Machine ${Number(m[1])}` : 'Polypipe Machine 1'
+  );
+  if (rPoly) return rPoly;
+  const rWordLine = tryLine(/LINE[\s-]*(ONE|TWO|THREE|FOUR|SIX|SEVEN|EIGHT)\b/, (m) => `Line ${m[1]}`);
+  if (rWordLine) return rWordLine;
+  const r2 = tryLine(/LINE\s*0?(\d+)/, (m) => `Line ${Number(m[1])}`);
   if (r2) return r2;
   const r3 = tryLine(/EXTRUD(?:ER|SION\s*MACHINE)\s*0?(\d+)/, (m) => `Extrusion Machine ${Number(m[1])}`);
   if (r3) return r3;
@@ -856,7 +889,7 @@ export function exportSopProductionExcel(rows: SopProductionRecord[]) {
     Date: r.date,
     Shift: r.shift,
     Department: r.dept,
-    Machine: r.machine,
+    Machine: normalizeMachineName(r.machine),
     Operator: r.operator,
     Assistant: r.assistant,
     Product: r.product,
@@ -888,7 +921,7 @@ export function exportSopQcExcel(rows: SopQcRecord[]) {
     Shift: q.shift,
     Time: q.time || '',
     'QC Check No': q.qcNo || '',
-    Machine: q.machine,
+    Machine: normalizeMachineName(q.machine),
     Product: q.product,
     PPH: q.pph ?? '',
     'PPH Unit': q.pphUnit || '',
@@ -919,7 +952,7 @@ export function exportSopScrapExcel(rows: SopScrapRecord[]) {
     Time: s.time,
     Shift: s.shift,
     'Shift In Charge': s.shiftInCharge,
-    Machine: s.machine,
+    Machine: normalizeMachineName(s.machine),
     Product: s.product,
     'Sent By (Operator Assistant)': s.isCasualAssistant ? `${s.sentByAssistant} (Casual)` : s.sentByAssistant,
     'Scrap Sent (kg)': s.scrapKg,
@@ -934,7 +967,7 @@ export function exportSopScrapExcel(rows: SopScrapRecord[]) {
     'Recycling Waste Loss (kg)': s.recyclingWasteKg ?? '',
     'Processed By': s.processedBy || '',
     'Received By Mixer': s.receivedByMixerName || '',
-    'Mixer Machine': s.mixerMachine || '',
+    'Mixer Machine': s.mixerMachine ? normalizeMachineName(s.mixerMachine) : '',
     'Pipeline Status': s.status,
   }));
   const ws = XLSX.utils.json_to_sheet(
@@ -951,7 +984,7 @@ export function exportSopMixingExcel(rows: SopMixingReport[]) {
     Date: m.date,
     Time: m.time,
     Shift: m.shift,
-    'Mixer Machine': m.machine,
+    'Mixer Machine': normalizeMachineName(m.machine),
     'Mixer Operator': m.mixerName,
     'Mixer Assistant': m.assistantName,
     'WH Reserved Material Stock (kg)': m.whReservedMaterialKg,
@@ -1031,7 +1064,7 @@ export function exportSopMasterWorkbook(args: {
     Date: r.date,
     Shift: r.shift,
     Department: r.dept,
-    Machine: r.machine,
+    Machine: normalizeMachineName(r.machine),
     Operator: r.operator,
     Assistant: r.assistant,
     Product: r.product,
@@ -1056,7 +1089,7 @@ export function exportSopMasterWorkbook(args: {
     Shift: q.shift,
     Time: q.time || '',
     'QC No': q.qcNo || '',
-    Machine: q.machine,
+    Machine: normalizeMachineName(q.machine),
     Product: q.product,
     PPH: q.pph ?? '',
     'Kgs/Hr': q.kgsPerHr ?? '',
@@ -1078,7 +1111,7 @@ export function exportSopMasterWorkbook(args: {
     Date: s.date,
     Time: s.time,
     'Shift In Charge': s.shiftInCharge,
-    Machine: s.machine,
+    Machine: normalizeMachineName(s.machine),
     Product: s.product,
     'Sent By': s.sentByAssistant,
     'Scrap Sent (kg)': s.scrapKg,
@@ -1097,7 +1130,7 @@ export function exportSopMasterWorkbook(args: {
   const mixRows = args.mixingReports.map((m) => ({
     Date: m.date,
     Shift: m.shift,
-    Machine: m.machine,
+    Machine: normalizeMachineName(m.machine),
     'Mixer Operator': m.mixerName,
     'Mixer Assistant': m.assistantName,
     'WH Reserved (kg)': m.whReservedMaterialKg,

@@ -320,6 +320,12 @@ export function resolveUserPermissions(
       exportDispatchExcel: false,
       attendanceLogger: false,
       manageMachinesAndSync: false,
+      dieselFuelRequest: false,
+      dieselHODApprove: false,
+      dieselGRN: false,
+      dieselExportExcel: false,
+      productionPlanningAccess: false,
+      productionReportAccess: false,
     };
   }
 

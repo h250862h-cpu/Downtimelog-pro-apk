@@ -1,0 +1,630 @@
+ PRODUCT  , WEIGHT (KG) ,, SCRAP , WASTAGE ,, TOTAL PRODUCTION HRS ,,,, TOTAL DOWNTIME HRS ,,,,Date,Shift,Department,Machine,Operator,Assistant,Product,Quantity,Unit,Scrap,Cut Dust,Freezing,Reported By
+" 15,693.00 "," 167,932.44 ",," 3,905.43 ", 69.86 ,," 2,166.38 ",,,," 1,101.81 ",,,,1/11/2026,Day,Injection,IM1,BOTHWELL,TAKUNDA MAGAUZE,FN19,18,BAGS,25.5,,,E.NYAMAPANDA
+ PRODUCT TYPE , PROD. PCS , PROD KG , SCRAP , WASTAGE ,, MACHINE , PRODUCTION , WEIGHT , SCRAP , WASTAGE , PROD HRS , DOWNTIME HRS ,,1/11/2026,Day,Injection,IM2,BOTHWELL,FELIX,RB COVERS,20,BAGS,13.75,,,E.NYAMAPANDA
+CONDUIT 19 MM ELECTRICAL LGP 25PC,1626,15772.2,369.676,8.431,,LINE TWO,1626,15772.2,369.676,8.431,133.6,58.4,,1/11/2026,Day,Injection,IM3,BOTHWELL,OWEN,FB6X3,32,BAGS,17.904,,,E.NYAMAPANDA
+WATER PIPE 140MM CLASS 6 LGP,6365,87200.5,905.473,30.298,,EXTRUSION MACHINE 4,6365,87200.5,905.473,30.298,157.8,34.2,,1/11/2026,Day,Injection,IM4,BOTHWELL,BOTHWELL,19MM BENDS,18,BAGS,30.6,,,E.NYAMAPANDA
+DRAIN PIPE 110MM SAND LGP,1339,6587.88,610.145,4.644,,Line 6,941,4629.72,610.145,4.644,65.6,126.4,,1/11/2026,Day,Injection,IM6,BOTHWELL,PROSPER,SB6X3,25,BAGS,6.875,,,E.NYAMAPANDA
+WASTE PIPE 50MM LGP 10PC,184,3334.08,78.116,0.868,,LINE ONE,346,6810.6,281.352,4.168,31.5,160.5,,1/11/2026,Day,Injection,IM7,BOTHWELL,PROSPER,DC19,16,BAGS,29.00,,,E.NYAMAPANDA
+WASTE PIPE ACCESS BEND 50MM LGP 50PCS,342,1128.6,0,0,,INJECTION MAULDING MACHINE -2,371,1272.44,0,0,152.4,39.6,,1/11/2026,Day,Extrusion,LINE 04,DENNIS,TREVOR,180MM CL 06WP,275,PIPES,NIL,2.46,,E.NYAMAPANDA
+AIR VENT INTERIOR LGP APPROX 30PC,363,602.58,0,0,,INJECTION MAULDING MACHINE 3,488,855.08,0,0,149.7,42.3,,1/11/2026,Day,Extrusion,LINE 07,FARAI,TAFADZWA,BHP20MM BY 25MTRS RECYCLING,40,BUNDLES,56.208,,,E.NYAMAPANDA
+COUPLENE 19MM LGP APPROX 1500PC,160,1344,0,0,,IM 6,125,1050,0,0,149.7,42.3,,1/11/2026,Day,Extrusion,LINE 07,GRAMMY,GRAMMY,PULVERIZED MATERIAL = 2 BAGS,,,,,,E.NYAMAPANDA
+NIPPLE 19MM LGP APPROX 2000PC,60,196.8,0,0,,INJECTION MAULDING -1,60,196.8,0,0,145.4,46.6,,01/11/2026,Night,Injection,IM1,SIMON,MALVERN,FN19,18,BAGS,24.576,,,T.GWEME
+ROUND COVERS (BOX LID) LGP APPROX 500PC,29,143.84,0,0,,POLY PIPE,425,7225,674.566,0,152.4,39.6,,01/11/2026,Night,Injection,LINE 02,SIMON,HOWARD,R.B.C,18,BAGS,13.08,,,T.GWEME
+POLY PIPE 32MM CLASS 6 100MTR LGP Premium Virgin,425,7225,674.566,0,,HOSE PIPE MACHINE ,166,2614.68,144.118,0,43.5,148.5,,01/11/2026,Night,Injection,IM3,SIMON,MARUMANI,F.B 6X3,19,BAGS,8.8,,,T.GWEME
+BRAIDED HOSE 25MM 50MT APPROX LGP,131,2289.88,109.786,0,,GUMBOOT MACHINE,170,1787.06,0,0,138.2,53.8,,01/11/2026,Night,Injection,IM4,SIMON,SIMON,19MM BENDS,22,BAGS,36.5,,,T.GWEME
+BRAIDED HOSE 25MM 25MT APPROX LGP,35,324.8,34.332,0,,EXTRUSION MACHINE 3,2096,31846.2,701.666,18.157,101.7,90.3,,01/11/2026,Night,Injection,IM6,SIMON,JENKINS,S.B 6X3,27,BAGS,6.55,,,T.GWEME
+GUM BOOT CAPTAIN BLACK SIZE 42 5PC,24,218.4,0,0,,IM-5,1462,2017.56,0,0,149.7,42.3,,01/11/2026,Night,Injection,IM7,SIMON,JENKINGS,DC 19MM,17,BAGS,34.084,,,T.GWEME
+GUM BOOT CAPTAIN BLACK SIZE 43 5PC,20,186,0,0,,PUNCHING MACHINE-1,82,421.48,0,0,149.72,0,,01/11/2026,Night,Extrusion,LINE 04,VITALIS,JONATHAN,180 MM C.L 6,250,PIPES,NIL,,,T.GWEME
+WATER PIPE 180MM CLASS 6 LGP,1138,26606.44,615.62,18.157,,PUNCHING MACHINE-2,40,211.2,0,0,46.47,0,,01/11/2026,Night,Extrusion,LINE 07,VITALIS,PATSON,BHP 20MM BY 45MTRS,46,BUNDLES,32.76,,,T.GWEME
+PLAIN BEND 110MM WHITE LGP 5PC,1462,2017.56,0,0,,TRUNKING MACHINE,170,2135.2,218.433,4.16,114.4,77.6,,02/11/2026,Day,Injection,IM1,BOTHWELL,BOTHWELL,FN19,13,BAGS,13.08,,,E.NYAMAPANDA
+FLUSH BOX 3X3 LGP APPROX 120PC,82,421.48,0,0,,IMJECTIOPN MOULDING MACHINE 4,653,1242.8,0,0,134.77,57.2,,02/11/2026,Day,Injection,IM2,BOTHWELL,FELIX,RB COVERS,16,BAGS,11,,,E.NYAMAPANDA
+FLUSH BOX 6 X 3 LGP APPROX 80PC,40,211.2,0,0,,IM 7,107,643.92,0,0,149.7,42.3,,02/11/2026,Day,Injection,IM3,LEONARD,TAKUNDA MAGAUZE,FB6X3,8,BAGS,4.025,,,E.NYAMAPANDA
+TRUNKING 50X50 2900MM LGP 10PC,170,2135.2,218.433,4.16,,TOTAL PRODUCTION,15693,167932.44,3905.429,69.858,2166.38,1101.809,,02/11/2026,Day,Injection,IM4,LEONARD,LEONARD,19MM BENDS,20,BAGS,32.897,,,E.NYAMAPANDA
+PVC GULLY HEAD + ROUND GRATE 110MM 6PCS,611,977.6,0,0,,,,,,,,,,02/11/2026,Day,Injection,IM6,BOTHWELL,CLIVE,SB6X3,7,BAGS,1.77,,,E.NYAMAPANDA
+WATER PIPE 25MM CLASS 6 LGP 25PC,162,3476.52,203.236,3.3,,,,,,,,,,02/11/2026,Day,Injection,IM6,LEONARD,CLIVE,DC19,7,BAGS,13.833,,,E.NYAMAPANDA
+GUM BOOT CAPTAIN BLACK SIZE 40 5PC,32,270.72,0,0,,,,,,,,,,02/11/2026,Day,Injection,IM7,LEONARD,CLIVE,FB3ž3,2,BAGS,1.08,,,E.NYAMAPANDA
+GUM BOOT CAPTAIN BLACK SIZE 41 5PC,11,98.12,0,0,,,,,,,,,,02/11/2026,Day,Extrusion,LINE 04,DENNIS,FRANK,180MM CL 06WP,68,PIPES,NIL,0.351,,E.NYAMAPANDA
+GUM BOOT CAPTAIN BLACK SIZE 44 5PC,31,310,0,0,,,,,,,,,,02/11/2026,Day,Extrusion,LINE 04,DENNIS,FRANK,140MM CL 09WP,70,PIPES,250.768,0.346,,E.NYAMAPANDA
+BRAIDED HOSE 20MM 45MT APPROX LGP,39,565.5,0,0,,,,,,,,,,02/11/2026,Day,Extrusion,LINE 07,FARAI,SHAWN,BHP20MM BY 25MTRS,34,BUNDLES,31.44,,,E.NYAMAPANDA
+GUM BOOT CAPTAIN BLACK SIZE 46 5PC,13,138.32,0,0,,,,,,,,,,02/11/2026,Night,Injection,IM1,SIMON,MALVERN,FN19,19,BAGS,26.112,,,I.MAVIYANI
+ROUND BOX 19MM LGP APPROX 200PC,72,349.92,0,0,,,,,,,,,,02/11/2026,Night,Injection,IM2,SIMON,JENKINS,RB19 COVERS,22,BAGS,13.86,,,I.MAVIYANI
+AIR VENT EXTERNAL LGP APPROX 30PC,167,517.7,0,0,,,,,,,,,,02/11/2026,Night,Injection,IM3,SIMON,SIMON,FB6X3,32,BAGS,15.625,,,I.MAVIYANI
+WATER PIPE 75MM CLASS 6 LGP,560,3281.6,86.046,0,0,,,,,,,,,02/11/2026,Night,Injection,IM4,SIMON,THINKWELL,19MM BENDS,21,BAGS,39.168,,,I.MAVIYANI
+TOTAL PRODUCTION,15693,167932.44,3905.429,69.858,,,,,,,,,,02/11/2026,Night,Injection,IM6,SIMON,HOWARD,DC19,13,BAGS,16.10,,,I.MAVIYANI
+,,,,,,,,,,,,,,02/11/2026,Night,Injection,IM7,SIMON,HOWARD,FB3X3,21,BAGS,27.90,,,I.MAVIYANI
+,,,,,,,,,,,,,,02/11/2026,Night,Extrusion,LINE 02,VITALIS,PATSON/JONATHAN,19MM CONDUITS,167,BUNDLES,48.904,0.846,,I.MAVIYANI
+,,,,,,,,,,,,,,02/11/2026,Night,Extrusion,LINE 04,TAKUNDA KANHICHIRE,CHRISTIANO,140MM CL 09WP,300,PIPES,122.192,3.446,,I.MAVIYANI
+,,,,,,,,,,,,,,02/11/2026,Night,Extrusion,LINE 07,TAKUNDA KANHICHIRE,MUNYARADZI,BHP20MM BY 45MTRS,46,BUNDLES,NIL,,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Day,Injection,IM1,ERIC,CLIVE,FN19,17,BAGS,24.072,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Injection,IM2,ERIC,FELIX,RB COVERS,22,BAGS,15.84,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Injection,IM3,ERIC,ERIC,FB6X3,35,BAGS,18.144,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Injection,IM4,LEONARD,LEONARD,19MM BENDS,23,BAGS,40.256,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Injection,IM6,ERIC,TAKUNDA,D.C 19,13,BAGS,26.1,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Injection,IM7,LEONARD,TAKUNDA,F.B 6X3,33,BAGS,17.577,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Extrusion,LINE 02,DENIS,NGONI/TREVOR,19MM CONDUITS,140,BUNDLES,95.412,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Extrusion,LINE 03,DENIS,FRANK,180MM C.L 6,35,PIPES,168.7,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Extrusion,LINE 04,DENNIS,FRANK,140MM CL 09WP,247,PIPES,36.1,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Extrusion,LINE 04,DENNIS,FRANK,140MM CL 09WP,70,PIPES,250.768,0.346,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Day,Extrusion,LINE 06,TINASHR,SHAWN,D.P 110MM WHITE,230,BUNDLES,26.790,,,T.GWEME
+,,,,,,,,,,,,,,03/11/2026,Night,Injection,IM1,SIMON,HOWARD,FN19,17,BAGS,24.576,,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Injection,IM2,SIMON,REMOS,RB19 COVERS,21,BAGS,15.312,,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Injection,IM3,SIMON,OWEN,FB6X3,41,BAGS,17.9,,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Injection,IM4,SIMON,SIMON,19MM BENDS,21,BAGS,39.916,,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Injection,IM6,SIMON,THINKWELL,DC19,13,BAGS,25.93,,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Injection,IM7,SIMON,THINKWELL,FB3X3,32,BAGS,18.39,,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Extrusion,LINE 01,VITALIS,PATSON,50MM WASTE PIPE,124,BUNDLES,36.00,0.832,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Extrusion,LINE 02,VITALIS,MUNYARADZI/JONATHAN,19MM CONDUITS,227,BUNDLES,15.46,1.488,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Extrusion,LINE 03,VITALIS,FARASTENY,180MM CL 06WP,200,PIPES,NIL,4.605,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Extrusion,LINE 04,TAKUNDA KANHICHIRE,FARASTENY,140MM CL 06WP,500,PIPES,40.374,5.085,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Extrusion,LINE 06,TAKUNDA KANHICHIRE,TINASHE,110MM DP WHITE,200,PIPES,74.184,2.082,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Extrusion,LINE 07,TAKUNDA KANHICHIRE,TRIED,BHP20MM BY 45MTRS RECYCLING,,,32.468,,,I.MAVIYANI
+,,,,,,,,,,,,,,03/11/2026,Night,Extrusion,LINE 07,BOTHWELL MATIBIRI,BOTHWELL  MATIBIRI,PULVERIZED MATERIAL =2 TONNE BAGS,,,,,,I.MAVIYANI
+,,,,,,,,,,,,,,04/11/2026,Day,Injection,IM1,LEONARD,JENKINS,FN19,17,BAGS,28.152,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Injection,IM2,LEONARD,MALVERN,RB COVERS,15,BAGS,10.44,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Injection,IM3,LEONARD,LEONARD,FB6X3,17,BAGS,8.878,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Injection,IM4,LEONARD,ERIC,19MM BENDS,19,BAGS,37.604,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Injection,IM6,LEONARD,CLIVE,D.C 19,13,BAGS,25.86,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Injection,IM7,LEONARD,CLIVE,F.B 6X3,27,BAGS,6.56,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Extrusion,LINE 02,DENIS,NGONI/TREVOR,19MM CONDUITS,227,BUNDLES,16.638,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Extrusion,LINE 03,TINASHE,ZVIKOMBORERO,180MM C.L 6,240,PIPES,64.228,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Extrusion,LINE 04,DENNIS,ZVIKOMBORERO,140MM CL 06WP,780,PIPES,20.802,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Extrusion,LINE 06,TINASHE,FRANK,D.P 110MM WHITE,150,PIPES,40.228,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Day,Extrusion,LINE 07,TINASHE,SHAWN,BHP 20MM BY 45MTRS,46,BUNDLES,48.102,,,T.GWEME
+,,,,,,,,,,,,,,04/11/2026,Night,Injection,IM1,SIMON,THINKWELL,FN19,21,BAGS,24.576,,,
+,,,,,,,,,,,,,,04/11/2026,Night,Injection,IM2,SIMON,REMOS,RB19 COVERS,23,BAGS,15.312,,,
+,,,,,,,,,,,,,,04/11/2026,Night,Injection,IM4,SIMON,SIMON,19MM BENDS,18,BAGS,29.716,,,
+,,,,,,,,,,,,,,04/11/2026,Night,Injection,IM6,SIMON,OWEN,DC19,12,BAGS,26.04,,,
+,,,,,,,,,,,,,,04/11/2026,Night,Injection,IM7,SIMON,OWEN,FB3X3,34,BAGS,18.536,,,
+,,,,,,,,,,,,,,04/11/2026,Night,Extrusion,LINE 01,FARAI,JONATHAN,50MM WASTE PIPE,103,BUNDLES,71.34,1.40,,
+,,,,,,,,,,,,,,04/11/2026,Night,Extrusion,LINE 02,FARAI,FARASTENY/MUNYARADZI,19MM CONDUITS,209,BUNDLES,30.564,1.24,,
+,,,,,,,,,,,,,,04/11/2026,Night,Extrusion,LINE 03,FARAI,HOWARD,180MM CL 06WP,200,PIPES,192.65,3.482,,
+,,,,,,,,,,,,,,04/11/2026,Night,Extrusion,LINE 04,TAKUNDA KANHICHIRE,HOWARD,140MM CL 06WP,400,PIPES,260.00,4.56,,
+,,,,,,,,,,,,,,04/11/2026,Night,Extrusion,LINE 05,TAKUNDA KANHICHIRE,CHRISTIANO,16X16 TRUNKING,23,BUNDLES,40.868,0.240,,
+,,,,,,,,,,,,,,04/11/2026,Night,Extrusion,LINE 06,TAKUNDA KANHICHIRE,TINASHE,110MM DP WHITE,200,PIPES,76.488,1.28,,
+,,,,,,,,,,,,,,04/11/2026,Night,Extrusion,LINE 07,TAKUNDA KANHICHIRE,TAFADZWA,BHP20MM BY 45MTRS RECYCLING,50,BUNDLES,NIL,,,
+,,,,,,,,,,,,,,04/11/2026,Night,Extrusion,LINE 07,BOTHWELL MATIBIRI,GRAMMY,PULVERIZED MATERAL = 3TONNE BAGS,,,,,,
+,,,,,,,,,,,,,,05/11/2026,Day,Injection,IM1,LEONARD,BOTHWELL,FN19,4,BAGS,5.661,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Injection,IM2,LEONARD,JENKINS,RB19 COVERS,21,BAGS,15.312,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Injection,IM4,LEONARD,LEONARD,19MM BENDS,6,BAGS,10.2,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Injection,IM6,LEONARD,MALVERN,DC19,131,BAGS,24.24,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Injection,IM7,LEONARD,CLIVE,FB3X3,30,BAGS,17.955,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Extrusion,LINE 01,TINASHE,NGONI,50MM WASTE PIPE,105,BUNDLES,53.93,1.842,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Extrusion,LINE 02,VITALIS,FRANK,19MM CONDUITS,68,BUNDLES,36.454,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Extrusion,LINE 03,VITALIS,ZVIKOMBORERO,180MM CL 06WP,200,PIPES,NIL,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Extrusion,LINE 04,TINASHE,ZVIKOMBORERO,140MM CL 06WP,384,PIPES,26.064,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Extrusion,LINE 05,TINASHE,PROSPER,16X16 TRUNKING,28,BUNDLES,58.6,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Extrusion,LINE 07,TINASHE,BLESSED,BHP20MM BY 45MTRS RECYCLING,35,BUNDLES,,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Day,Extrusion,LINE 07,KUDAKWASHE,RAMECK,PULVERIZED MATERAL = 2TONNE BAGS,,,,,,T.GWEME
+,,,,,,,,,,,,,,05/11/2026,Night,Injection,IM1,SIMON,FELIX,FN19,15,BAGS,15.312,,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Injection,IM2,SIMON,SIMON,RB19 COVERS,20,BAGS,17.18,,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Injection,IM3,SIMON,TAKUNDA MAGAUZE,AIRVENT INTERIOR WHITE,50,BAGS,7.81,,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Injection,IM6,SIMON,HOWARD,DC19,13,BAGS,25.47,,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Injection,IM7,SIMON,HOWARD,FB6X3,27,BAGS,19.036,,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Extrusion,LINE 01,FARAI,TAFADZWA,50MM WASTE PIPE,96,BUNDLES,146.99,1.34,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Extrusion,LINE 02,FARAI,MUNYARADZI/TREVOR,19MM CONDUITS,118,BUNDLES,146.99,2.38,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Extrusion,LINE 03,TAKUNDA,CHRISTIANO,180MM CL 06WP,200,PIPES,NIL,3.568,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Extrusion,LINE 04,TAKUNDA,CHRISTIANO,140MM CL 06WP,400,PIPES,NIL,4.332,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Extrusion,LINE 05,FARAI,FARASTENY,16X16 TRUNKING,34,BUNDLES,38.910,0.224,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Extrusion,LINE 06,FARAI,TINASHE,DP110MM SAND,200,PIPES,NIL,1.24,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Extrusion,LINE 08,FARAI,ESMORE,32MM CL 06WP POLYPIPE RECYCLING,4,BUNDLES,,,,I.MAVIYANI
+,,,,,,,,,,,,,,05/11/2026,Night,Extrusion,LINE 08,BOTHWELL MATIBIRI,GRAMMY,PULVERIZED MATERAL = 3 TONNE BAGS,,,,,,I.MAVIYANI
+,,,,,,,,,,,,,,06/11/2026,Day,Injection,IM1,LEONARD,CLIVE,FN19,14,BAGS,18.48,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Injection,IM2,LEONARD,JENKINS,RB19 COVERS,12,BAGS,14.036,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Injection,IM3,LEONARD,THINKWELL,AIRVENT INTERIOR,40,BAGS,3.696,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Injection,IM6,LEONARD,REMOS,DC19,8,BAGS,15.168,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Injection,IM7,LEONARD,REMOS,FB3X3,20,BAGS,14.812,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Extrusion,LINE 01,TINASHE,PROSPER,50MM WASTE PIPE,63,BUNDLES,34.754,1.840,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Extrusion,LINE 02,VITALIS,JONATHAN/ MICHAEL,19MM CONDUITS,92,BUNDLES,42.486,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Extrusion,LINE 03,VITALIS,ZVIKOMBORERO,180MM CL 06WP,222,PIPES,163.1,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Extrusion,LINE 04,TINASHE,ZVIKOMBORERO,140MM CL 06WP,287,PIPES,148.5,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Extrusion,LINE 05,TINASHE,PATSON,16X16 TRUNKING,72,BUNDLES,68.596,1.073,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Day,Extrusion,LINE 08,TINASHE,BLESSED,32MM CL 06WP POLYPIPE,35,BUNDLES,23.55,,,E. NYAMAPANDA
+,,,,,,,,,,,,,,06/11/2026,Night,Injection,IM1,SIMON,FELIX,FN19,15,BAGS,19.584,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Injection,IM2,SIMON,SIMON,RB19 COVERS,21,BAGS,15.312,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Injection,IM3,SIMON,TAKUNDA MAGAUZE,AIRVENT INTERIOR WHITE,46,BAGS,8.616,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Injection,IM6,SIMON,OWEN,DC19,11,BAGS,25.55,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Injection,IM7,SIMON,MALVERN,FB6X3,31,BAGS,18.788,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Extrusion,LINE 02,FARAI,TRIED,19MM CONDUITS,132,BUNDLES,70.66,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Extrusion,LINE 03,DENIS,CHRISTIANO,180MM CL 06WP,200,PIPES,115.71,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Extrusion,LINE 04,DENIS,CHRISTIANO,140MM CL 06WP,500,PIPES,95.2,4.332,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Extrusion,LINE 05,FARAI,FARASTENY,16X16 TRUNKING,73,BUNDLES,36.2,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Extrusion,LINE 06,DENIS,TREVOR,DP110MM SAND,200,PIPES,NIL,1.24,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Extrusion,LINE 07,DENIS,SHAWN,BHP 25MM BY 50MTRS,20,BUNDLES,68.442,,,T.GWEME
+,,,,,,,,,,,,,,06/11/2026,Night,Extrusion,LINE 08,FARAI,ESMORE,32MM CL 06WP POLYPIPE,39,BUNDLES,31.5,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Day,Injection,IM1,LEONARD,REMOS,FN19,15,BAGS,20.16,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Injection,IM2,LEONARD,HOWARD,RB19 COVERS,14,BAGS,13.55,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Injection,IM3,LEONARD,THINKWELL,AIRVENT INTERIOR WHITE,48,BAGS,7.92,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Injection,IM5,LEONARD,LEONARD,110MM PLAIN BEND WHITE,460,GOOD PIECES,4.63,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Injection,IM6,LEONARD,CLIVE,DC19,14,BAGS,26.70,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Injection,IM7,LEONARD,CLIVE,FB3X3,28,BAGS,20.19,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Extrusion,LINE 02,VITALIS,MUNYARADZI/JONATHAN,19MM CONDUITS,198,BUNDLES,16.246,0.318,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Extrusion,LINE 03,VITALIS,EDRICH,180MM CL 06WP,200,PIPES,86.20,3.488,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Extrusion,LINE 04,TAKUNDA,EDRICH,140MM CL 06WP,500,PIPES,NIL,3.58,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Extrusion,LINE 06,TAKUNDA,TANAKA MAWODZEKA,110MM DP SAND,200,PIPES,,0.866,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Extrusion,LINE 07,TAKUNDA,PATSON,BHP25MM BY 50MTRS,30,BUNDLES,85.346,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Extrusion,LINE 08,BLESSED,PROSPER,32MM CL06 POLYPIPE RECYCLING,50,BUNDLES,34.68,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Day,Extrusion,LINE 08,GRAMMY,LAMECK,PULVERIZED MATERAL = 2 TONNE BAGS,,,,,,I.MAVIYANI
+,,,,,,,,,,,,,,07/11/2026,Night,Injection,IM1,BOTHWELL,BOTHWELL,FN19,15,BAGS,21.25,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Injection,IM2,BOTHWELL,OWEN,RB19 COVERS,16,BAGS,10.0,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Injection,IM3,BOTHWELL,FELIX,AIRVENT INTERIOR WHITE,45,BAGS,8.616,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Injection,IM6,SIMON,OWEN,DC19,13,BAGS,26.58,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Injection,IM7,BOTHWELL,MALVERN,FB6X3,26,BAGS,15.12,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Extrusion,LINE 02,DENIS,NGONI,19MM CONDUITS,157,BUNDLES,68.770,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Extrusion,LINE 03,DENIS,TRIED,180MM CL 06WP,85,PIPES,16.96,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Extrusion,LINE 04,DENIS,TRIED,140MM CL 06WP,700,PIPES,NIL,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Extrusion,LINE 06,DENIS,TRUST,DP110MM SAND,16,PIPES,88.6,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Extrusion,LINE 07,DENIS,TAFADZWA,BHP 25MM BY 50MTRS,55,BUNDLES,62.006,,,T.GWEME
+,,,,,,,,,,,,,,07/11/2026,Night,Extrusion,LINE 08,FARAI,SHAWN,32MM CL 06WP POLYPIPE,42,BUNDLES,32.298,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Day,Injection,IM1,SIMON,TAKUNDA,FN19,15,BAGS,21.25,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Injection,IM2,SIMON,SIMON,RB19 COVERS,3,BAGS,3.43,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Injection,IM2,SIMON,SIMON,50MM ACCESS BEND,6,BAGS,10.64,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Injection,IM3,SIMON,THINKWELL,AIRVENT INTERIOR WHITE,43,BAGS,7.1,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Injection,IM5,SIMON,REMOS,110MM PLAIN BEND WHITE,622,GOOD PIECES,5.568,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Injection,IM6,SIMON,HOWARD,DC19,12,BAGS,25.95,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Injection,IM7,SIMON,HOWARD,FB3X3,31,BAGS,20.22,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Extrusion,LINE 01,TAKUNDA,LUKE/REMECK,50MM WASTE PIPE,50,BUNDLES,70.422,1.420,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Extrusion,LINE 02,TAKUNDA,MUNYARADZI/ZVIKOMBORERO,19MM CONDUITS,132,BUNDLES,78.116,0.868,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Extrusion,LINE 04,TAKUNDA,EDRICH,140MM CL 06WP,500,PIPES,62.468,4.250,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Extrusion,LINE 06,TAKUNDA,FARASTENY,110MM DP SAND,77,PIPES,24.420,0.826,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Extrusion,LINE 07,VITALIS,PATSON,BHP25MM BY 50MTRS,35,BUNDLES,,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Extrusion,LINE 08,VITALIS,JONATHAN,32MM CL06 POLYPIPE RECYCLING,38,BUNDLES,,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Day,Extrusion,LINE 08,GRAMMY,LAMECK,PULVERIZED MATERAL = 2 TONNE BAGS,,,,,,E.NYAMAPANDA
+,,,,,,,,,,,,,,08/11/2026,Night,Injection,IM1,BOTHWELL,BOTHWELL,FN19,15,BAGS,21.25,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Injection,IM2,BOTHWELL,OWEN,RB19 COVERS,26,BAGS,12.35,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Injection,IM3,BOTHWELL,FELIX,AIRVENT INTERIOR WHITE,50,BAGS,,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Injection,IM5,BOTHWELL,JENKINS,110MM BEND WHITE,696,GOOD PIECES,6.96,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Injection,IM6,BOTHWELL,CLIVE,DC19,13,BAGS,26.58,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Injection,IM7,BOTHWELL,MALVERN,FB6X3,29,BAGS,17.4,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Extrusion,LINE 02,TINASHE,NGONI,19MM CONDUITS,54,BUNDLES,44.64,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Extrusion,LINE 04,TINASHE,SHAUN,140MM CL 06WP,500,PIPES,55.890,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Extrusion,LINE 07,TINASHE,TAFADZWA,BHP 25MM BY 50MTRS,4,BUNDLES,24.440,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Extrusion,LINE 07,TINASHE,TAFADZWA,BHP 25MM BY 25MTRS,44,BUNDLES,34.332,,,T.GWEME
+,,,,,,,,,,,,,,08/11/2026,Night,Extrusion,LINE 08,TIANSHE,TREVOR,32MM CL 06WP POLYPIPE,27,BUNDLES,34.212,,,T.GWEME
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,

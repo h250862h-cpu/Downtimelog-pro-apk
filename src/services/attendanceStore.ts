@@ -6,6 +6,7 @@ import {
 } from 'firebase/firestore';
 import historicalAttendanceRaw from '../data/historicalAttendance.json';
 import { db, ensureFirebaseAuth } from '../firebase';
+import { normalizeMachineName } from '../types';
 import { AttendancePerson, ParsedAttendanceMessage, QCInspectionRecord } from '../types/attendance';
 
 const LEGACY_ATT_STORAGE_KEY = 'attlog_batch_v2';
@@ -415,19 +416,32 @@ export const INITIAL_QC_LOGS: QCInspectionRecord[] = [
   },
 ];
 
+function normalizeQcInspectionRecord(r: QCInspectionRecord): QCInspectionRecord {
+  return {
+    ...r,
+    machineOrLine: normalizeMachineName(r.machineOrLine),
+  };
+}
+
 export function getLocalQCLogs(): QCInspectionRecord[] {
   try {
     const raw = localStorage.getItem(QC_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed: QCInspectionRecord[] = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.map(normalizeQcInspectionRecord) : [];
+    }
   } catch (e) {
     console.warn('Failed reading QC logs from local storage:', e);
   }
-  return INITIAL_QC_LOGS.map((q) => ({ ...q, synced: true }));
+  return INITIAL_QC_LOGS.map((q) => normalizeQcInspectionRecord({ ...q, synced: true }));
 }
 
 export function saveLocalQCLogs(logs: QCInspectionRecord[]) {
   try {
-    localStorage.setItem(QC_STORAGE_KEY, JSON.stringify(logs));
+    localStorage.setItem(
+      QC_STORAGE_KEY,
+      JSON.stringify(logs.map(normalizeQcInspectionRecord))
+    );
   } catch (e) {
     console.warn('Failed saving QC logs to local storage:', e);
   }
@@ -469,7 +483,11 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
       if (!snapshot.empty) {
         const remoteMap: Record<string, QCInspectionRecord> = {};
         snapshot.forEach((snap) => {
-          remoteMap[snap.id] = { ...(snap.data() as QCInspectionRecord), id: snap.id, synced: true };
+          remoteMap[snap.id] = normalizeQcInspectionRecord({
+            ...(snap.data() as QCInspectionRecord),
+            id: snap.id,
+            synced: true,
+          });
         });
 
         const currentLocal = getLocalQCLogs();
@@ -497,7 +515,8 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
   );
 }
 
-export async function syncQCLogToFirebase(item: QCInspectionRecord): Promise<boolean> {
+export async function syncQCLogToFirebase(rawItem: QCInspectionRecord): Promise<boolean> {
+  const item = normalizeQcInspectionRecord(rawItem);
   const docRef = doc(db, 'qc_inspections', item.id);
   try {
     await setDoc(docRef, { ...item, synced: true }, { merge: true });

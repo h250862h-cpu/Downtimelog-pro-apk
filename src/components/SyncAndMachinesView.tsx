@@ -155,6 +155,8 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
       setNewOpDept('Polypipe & Crushing');
     } else if (role === 'Mixer Operator') {
       setNewOpDept('Mixing & Raw Materials');
+    } else if (role === 'Forklift Driver') {
+      setNewOpDept('Logistics, Forklift & Bowser Fuel');
     } else {
       setNewOpDept('Extrusion & Production');
     }
@@ -978,6 +980,7 @@ git push -u origin main`}
                     <option value="WH Personnel">WH Personnel (WH Confirm Goods Section Only)</option>
                     <option value="Shift In Charge">Shift In Charge (Machines &amp; Shift Trolley Dispatch Only)</option>
                     <option value="Production HOD">Production HOD (Admin — All Sections &amp; Reports)</option>
+                    <option value="Forklift Driver">Forklift Driver (Fuel Request &amp; Bowser Meter Entry)</option>
                     <option value="Operator Assistant">Operator Assistant (SOP Prod, QC &amp; Send Scrap)</option>
                     <option value="Recycling Team">Recycling Team (Receive &amp; Process Scrap → Mixers)</option>
                     <option value="Mixer Operator">Mixer Operator (Receive Regrind, Mix &amp; Report to HOD)</option>
@@ -1032,6 +1035,12 @@ git push -u origin main`}
                       ['sopScrapSend', 'SOP Scrap: Operator Send (Alerts Recycling)'],
                       ['sopRecyclingConfirm', 'SOP Recycling: Verify & Process (Alerts Mixers)'],
                       ['sopMixingAccess', 'SOP Mixing: Mix & WH Stock (Alerts HOD)'],
+                      ['productionPlanningAccess', 'Production Planning & Plan Closure View'],
+                      ['productionReportAccess', 'Unified Period Production Report (SUMIF & Excel)'],
+                      ['dieselFuelRequest', 'Diesel Bowser: Request Fuel & Meter Readings'],
+                      ['dieselHODApprove', 'Diesel Bowser: Production HOD Approve & Unlock PDF'],
+                      ['dieselGRN', 'Diesel Bowser: Receive Tank GRN (Supplier Signed)'],
+                      ['dieselExportExcel', 'Diesel Bowser: Export Fuel Usage Excel'],
                       ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                     ] as [keyof UserPermissions, string][]
                   ).map(([permKey, permLabel]) => (
@@ -1172,6 +1181,7 @@ git push -u origin main`}
                   <option value="Shift In Charge">Shift In Charge</option>
                   <option value="WH Personnel">WH Personnel</option>
                   <option value="Production HOD">Production HOD</option>
+                  <option value="Forklift Driver">Forklift Driver</option>
                   <option value="Operator Assistant">Operator Assistant</option>
                   <option value="Recycling Team">Recycling Team</option>
                   <option value="Mixer Operator">Mixer Operator</option>
@@ -1224,6 +1234,12 @@ git push -u origin main`}
                   ['sopScrapSend', 'SOP Scrap: Operator Send (Alerts Recycling)'],
                   ['sopRecyclingConfirm', 'SOP Recycling: Verify & Process (Alerts Mixers)'],
                   ['sopMixingAccess', 'SOP Mixing: Mix & WH Stock (Alerts HOD)'],
+                  ['productionPlanningAccess', 'Production Planning & Plan Closure View'],
+                  ['productionReportAccess', 'Unified Period Production Report (SUMIF & Excel)'],
+                  ['dieselFuelRequest', 'Diesel Bowser: Request Fuel & Meter Readings'],
+                  ['dieselHODApprove', 'Diesel Bowser: Production HOD Approve & Unlock PDF'],
+                  ['dieselGRN', 'Diesel Bowser: Receive Tank GRN (Supplier Signed)'],
+                  ['dieselExportExcel', 'Diesel Bowser: Export Fuel Usage Excel'],
                   ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                 ] as [keyof UserPermissions, string][]
               ).map(([permKey, permLabel]) => (
