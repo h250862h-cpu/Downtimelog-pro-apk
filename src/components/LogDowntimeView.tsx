@@ -26,6 +26,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { calculateDayStats, dtl, fmtT, getCurrentShift, getOpenEntry, r2, toTimestamp, ymd } from '../services/downtimeCalc';
+import { syncMachineFormToGeneratorLog } from '../services/powerGenStore';
 import {
   DEFAULT_REPORTERS,
   DowntimeEntry,
@@ -293,6 +294,7 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
         genStartFuel: targetIsGen && genStartFuel ? parseFloat(genStartFuel) : undefined,
         genOffTime: targetIsGen && genOffTime ? genOffTime : undefined,
         genOffFuel: targetIsGen && genOffFuel ? parseFloat(genOffFuel) : undefined,
+        genFuelUnit: targetIsGen ? 'L' : undefined,
         upd: baseNow + idx,
         sy: 0,
         signature: signatureData || undefined,
@@ -334,6 +336,11 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
             await onSaveEntry(item);
           }
         }
+        await Promise.all(
+          batchEntries
+            .filter((item) => item.m.toLowerCase() === 'generator')
+            .map((item) => syncMachineFormToGeneratorLog(item))
+        );
 
         setReason('');
         setEndTime('');
@@ -373,6 +380,9 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
 
       const newEntry = buildEntryForMachine(m, 0);
       await onSaveEntry(newEntry);
+      if (m.toLowerCase() === 'generator') {
+        await syncMachineFormToGeneratorLog(newEntry);
+      }
       setReason('');
       setEndTime('');
       if (isCasualAssistant) setCasualHandName('');
@@ -1054,12 +1064,22 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
               </div>
             )}
 
-            {/* Special Utility Telemetry for Generator */}
+            {/* Special Utility Telemetry for Generator (Linked with Power Cut & Generator Fuel Log in Litres) */}
             {isGenerator && (
               <div className="sm:col-span-2 lg:col-span-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 space-y-2">
-                <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
-                  <Flame className="h-4 w-4 text-amber-400" />
-                  <span>Utility Machine: Generator Log</span>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-amber-300">
+                  <span className="flex items-center gap-2">
+                    <Flame className="h-4 w-4 text-amber-400" />
+                    <span>Utility Machine: Generator Log (Synced to Generator Register in Litres)</span>
+                  </span>
+                  {genStartFuel &&
+                    genOffFuel &&
+                    !Number.isNaN(parseFloat(genStartFuel)) &&
+                    !Number.isNaN(parseFloat(genOffFuel)) && (
+                      <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-200 tabular-nums">
+                        Fuel Used: {r2(Math.max(0, parseFloat(genStartFuel) - parseFloat(genOffFuel)))} L
+                      </span>
+                    )}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div>
@@ -1075,11 +1095,13 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                      Start Fuel Level (%)
+                      Start Fuel Level (Litres)
                     </label>
                     <input
                       type="number"
-                      placeholder="e.g. 85"
+                      step="0.1"
+                      min="0"
+                      placeholder="e.g. 185 L"
                       value={genStartFuel}
                       onChange={(e) => setGenStartFuel(e.target.value)}
                       className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
@@ -1087,7 +1109,7 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                      Off Time
+                      Stop / Off Time
                     </label>
                     <input
                       type="time"
@@ -1098,11 +1120,13 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                      Off Fuel Level (%)
+                      Stop Fuel Level (Litres)
                     </label>
                     <input
                       type="number"
-                      placeholder="e.g. 62"
+                      step="0.1"
+                      min="0"
+                      placeholder="e.g. 152 L"
                       value={genOffFuel}
                       onChange={(e) => setGenOffFuel(e.target.value)}
                       className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"

@@ -320,9 +320,11 @@ export interface DowntimeEntry {
   chillerPressure?: number; // bar
   chillerFreq?: number; // Hz
   genStartTime?: string; // e.g. "08:15"
-  genStartFuel?: number; // %
+  genStartFuel?: number; // Litres (L)
   genOffTime?: string; // e.g. "12:00"
-  genOffFuel?: number; // %
+  genOffFuel?: number; // Litres (L)
+  genFuelUnit?: 'L' | '%';
+  linkedGeneratorLogId?: string;
 
   // Digital signature fields
   signature?: string; // Base64 PNG data URL
@@ -1013,6 +1015,57 @@ export interface DieselGrnRecord {
   tankLevelBefore: number;
   tankLevelAfter: number;
   createdAt: string;
+  upd: number;
+  sy?: number;
+}
+
+// ======================================================
+// POWER CUT & GENERATOR START/STOP LOGS (LITRES)
+// ======================================================
+
+export interface PowerCutLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  timeOut: string; // YYYY-MM-DDTHH:mm
+  timeBack: string; // YYYY-MM-DDTHH:mm or '' if ongoing
+  durationMinutes: number;
+  affectedArea: string;
+  generatorUsed: boolean;
+  linkedGeneratorLogId?: string;
+  reason?: string;
+  loggedBy: string;
+  loggedByEmail: string;
+  restoredBy?: string;
+  status: 'ONGOING' | 'RESTORED';
+  createdAt: string;
+  updatedAt: string;
+  upd: number;
+  sy?: number;
+}
+
+export interface GeneratorLog {
+  id: string;
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  startTime: string; // YYYY-MM-DDTHH:mm
+  startFuelLitres: number;
+  stopTime: string; // YYYY-MM-DDTHH:mm or '' if still RUNNING
+  stopFuelLitres?: number;
+  fuelUsedLitres?: number;
+  durationMinutes: number;
+  linkedPowerCutId?: string;
+  linkedDowntimeEntryId?: string;
+  reason?: string;
+  operatorName: string;
+  stoppedByName?: string;
+  signature?: string;
+  stopSignature?: string;
+  notes?: string;
+  loggedByEmail: string;
+  status: 'RUNNING' | 'STOPPED';
+  createdAt: string;
+  updatedAt: string;
   upd: number;
   sy?: number;
 }

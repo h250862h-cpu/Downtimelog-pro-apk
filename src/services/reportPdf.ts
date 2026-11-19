@@ -425,34 +425,48 @@ export async function generateDailyHoursPdf(selectedDate: string, machines: stri
 
 /**
  * Generates Portrait A4 Unified Period Production Report PDF with Official LG PLAST Logo
+ * Includes ALL period-filtered entries across:
+ * 1. Dispatch & Production Entries
+ * 2. Production Logs (Production Logger)
+ * 3. QC Logs
+ * 4. Fuel Logs (Issues & GRNs)
+ * 5. Generator Start/Stop Logs (Litres)
+ * 6. Power Cut Logs + Total Power Cut Duration
  */
 export async function generatePeriodProductionReportPdf(
   report: {
     fromDate: string;
     toDate: string;
     totals: {
+      totalDispatchEntries: number;
       totalPcs: number;
       totalKg: number;
       totalScrapKg: number;
       totalWastageKg: number;
       totalProdHrs: number;
       totalDownHrs: number;
+      totalFuelIssuedLitres: number;
+      totalFuelGrnLitres: number;
+      totalGenRuns: number;
+      totalGenRunHrs: number;
+      totalGenRunHm: string;
+      totalGenFuelLitres: number;
+      totalPowerCutEvents: number;
+      totalPowerCutHrs: number;
+      totalPowerCutHm: string;
     };
-    productRows: Array<{
-      product: string;
-      prodPcs: number;
-      prodKg: number;
-      scrapKg: number;
-      wastageKg: number;
-    }>;
-    machineRows: Array<{
+    dispatchRows: Array<{
+      date: string;
+      shift: string;
       machine: string;
-      prodPcs: number;
-      prodKg: number;
+      product: string;
+      trolleyNo: string;
+      qty: number;
+      kg: number;
       scrapKg: number;
       wastageKg: number;
-      prodHrs: number;
-      downHrs: number;
+      operatorName: string;
+      status: string;
     }>;
     shiftProductionRows: Array<{
       date: string;
@@ -478,216 +492,389 @@ export async function generatePeriodProductionReportPdf(
       fitting: string;
       color: string;
     }>;
+    fuelIssueRows: Array<{
+      requestNo: string;
+      date: string;
+      vehicleOrForklift: string;
+      driverName: string;
+      requestedLitres: number;
+      actualLitresTaken?: number;
+      status: string;
+    }>;
+    fuelGrnRows: Array<{
+      grnNo: string;
+      date: string;
+      supplierName: string;
+      litresAdded: number;
+      tankLevelAfter: number;
+    }>;
+    generatorRows: Array<{
+      date: string;
+      shift: string;
+      startTime: string;
+      startFuelLitres: number;
+      stopTime: string;
+      stopFuelLitres?: number;
+      fuelUsedLitres?: number;
+      durationMinutes: number;
+      status: string;
+      operatorName: string;
+    }>;
+    powerCutRows: Array<{
+      date: string;
+      shift: string;
+      timeOut: string;
+      timeBack: string;
+      durationMinutes: number;
+      affectedArea: string;
+      generatorUsed: boolean;
+      status: string;
+      reason?: string;
+    }>;
   },
-  preparedBy: string
+  preparedBy: string,
+  isAdmin = false
 ) {
+  if (!isAdmin) return;
   await ensureLgplastLogoLoaded();
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
 
+  const fmtTm = (v?: string) => {
+    if (!v) return '-';
+    const idx = v.indexOf('T');
+    return idx >= 0 ? v.slice(idx + 1, idx + 6) : v.slice(0, 5);
+  };
+  const fmtHm = (mins: number) => {
+    const m = Math.max(0, Math.round(mins || 0));
+    const h = Math.floor(m / 60);
+    const rem = m % 60;
+    return h === 0 ? `${rem}m` : `${h}h ${String(rem).padStart(2, '0')}m`;
+  };
+
   drawLgplastPdfHeader(
     doc,
-    'UNIFIED PERIOD PRODUCTION REPORT',
-    `SUMIF PRODUCTION, SCRAP, MACHINE HOURS & QC  •  ${report.fromDate} TO ${report.toDate}`,
+    'LG PLAST PERIOD PRODUCTION & UTILITIES REPORT',
+    `ALL PERIOD-FILTERED ENTRIES  •  ${report.fromDate} TO ${report.toDate}`,
     [`From: ${report.fromDate}`, `To: ${report.toDate}`, `By: ${preparedBy}`]
   );
 
-  // KPI Bar
+  // Executive Summary Sub-bar
   doc.setFillColor(241, 245, 249);
-  doc.rect(10, 33, pageWidth - 20, 10, 'F');
+  doc.rect(10, 33, pageWidth - 20, 14, 'F');
   doc.setDrawColor(203, 213, 225);
-  doc.rect(10, 33, pageWidth - 20, 10, 'S');
+  doc.rect(10, 33, pageWidth - 20, 14, 'S');
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.0);
+  doc.setFontSize(6.8);
   doc.text(
-    `Prod Pcs: ${report.totals.totalPcs.toLocaleString()}   |   Weight: ${report.totals.totalKg.toLocaleString()} kg   |   Scrap: ${report.totals.totalScrapKg.toLocaleString()} kg   |   Wastage: ${report.totals.totalWastageKg.toLocaleString()} kg`,
-    13,
-    37.2
+    `Dispatch Entries: ${report.dispatchRows.length} (${report.totals.totalPcs.toLocaleString()} pcs / ${report.totals.totalKg.toLocaleString()} kg)   |   Prod Logs: ${report.shiftProductionRows.length}   |   QC Logs: ${report.qcRows.length}`,
+    12.5,
+    37.5
   );
   doc.text(
-    `Total Prod Hrs: ${report.totals.totalProdHrs.toLocaleString()} h   |   Total Downtime Hrs: ${report.totals.totalDownHrs.toLocaleString()} h`,
-    13,
-    41.3
+    `Fuel Issued: ${report.totals.totalFuelIssuedLitres} L (GRN +${report.totals.totalFuelGrnLitres} L)   |   Generator: ${report.totals.totalGenRuns} runs (${report.totals.totalGenRunHm} / ${report.totals.totalGenFuelLitres} L)`,
+    12.5,
+    41.5
+  );
+  doc.text(
+    `Power Cuts: ${report.totals.totalPowerCutEvents} incident(s)   |   Total Power Cut Duration: ${report.totals.totalPowerCutHm} (${report.totals.totalPowerCutHrs} hrs)`,
+    12.5,
+    45.5
   );
 
-  // Table 1: Product SUMIF
-  doc.setFontSize(8.5);
+  // Section 1: Dispatch & Production Entries
+  doc.setFontSize(8.2);
   doc.setTextColor(15, 47, 102);
-  doc.text('1. PRODUCTION SUMMARY BY PRODUCT (SUMIF)', 10, 49);
-
-  const prodBody = report.productRows.map((p) => [
-    p.product,
-    String(p.prodPcs),
-    String(p.prodKg),
-    String(p.scrapKg),
-    String(p.wastageKg),
-  ]);
-  prodBody.push([
-    'TOTAL PRODUCTION',
-    String(report.totals.totalPcs),
-    String(report.totals.totalKg),
-    String(report.totals.totalScrapKg),
-    String(report.totals.totalWastageKg),
-  ]);
+  doc.text(`1. DISPATCH & PRODUCTION ENTRIES (${report.dispatchRows.length})`, 10, 52.5);
 
   autoTable(doc, {
-    startY: 51,
+    startY: 54.5,
     margin: { left: 10, right: 10 },
-    head: [['Product Type', 'Prod. Pcs', 'Prod Kg', 'Scrap (kg)', 'Wastage (kg)']],
-    body: prodBody,
-    styles: { fontSize: 6.7, cellPadding: 1.6, textColor: [15, 23, 42] },
+    head: [['Date', 'Shift', 'Machine', 'Product', 'Trolley', 'Qty', 'Wt (kg)', 'Scrap', 'Status']],
+    body:
+      report.dispatchRows.length > 0
+        ? [
+            ...report.dispatchRows.map((d) => [
+              d.date,
+              d.shift,
+              normalizeMachineName(d.machine),
+              d.product,
+              d.trolleyNo,
+              String(d.qty),
+              String(d.kg),
+              String(d.scrapKg),
+              d.status,
+            ]),
+            [
+              'TOTAL',
+              '',
+              `${report.dispatchRows.length} entries`,
+              '',
+              '',
+              String(report.totals.totalPcs),
+              String(report.totals.totalKg),
+              String(report.totals.totalScrapKg),
+              '',
+            ],
+          ]
+        : [['No dispatch entries in selected date range.', '', '', '', '', '', '', '', '']],
+    styles: { fontSize: 6.1, cellPadding: 1.3, textColor: [15, 23, 42] },
     headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
-      0: { cellWidth: 94 },
-      1: { cellWidth: 24, halign: 'right' },
-      2: { cellWidth: 26, halign: 'right' },
-      3: { cellWidth: 23, halign: 'right' },
-      4: { cellWidth: 23, halign: 'right' },
-    },
-    didParseCell: (hookData) => {
-      if (hookData.row.index === prodBody.length - 1) {
-        hookData.cell.styles.fontStyle = 'bold';
-        hookData.cell.styles.fillColor = [226, 232, 240];
-      }
+      0: { cellWidth: 19 },
+      1: { cellWidth: 11 },
+      2: { cellWidth: 28 },
+      3: { cellWidth: 48 },
+      4: { cellWidth: 16 },
+      5: { cellWidth: 16, halign: 'right' },
+      6: { cellWidth: 18, halign: 'right' },
+      7: { cellWidth: 15, halign: 'right' },
+      8: { cellWidth: 19 },
     },
   });
 
-  // Table 2: Machine SUMIF + Run/Down Hours
-  let nextY = ((doc as any).lastAutoTable?.finalY || 120) + 7;
-  if (nextY > 235) {
+  // Section 2: Production Logs
+  doc.addPage();
+  drawLgplastPdfHeader(
+    doc,
+    'PRODUCTION LOGS (PRODUCTION LOGGER)',
+    `${report.fromDate} TO ${report.toDate}  •  ENTRIES: ${report.shiftProductionRows.length}`,
+    [`From: ${report.fromDate}`, `To: ${report.toDate}`, `Rows: ${report.shiftProductionRows.length}`]
+  );
+  autoTable(doc, {
+    startY: 36,
+    margin: { left: 10, right: 10 },
+    head: [['Date', 'Shift', 'Machine', 'Product', 'Qty', 'Prod (kg)', 'Scrap', 'Wastage', 'Operator']],
+    body:
+      report.shiftProductionRows.length > 0
+        ? report.shiftProductionRows.map((r) => [
+            r.date,
+            r.shift,
+            normalizeMachineName(r.machine),
+            r.product,
+            `${r.qty ?? r.prodKg} ${r.unit || 'kg'}`,
+            String(r.prodKg),
+            String(r.scrapKg),
+            String(r.wastageCdKg),
+            r.operator,
+          ])
+        : [['No production log entries in selected date range.', '', '', '', '', '', '', '', '']],
+    styles: { fontSize: 6.2, cellPadding: 1.4, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { cellWidth: 19 },
+      1: { cellWidth: 11 },
+      2: { cellWidth: 27 },
+      3: { cellWidth: 42 },
+      4: { cellWidth: 21, halign: 'right' },
+      5: { cellWidth: 16, halign: 'right' },
+      6: { cellWidth: 14, halign: 'right' },
+      7: { cellWidth: 15, halign: 'right' },
+      8: { cellWidth: 25 },
+    },
+  });
+
+  // Section 3: QC Logs
+  doc.addPage();
+  drawLgplastPdfHeader(
+    doc,
+    'QC INSPECTION LOGS',
+    `${report.fromDate} TO ${report.toDate}  •  CHECKS: ${report.qcRows.length}`,
+    [`From: ${report.fromDate}`, `To: ${report.toDate}`, `Checks: ${report.qcRows.length}`]
+  );
+  autoTable(doc, {
+    startY: 36,
+    margin: { left: 10, right: 10 },
+    head: [['Date', 'Shift', 'Time', 'Machine', 'Product', 'PPH', 'Wt', 'Drop', 'Fit', 'Col']],
+    body:
+      report.qcRows.length > 0
+        ? report.qcRows.map((q) => [
+            q.date,
+            q.shift,
+            q.time || '-',
+            normalizeMachineName(q.machine),
+            q.product,
+            String(q.pph ?? '-'),
+            String(q.weightKg ?? '-'),
+            q.dropBend,
+            q.fitting,
+            q.color,
+          ])
+        : [['No QC logs in selected date range.', '', '', '', '', '', '', '', '', '']],
+    styles: { fontSize: 6.2, cellPadding: 1.4, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { cellWidth: 19 },
+      1: { cellWidth: 11 },
+      2: { cellWidth: 13 },
+      3: { cellWidth: 28 },
+      4: { cellWidth: 47 },
+      5: { cellWidth: 14, halign: 'right' },
+      6: { cellWidth: 14, halign: 'right' },
+      7: { cellWidth: 15, halign: 'center' },
+      8: { cellWidth: 15, halign: 'center' },
+      9: { cellWidth: 14, halign: 'center' },
+    },
+  });
+
+  // Section 4: Fuel Logs
+  doc.addPage();
+  drawLgplastPdfHeader(
+    doc,
+    'FUEL USAGE & BOWSER GRN LOGS',
+    `${report.fromDate} TO ${report.toDate}  •  ISSUED: ${report.totals.totalFuelIssuedLitres} L  |  GRN: +${report.totals.totalFuelGrnLitres} L`,
+    [
+      `Issues: ${report.fuelIssueRows.length}`,
+      `GRNs: ${report.fuelGrnRows.length}`,
+      `By: ${preparedBy}`,
+    ]
+  );
+  autoTable(doc, {
+    startY: 36,
+    margin: { left: 10, right: 10 },
+    head: [['Voucher', 'Date', 'Vehicle / Equipment', 'Driver', 'Req (L)', 'Taken (L)', 'Status']],
+    body:
+      report.fuelIssueRows.length > 0
+        ? report.fuelIssueRows.map((f) => [
+            f.requestNo,
+            f.date,
+            f.vehicleOrForklift,
+            f.driverName,
+            String(f.requestedLitres),
+            String(f.actualLitresTaken ?? '-'),
+            f.status,
+          ])
+        : [['No Diesel Fuel Issue entries in selected date range.', '', '', '', '', '', '']],
+    styles: { fontSize: 6.3, cellPadding: 1.4, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+  });
+
+  const afterFuelY = ((doc as any).lastAutoTable?.finalY || 100) + 8;
+  autoTable(doc, {
+    startY: afterFuelY,
+    margin: { left: 10, right: 10 },
+    head: [['GRN No', 'Date', 'Supplier', 'Added (+L)', 'Tank After (L)']],
+    body:
+      report.fuelGrnRows.length > 0
+        ? report.fuelGrnRows.map((g) => [
+            g.grnNo,
+            g.date,
+            g.supplierName,
+            `+${g.litresAdded}`,
+            String(g.tankLevelAfter),
+          ])
+        : [['No Fuel GRN receipts in selected date range.', '', '', '', '']],
+    styles: { fontSize: 6.3, cellPadding: 1.4, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+  });
+
+  // Section 5 & 6: Generator Logs + Power Cut Logs
+  doc.addPage();
+  drawLgplastPdfHeader(
+    doc,
+    'GENERATOR & POWER CUT LOGS',
+    `${report.fromDate} TO ${report.toDate}  •  TOTAL POWER CUT: ${report.totals.totalPowerCutHm}  •  GEN FUEL: ${report.totals.totalGenFuelLitres} L`,
+    [
+      `Gen Runs: ${report.generatorRows.length}`,
+      `Power Cuts: ${report.powerCutRows.length}`,
+      `By: ${preparedBy}`,
+    ]
+  );
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.setTextColor(15, 47, 102);
+  doc.text('5. GENERATOR START UP & STOP LOGS (LITRES)', 10, 38);
+
+  const genBody =
+    report.generatorRows.length > 0
+      ? [
+          ...report.generatorRows.map((g) => [
+            g.date,
+            g.shift,
+            fmtTm(g.startTime),
+            `${g.startFuelLitres} L`,
+            g.stopTime ? fmtTm(g.stopTime) : 'RUNNING',
+            typeof g.stopFuelLitres === 'number' ? `${g.stopFuelLitres} L` : '-',
+            typeof g.fuelUsedLitres === 'number' ? `${g.fuelUsedLitres} L` : '-',
+            fmtHm(g.durationMinutes),
+            g.operatorName,
+          ]),
+          [
+            'TOTAL',
+            '',
+            '',
+            '',
+            '',
+            '',
+            `${report.totals.totalGenFuelLitres} L`,
+            report.totals.totalGenRunHm,
+            `${report.totals.totalGenRuns} run(s)`,
+          ],
+        ]
+      : [['No Generator Start/Stop records in selected date range.', '', '', '', '', '', '', '', '']];
+
+  autoTable(doc, {
+    startY: 40,
+    margin: { left: 10, right: 10 },
+    head: [['Date', 'Shift', 'Start', 'Fuel In (L)', 'Stop', 'Fuel Out (L)', 'Used (L)', 'Duration', 'Operator']],
+    body: genBody,
+    styles: { fontSize: 6.2, cellPadding: 1.4, textColor: [15, 23, 42] },
+    headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
+  });
+
+  let nextPwrY = ((doc as any).lastAutoTable?.finalY || 120) + 9;
+  if (nextPwrY > 235) {
     doc.addPage();
-    nextY = 16;
+    nextPwrY = 16;
   }
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8.2);
   doc.setTextColor(15, 47, 102);
-  doc.text('2. PRODUCTION & HOURS PER MACHINE (SUMIF + DOWNTIME LOG)', 10, nextY);
+  doc.text('6. PLANT POWER CUT LOGS (TOTAL POWER CUT DURATION)', 10, nextPwrY);
 
-  const machBody = report.machineRows.map((m) => [
-    normalizeMachineName(m.machine),
-    String(m.prodPcs),
-    String(m.prodKg),
-    String(m.scrapKg),
-    String(m.wastageKg),
-    String(m.prodHrs),
-    String(m.downHrs),
-  ]);
-  machBody.push([
-    'TOTAL PRODUCTION',
-    String(report.totals.totalPcs),
-    String(report.totals.totalKg),
-    String(report.totals.totalScrapKg),
-    String(report.totals.totalWastageKg),
-    String(report.totals.totalProdHrs),
-    String(report.totals.totalDownHrs),
-  ]);
+  const pwrBody =
+    report.powerCutRows.length > 0
+      ? [
+          ...report.powerCutRows.map((p) => [
+            p.date,
+            p.shift,
+            fmtTm(p.timeOut),
+            p.timeBack ? fmtTm(p.timeBack) : 'ONGOING',
+            fmtHm(p.durationMinutes),
+            p.affectedArea,
+            p.generatorUsed ? 'Yes' : 'No',
+            p.status,
+            p.reason || '-',
+          ]),
+          [
+            'TOTAL POWER CUT DURATION',
+            '',
+            '',
+            '',
+            `${report.totals.totalPowerCutHm} (${report.totals.totalPowerCutHrs}h)`,
+            `${report.totals.totalPowerCutEvents} incident(s)`,
+            '',
+            '',
+            '',
+          ],
+        ]
+      : [['No Power Cut records in selected date range.', '', '', '', '', '', '', '', '']];
 
   autoTable(doc, {
-    startY: nextY + 2,
+    startY: nextPwrY + 2,
     margin: { left: 10, right: 10 },
-    head: [['Machine', 'Prod Pcs', 'Weight (kg)', 'Scrap', 'Wastage', 'Prod Hrs', 'Down Hrs']],
-    body: machBody,
-    styles: { fontSize: 6.7, cellPadding: 1.6, textColor: [15, 23, 42] },
+    head: [['Date', 'Shift', 'Time Out', 'Time Back', 'Duration', 'Affected Area', 'Gen?', 'Status', 'Notes']],
+    body: pwrBody,
+    styles: { fontSize: 6.2, cellPadding: 1.4, textColor: [15, 23, 42] },
     headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
-    alternateRowStyles: { fillColor: [248, 250, 252] },
-    columnStyles: {
-      0: { cellWidth: 52 },
-      1: { cellWidth: 22, halign: 'right' },
-      2: { cellWidth: 26, halign: 'right' },
-      3: { cellWidth: 22, halign: 'right' },
-      4: { cellWidth: 22, halign: 'right' },
-      5: { cellWidth: 23, halign: 'right' },
-      6: { cellWidth: 23, halign: 'right' },
-    },
-    didParseCell: (hookData) => {
-      if (hookData.row.index === machBody.length - 1) {
-        hookData.cell.styles.fontStyle = 'bold';
-        hookData.cell.styles.fillColor = [226, 232, 240];
-      }
-    },
   });
-
-  // Table 3 & 4 on fresh Portrait Page(s) if present
-  if (report.shiftProductionRows.length > 0) {
-    doc.addPage();
-    drawLgplastPdfHeader(
-      doc,
-      'PRODUCTION PER SHIFT (LOGGER)',
-      `${report.fromDate} TO ${report.toDate}  •  RECORDS: ${report.shiftProductionRows.length}`,
-      [`Period: ${report.fromDate}`, `To: ${report.toDate}`, `Rows: ${report.shiftProductionRows.length}`]
-    );
-    autoTable(doc, {
-      startY: 36,
-      margin: { left: 10, right: 10 },
-      head: [['Date', 'Shift', 'Machine', 'Product', 'Qty', 'Scrap', 'Cut Dust', 'Operator']],
-      body: report.shiftProductionRows.map((r) => [
-        r.date,
-        r.shift,
-        normalizeMachineName(r.machine),
-        r.product,
-        `${r.qty ?? r.prodKg} ${r.unit || 'kg'}`,
-        String(r.scrapKg),
-        String(r.wastageCdKg),
-        r.operator,
-      ]),
-      styles: { fontSize: 6.4, cellPadding: 1.5, textColor: [15, 23, 42] },
-      headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
-      columnStyles: {
-        0: { cellWidth: 20 },
-        1: { cellWidth: 13 },
-        2: { cellWidth: 28 },
-        3: { cellWidth: 42 },
-        4: { cellWidth: 24, halign: 'right' },
-        5: { cellWidth: 16, halign: 'right' },
-        6: { cellWidth: 17, halign: 'right' },
-        7: { cellWidth: 30 },
-      },
-    });
-  }
-
-  if (report.qcRows.length > 0) {
-    doc.addPage();
-    drawLgplastPdfHeader(
-      doc,
-      'QC INSPECTION REPORT (PERIOD)',
-      `${report.fromDate} TO ${report.toDate}  •  CHECKS: ${report.qcRows.length}`,
-      [`Period: ${report.fromDate}`, `To: ${report.toDate}`, `Checks: ${report.qcRows.length}`]
-    );
-    autoTable(doc, {
-      startY: 36,
-      margin: { left: 10, right: 10 },
-      head: [['Date', 'Shift', 'Time', 'Machine', 'Product', 'PPH', 'Wt', 'Drop', 'Fit', 'Col']],
-      body: report.qcRows.map((q) => [
-        q.date,
-        q.shift,
-        q.time || '-',
-        normalizeMachineName(q.machine),
-        q.product,
-        String(q.pph ?? '-'),
-        String(q.weightKg ?? '-'),
-        q.dropBend,
-        q.fitting,
-        q.color,
-      ]),
-      styles: { fontSize: 6.4, cellPadding: 1.5, textColor: [15, 23, 42] },
-      headStyles: { fillColor: [15, 47, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
-      columnStyles: {
-        0: { cellWidth: 20 },
-        1: { cellWidth: 12 },
-        2: { cellWidth: 13 },
-        3: { cellWidth: 28 },
-        4: { cellWidth: 45 },
-        5: { cellWidth: 14, halign: 'right' },
-        6: { cellWidth: 14, halign: 'right' },
-        7: { cellWidth: 15, halign: 'center' },
-        8: { cellWidth: 15, halign: 'center' },
-        9: { cellWidth: 14, halign: 'center' },
-      },
-    });
-  }
 
   saveFileBlob(`LGPLAST_Production_Report_${report.fromDate}_to_${report.toDate}.pdf`, doc.output('blob'));
 }
+
 

@@ -3,14 +3,20 @@ import * as XLSX from 'xlsx';
 import historicalDispatchRaw from '../data/historicalDispatch.json';
 import { db, ensureFirebaseAuth } from '../firebase';
 import {
+  DieselFuelRequest,
+  DieselGrnRecord,
+  DieselTankConfig,
   DispatchEntry,
   DowntimeEntry,
+  GeneratorLog,
   normalizeMachineName,
+  PowerCutLog,
   ProductionPlanItem,
   SopProductionRecord,
   SopQcRecord,
 } from '../types';
 import { getSummaryRows, r2, saveFileBlob, ymd } from './downtimeCalc';
+import { calcDurationMinutes, extractTimeLabel, formatDurationHm } from './powerGenStore';
 import { getLinkedScrapAndWastageForDispatch } from './sopStore';
 
 // ======================================================
@@ -795,42 +801,68 @@ export async function parseDispatchAndPlanningWorkbook(
 }
 
 // ======================================================
-// UNIFIED PERIOD PRODUCTION REPORT (SUMIF STRUCTURE)
-// Matches Nov_2026__08-15__W1_PRODUCTION_REPORT structure
+// UNIFIED PERIOD PRODUCTION & UTILITIES REPORT (ALL ENTRIES, NO SUMIF)
+// Filtered strictly by fromDate..toDate across 6 dedicated sheets:
+// 1. Dispatch & Production Entries
+// 2. Production Logs (Production Logger)
+// 3. QC Logs
+// 4. Fuel Logs (Issues + GRNs + Tank Summary)
+// 5. Generator Start Up & Stop Logs (Litres)
+// 6. Power Cut Logs (+ Total Power Cut Duration)
 // ======================================================
-export interface ProductSumRow {
-  product: string;
-  prodPcs: number;
-  prodKg: number;
-  scrapKg: number;
-  wastageKg: number;
-}
-
-export interface MachineSumRow {
+export interface DispatchReportEntryRow {
+  id: string;
+  date: string;
+  shift: 'Day' | 'Night';
   machine: string;
-  prodPcs: number;
-  prodKg: number;
+  product: string;
+  trolleyNo: string;
+  qty: number;
+  unitWeightKg?: number;
+  kg: number;
   scrapKg: number;
   wastageKg: number;
-  prodHrs: number;
-  downHrs: number;
+  operatorName: string;
+  assistantName: string;
+  casualAssistantName?: string;
+  shiftInChargeName: string;
+  whPersonnelName?: string;
+  hodConfirmedByName?: string;
+  status: string;
+  isHistoricalBackground?: boolean;
 }
 
 export interface UnifiedProductionReportData {
   fromDate: string;
   toDate: string;
   totals: {
+    totalDispatchEntries: number;
     totalPcs: number;
     totalKg: number;
     totalScrapKg: number;
     totalWastageKg: number;
     totalProdHrs: number;
     totalDownHrs: number;
+    totalFuelIssuedLitres: number;
+    totalFuelGrnLitres: number;
+    totalGenRuns: number;
+    totalGenRunMins: number;
+    totalGenRunHrs: number;
+    totalGenRunHm: string;
+    totalGenFuelLitres: number;
+    totalPowerCutEvents: number;
+    totalPowerCutMins: number;
+    totalPowerCutHrs: number;
+    totalPowerCutHm: string;
   };
-  productRows: ProductSumRow[];
-  machineRows: MachineSumRow[];
+  dispatchRows: DispatchReportEntryRow[];
   shiftProductionRows: SopProductionRecord[];
   qcRows: SopQcRecord[];
+  fuelIssueRows: DieselFuelRequest[];
+  fuelGrnRows: DieselGrnRecord[];
+  dieselTank: DieselTankConfig | null;
+  generatorRows: GeneratorLog[];
+  powerCutRows: PowerCutLog[];
 }
 
 export function buildUnifiedProductionReport(params: {
@@ -841,6 +873,11 @@ export function buildUnifiedProductionReport(params: {
   allDispatches: DispatchEntry[];
   sopProductionLogs: SopProductionRecord[];
   sopQcChecks: SopQcRecord[];
+  dieselRequests?: DieselFuelRequest[];
+  dieselGrns?: DieselGrnRecord[];
+  dieselTank?: DieselTankConfig | null;
+  generatorLogs?: GeneratorLog[];
+  powerCutLogs?: PowerCutLog[];
 }): UnifiedProductionReportData {
   const {
     fromDate,
@@ -850,43 +887,37 @@ export function buildUnifiedProductionReport(params: {
     allDispatches,
     sopProductionLogs,
     sopQcChecks,
+    dieselRequests = [],
+    dieselGrns = [],
+    dieselTank = null,
+    generatorLogs = [],
+    powerCutLogs = [],
   } = params;
 
-  const periodDispatches = allDispatches.filter(
-    (e) => e.date >= fromDate && e.date <= toDate
-  );
   const shiftProductionRows = sopProductionLogs
     .filter((p) => p.date >= fromDate && p.date <= toDate)
     .map((p) => ({ ...p, machine: normalizeMachineName(p.machine) }))
     .sort((a, b) => (a.date + a.shift).localeCompare(b.date + b.shift));
+
   const qcRows = sopQcChecks
     .filter((q) => q.date >= fromDate && q.date <= toDate)
     .map((q) => ({ ...q, machine: normalizeMachineName(q.machine) }))
     .sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
 
-  // 1. Machine hours from Machine Downtime Log records via getSummaryRows
-  const downtimeSummary = getSummaryRows(fromDate, toDate, machines, downtimeEntries);
-  const hoursByMachine: Record<string, { prodHrs: number; downHrs: number }> = {};
-  downtimeSummary.structured.forEach((row) => {
-    const mKey = normalizeMachineName(row.machine).toUpperCase();
-    hoursByMachine[mKey] = { prodHrs: row.runHrs, downHrs: row.downHrs };
-  });
+  const periodDispatches = allDispatches
+    .filter((e) => e.date >= fromDate && e.date <= toDate)
+    .sort((a, b) => (a.date + (a.shiftSubmittedAt || '')).localeCompare(b.date + (b.shiftSubmittedAt || '')));
 
-  // 2. Aggregate Product SUMIF & Machine SUMIF from dispatch movements + linked scrap/wastage
-  const prodMap: Record<string, ProductSumRow> = {};
-  const machMap: Record<string, MachineSumRow> = {};
   const usedProdLogKeys = new Set<string>();
-
-  periodDispatches.forEach((e) => {
+  const dispatchRows: DispatchReportEntryRow[] = periodDispatches.map((e) => {
     const qty = typeof e.whReceivedQty === 'number' ? e.whReceivedQty : e.recordedQty || 0;
     const kg =
       typeof e.unitWeightKg === 'number' && e.unitWeightKg > 0
         ? qty * e.unitWeightKg
         : e.totalWeightKg || 0;
-
-    const linked = getLinkedScrapAndWastageForDispatch(e, shiftProductionRows);
     const machNorm = normalizeMachineName(e.machine) || 'Unassigned';
     const matchKey = `${e.date}|${e.shift}|${machNorm.toUpperCase()}`;
+    const linked = getLinkedScrapAndWastageForDispatch(e, shiftProductionRows);
 
     let rowScrap = e.backgroundScrapKg || 0;
     let rowWastage = e.backgroundWastageKg || 0;
@@ -896,260 +927,325 @@ export function buildUnifiedProductionReport(params: {
       usedProdLogKeys.add(matchKey);
     }
 
-    const pKey = (e.product || 'UNSPECIFIED').trim().toUpperCase();
-    if (!prodMap[pKey]) {
-      prodMap[pKey] = {
-        product: (e.product || 'UNSPECIFIED').trim(),
-        prodPcs: 0,
-        prodKg: 0,
-        scrapKg: 0,
-        wastageKg: 0,
-      };
-    }
-    prodMap[pKey].prodPcs += qty;
-    prodMap[pKey].prodKg += kg;
-    prodMap[pKey].scrapKg += rowScrap;
-    prodMap[pKey].wastageKg += rowWastage;
-
-    const mKey = machNorm.toUpperCase();
-    if (!machMap[mKey]) {
-      const hrs = hoursByMachine[mKey] || { prodHrs: 0, downHrs: 0 };
-      machMap[mKey] = {
-        machine: machNorm,
-        prodPcs: 0,
-        prodKg: 0,
-        scrapKg: 0,
-        wastageKg: 0,
-        prodHrs: hrs.prodHrs,
-        downHrs: hrs.downHrs,
-      };
-    }
-    machMap[mKey].prodPcs += qty;
-    machMap[mKey].prodKg += kg;
-    machMap[mKey].scrapKg += rowScrap;
-    machMap[mKey].wastageKg += rowWastage;
+    return {
+      id: e.id,
+      date: e.date,
+      shift: e.shift,
+      machine: machNorm,
+      product: (e.product || 'UNSPECIFIED').trim(),
+      trolleyNo: e.trolleyNo || '-',
+      qty: r2(qty),
+      unitWeightKg: e.unitWeightKg,
+      kg: r2(kg),
+      scrapKg: r2(rowScrap),
+      wastageKg: r2(rowWastage),
+      operatorName: e.operatorName || '-',
+      assistantName: e.assistantName || '-',
+      casualAssistantName: e.casualAssistantName,
+      shiftInChargeName: e.shiftInChargeName || '-',
+      whPersonnelName: e.whPersonnelName,
+      hodConfirmedByName: e.hodConfirmedByName,
+      status: e.isHistoricalBackground ? 'CONFIRMED (HIST)' : e.status,
+      isHistoricalBackground: e.isHistoricalBackground,
+    };
   });
 
-  // Also include unlinked Production Logger scrap/wastage & downtime hours for machines active in downtime log
-  shiftProductionRows.forEach((p) => {
-    const machNorm = normalizeMachineName(p.machine) || 'Unassigned';
-    const matchKey = `${p.date}|${p.shift}|${machNorm.toUpperCase()}`;
-    if (usedProdLogKeys.has(matchKey)) return;
+  const downtimeSummary = getSummaryRows(fromDate, toDate, machines, downtimeEntries);
+  const totalProdHrs = r2(downtimeSummary.structured.reduce((s, r) => s + r.runHrs, 0));
+  const totalDownHrs = r2(downtimeSummary.structured.reduce((s, r) => s + r.downHrs, 0));
 
-    const mKey = machNorm.toUpperCase();
-    if (!machMap[mKey]) {
-      const hrs = hoursByMachine[mKey] || { prodHrs: 0, downHrs: 0 };
-      machMap[mKey] = {
-        machine: machNorm,
-        prodPcs: 0,
-        prodKg: 0,
-        scrapKg: 0,
-        wastageKg: 0,
-        prodHrs: hrs.prodHrs,
-        downHrs: hrs.downHrs,
-      };
-    }
-    machMap[mKey].scrapKg += p.scrapKg || 0;
-    machMap[mKey].wastageKg += p.wastageCdKg || 0;
+  const fuelIssueRows = dieselRequests
+    .filter((f) => f.date >= fromDate && f.date <= toDate)
+    .sort((a, b) => (a.date + a.requestedAt).localeCompare(b.date + b.requestedAt));
 
-    const pKey = (p.product || 'UNSPECIFIED').trim().toUpperCase();
-    if (!prodMap[pKey]) {
-      prodMap[pKey] = {
-        product: (p.product || 'UNSPECIFIED').trim(),
-        prodPcs: 0,
-        prodKg: 0,
-        scrapKg: 0,
-        wastageKg: 0,
-      };
-    }
-    prodMap[pKey].scrapKg += p.scrapKg || 0;
-    prodMap[pKey].wastageKg += p.wastageCdKg || 0;
-  });
+  const fuelGrnRows = dieselGrns
+    .filter((g) => g.date >= fromDate && g.date <= toDate)
+    .sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt));
 
-  // Ensure every plant machine with downtime/running logs appears in the Machine table too
-  machines.forEach((m) => {
-    const norm = normalizeMachineName(m);
-    const mKey = norm.toUpperCase();
-    if (!machMap[mKey]) {
-      const hrs = hoursByMachine[mKey] || { prodHrs: 0, downHrs: 0 };
-      if (hrs.prodHrs > 0 || hrs.downHrs > 0) {
-        machMap[mKey] = {
-          machine: norm,
-          prodPcs: 0,
-          prodKg: 0,
-          scrapKg: 0,
-          wastageKg: 0,
-          prodHrs: hrs.prodHrs,
-          downHrs: hrs.downHrs,
-        };
-      }
-    }
-  });
+  const generatorRows = generatorLogs
+    .filter((g) => g.date >= fromDate && g.date <= toDate)
+    .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
 
-  const productRows = Object.values(prodMap)
-    .map((r) => ({
-      ...r,
-      prodPcs: r2(r.prodPcs),
-      prodKg: r2(r.prodKg),
-      scrapKg: r2(r.scrapKg),
-      wastageKg: r2(r.wastageKg),
-    }))
-    .sort((a, b) => b.prodKg - a.prodKg);
+  const powerCutRows = powerCutLogs
+    .filter((p) => p.date >= fromDate && p.date <= toDate)
+    .sort((a, b) => (a.date + a.timeOut).localeCompare(b.date + b.timeOut));
 
-  const machineRows = Object.values(machMap)
-    .map((r) => ({
-      ...r,
-      prodPcs: r2(r.prodPcs),
-      prodKg: r2(r.prodKg),
-      scrapKg: r2(r.scrapKg),
-      wastageKg: r2(r.wastageKg),
-      prodHrs: r2(r.prodHrs),
-      downHrs: r2(r.downHrs),
-    }))
-    .sort((a, b) => b.prodKg - a.prodKg || b.prodHrs - a.prodHrs);
+  const totalPcs = r2(dispatchRows.reduce((s, r) => s + r.qty, 0));
+  const totalKg = r2(dispatchRows.reduce((s, r) => s + r.kg, 0));
+  const totalScrapKg = r2(
+    dispatchRows.reduce((s, r) => s + r.scrapKg, 0) +
+      shiftProductionRows
+        .filter((p) => !usedProdLogKeys.has(`${p.date}|${p.shift}|${normalizeMachineName(p.machine).toUpperCase()}`))
+        .reduce((s, p) => s + (p.scrapKg || 0), 0)
+  );
+  const totalWastageKg = r2(
+    dispatchRows.reduce((s, r) => s + r.wastageKg, 0) +
+      shiftProductionRows
+        .filter((p) => !usedProdLogKeys.has(`${p.date}|${p.shift}|${normalizeMachineName(p.machine).toUpperCase()}`))
+        .reduce((s, p) => s + (p.wastageCdKg || 0), 0)
+  );
 
-  const totalPcs = r2(productRows.reduce((s, r) => s + r.prodPcs, 0));
-  const totalKg = r2(productRows.reduce((s, r) => s + r.prodKg, 0));
-  const totalScrapKg = r2(machineRows.reduce((s, r) => s + r.scrapKg, 0));
-  const totalWastageKg = r2(machineRows.reduce((s, r) => s + r.wastageKg, 0));
-  const totalProdHrs = r2(machineRows.reduce((s, r) => s + r.prodHrs, 0));
-  const totalDownHrs = r2(machineRows.reduce((s, r) => s + r.downHrs, 0));
+  const totalFuelIssuedLitres = r2(
+    fuelIssueRows
+      .filter((r) => r.status === 'DISPENSED')
+      .reduce((s, r) => s + (r.actualLitresTaken || 0), 0)
+  );
+  const totalFuelGrnLitres = r2(
+    fuelGrnRows.reduce((s, g) => s + (g.litresAdded || 0), 0)
+  );
+
+  const totalGenRunMins = generatorRows.reduce(
+    (s, g) => s + (g.status === 'STOPPED' ? g.durationMinutes : calcDurationMinutes(g.startTime)),
+    0
+  );
+  const totalGenFuelLitres = r2(
+    generatorRows.reduce((s, g) => s + (g.fuelUsedLitres || 0), 0)
+  );
+
+  const totalPowerCutMins = powerCutRows.reduce(
+    (s, p) => s + (p.status === 'RESTORED' ? p.durationMinutes : calcDurationMinutes(p.timeOut)),
+    0
+  );
 
   return {
     fromDate,
     toDate,
     totals: {
+      totalDispatchEntries: dispatchRows.length,
       totalPcs,
       totalKg,
       totalScrapKg,
       totalWastageKg,
       totalProdHrs,
       totalDownHrs,
+      totalFuelIssuedLitres,
+      totalFuelGrnLitres,
+      totalGenRuns: generatorRows.length,
+      totalGenRunMins,
+      totalGenRunHrs: r2(totalGenRunMins / 60),
+      totalGenRunHm: formatDurationHm(totalGenRunMins),
+      totalGenFuelLitres,
+      totalPowerCutEvents: powerCutRows.length,
+      totalPowerCutMins,
+      totalPowerCutHrs: r2(totalPowerCutMins / 60),
+      totalPowerCutHm: formatDurationHm(totalPowerCutMins),
     },
-    productRows,
-    machineRows,
+    dispatchRows,
     shiftProductionRows,
     qcRows,
+    fuelIssueRows,
+    fuelGrnRows,
+    dieselTank,
+    generatorRows,
+    powerCutRows,
   };
 }
 
-export function exportUnifiedProductionReportExcel(report: UnifiedProductionReportData) {
+export function exportUnifiedProductionReportExcel(
+  report: UnifiedProductionReportData,
+  isAdmin = false
+) {
+  if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
 
-  // Sheet 1: Exact Side-by-Side / Stacked Multi-Section Summary matching W1 PRODUCTION REPORT
-  const maxLen = Math.max(report.productRows.length, report.machineRows.length);
-  const aoaSummary: (string | number)[][] = [
-    ['LG PLAST — UNIFIED PERIOD PRODUCTION REPORT (SUMIF SUMMARY)'],
+  // Sheet 1: All Dispatch & Production Entries in Period (No SUMIF)
+  const aoaDispatch: (string | number)[][] = [
+    ['LG PLAST — PERIOD DISPATCH & PRODUCTION ENTRIES REPORT'],
     [`Period: ${report.fromDate} to ${report.toDate}`, `Generated: ${new Date().toLocaleString()}`],
-    [
-      'PRODUCT (PCS)',
-      report.totals.totalPcs,
-      'WEIGHT (KG)',
-      report.totals.totalKg,
-      'SCRAP (KG)',
-      report.totals.totalScrapKg,
-      'WASTAGE (KG)',
-      report.totals.totalWastageKg,
-      'TOTAL PRODUCTION HRS',
-      report.totals.totalProdHrs,
-      'TOTAL DOWNTIME HRS',
-      report.totals.totalDownHrs,
-    ],
     [],
     [
-      'PRODUCT TYPE',
-      'PROD. PCS',
-      'PROD KG',
-      'SCRAP',
-      'WASTAGE',
-      '',
-      'MACHINE',
-      'PRODUCTION',
-      'WEIGHT',
-      'SCRAP',
-      'WASTAGE',
-      'PROD HRS',
-      'DOWNTIME HRS',
+      'Date',
+      'Shift',
+      'Machine',
+      'Product Dispatched',
+      'Trolley No',
+      'Qty (Pcs)',
+      'Unit Wt (kg)',
+      'Total Wt (kg)',
+      'Scrap (kg)',
+      'Wastage (kg)',
+      'Operator',
+      'Assistant',
+      'Casual Assisted',
+      'Shift In Charge',
+      'WH Personnel',
+      'HOD Confirmed',
+      'Status',
     ],
   ];
 
-  for (let i = 0; i < maxLen; i++) {
-    const p = report.productRows[i];
-    const m = report.machineRows[i];
-    aoaSummary.push([
-      p ? p.product : '',
-      p ? p.prodPcs : '',
-      p ? p.prodKg : '',
-      p ? p.scrapKg : '',
-      p ? p.wastageKg : '',
+  if (report.dispatchRows.length === 0) {
+    aoaDispatch.push([`No dispatch/production entries found between ${report.fromDate} and ${report.toDate}.`]);
+  } else {
+    report.dispatchRows.forEach((d) => {
+      aoaDispatch.push([
+        d.date,
+        d.shift,
+        d.machine,
+        d.product,
+        d.trolleyNo,
+        d.qty,
+        d.unitWeightKg ?? '',
+        d.kg,
+        d.scrapKg,
+        d.wastageKg,
+        d.operatorName,
+        d.assistantName,
+        d.casualAssistantName || '',
+        d.shiftInChargeName,
+        d.whPersonnelName || '',
+        d.hodConfirmedByName || '',
+        d.status,
+      ]);
+    });
+    aoaDispatch.push([
+      'TOTALS (PERIOD)',
       '',
-      m ? m.machine : '',
-      m ? m.prodPcs : '',
-      m ? m.prodKg : '',
-      m ? m.scrapKg : '',
-      m ? m.wastageKg : '',
-      m ? m.prodHrs : '',
-      m ? m.downHrs : '',
+      `${report.dispatchRows.length} entry(s)`,
+      '',
+      '',
+      report.totals.totalPcs,
+      '',
+      report.totals.totalKg,
+      report.totals.totalScrapKg,
+      report.totals.totalWastageKg,
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
     ]);
   }
-
-  aoaSummary.push([
-    'TOTAL PRODUCTION',
-    report.totals.totalPcs,
-    report.totals.totalKg,
-    report.totals.totalScrapKg,
-    report.totals.totalWastageKg,
-    '',
-    'TOTAL PRODUCTION',
-    report.totals.totalPcs,
-    report.totals.totalKg,
-    report.totals.totalScrapKg,
-    report.totals.totalWastageKg,
-    report.totals.totalProdHrs,
-    report.totals.totalDownHrs,
-  ]);
-
-  const wsSummary = XLSX.utils.aoa_to_sheet(aoaSummary);
-  wsSummary['!cols'] = [
-    { wch: 36 },
+  const wsDispatch = XLSX.utils.aoa_to_sheet(aoaDispatch);
+  wsDispatch['!cols'] = [
     { wch: 12 },
-    { wch: 14 },
+    { wch: 9 },
+    { wch: 22 },
+    { wch: 34 },
+    { wch: 13 },
+    { wch: 11 },
     { wch: 12 },
+    { wch: 13 },
+    { wch: 11 },
     { wch: 12 },
-    { wch: 3 },
-    { wch: 24 },
-    { wch: 12 },
-    { wch: 14 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 14 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 16 },
   ];
-  XLSX.utils.book_append_sheet(wb, wsSummary, 'Production Summary');
+  XLSX.utils.book_append_sheet(wb, wsDispatch, 'Dispatch & Prod Entries');
 
-  // Sheet 2: Production Per Shift (Production Logger)
-  const shiftRowsJson =
-    report.shiftProductionRows.length > 0
-      ? report.shiftProductionRows.map((r) => ({
-          Date: r.date,
-          Shift: r.shift,
-          Department: r.dept,
-          Machine: normalizeMachineName(r.machine),
-          Operator: r.operator,
-          Assistant: r.assistant,
-          Product: r.product,
-          Quantity: r.qty ?? r.prodKg,
-          Unit: r.unit || 'KG',
-          'Prod (kg)': r.prodKg,
-          Scrap: r.scrapKg,
-          'Cut Dust': r.wastageCdKg,
-          'Reported By': r.reporter || r.loggedBy,
-        }))
-      : [{ Notice: `No Production Logger records found between ${report.fromDate} and ${report.toDate}.` }];
-  const wsShift = XLSX.utils.json_to_sheet(shiftRowsJson);
-  XLSX.utils.book_append_sheet(wb, wsShift, 'Production Per Shift');
+  // Sheet 2: Production Logs (All entries from Production Logger in Period)
+  const aoaProdLogs: (string | number)[][] = [
+    ['LG PLAST — PERIOD PRODUCTION LOGS (PRODUCTION LOGGER ENTRIES)'],
+    [`Period: ${report.fromDate} to ${report.toDate}`, `Total Entries: ${report.shiftProductionRows.length}`],
+    [],
+    [
+      'Date',
+      'Shift',
+      'Time Slot',
+      'Department',
+      'Machine',
+      'Operator',
+      'Assistant',
+      'Product',
+      'Quantity',
+      'Unit',
+      'Prod (kg)',
+      'Scrap (kg)',
+      'Cut Dust / Wastage (kg)',
+      'Running Output/hr',
+      'Running Weight',
+      'Breakdown Start',
+      'Breakdown End',
+      'Breakdown Reason',
+      'Reported By',
+    ],
+  ];
+  if (report.shiftProductionRows.length === 0) {
+    aoaProdLogs.push([`No Production Logger entries found between ${report.fromDate} and ${report.toDate}.`]);
+  } else {
+    let sumProdKg = 0;
+    let sumScrap = 0;
+    let sumWastage = 0;
+    report.shiftProductionRows.forEach((r) => {
+      sumProdKg += r.prodKg || 0;
+      sumScrap += r.scrapKg || 0;
+      sumWastage += r.wastageCdKg || 0;
+      aoaProdLogs.push([
+        r.date,
+        r.shift,
+        r.timeSlot || '',
+        r.dept,
+        normalizeMachineName(r.machine),
+        r.operator,
+        r.assistant,
+        r.product,
+        r.qty ?? r.prodKg,
+        r.unit || 'KG',
+        r.prodKg,
+        r.scrapKg,
+        r.wastageCdKg,
+        r.outputPerHour || '',
+        r.runningWeight || '',
+        r.bdStart || '',
+        r.bdEnd || '',
+        r.bdReason || '',
+        r.reporter || r.loggedBy,
+      ]);
+    });
+    aoaProdLogs.push([
+      'TOTALS (PERIOD)',
+      '',
+      '',
+      '',
+      `${report.shiftProductionRows.length} log(s)`,
+      '',
+      '',
+      '',
+      '',
+      '',
+      r2(sumProdKg),
+      r2(sumScrap),
+      r2(sumWastage),
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+    ]);
+  }
+  const wsShift = XLSX.utils.aoa_to_sheet(aoaProdLogs);
+  wsShift['!cols'] = [
+    { wch: 12 },
+    { wch: 9 },
+    { wch: 13 },
+    { wch: 14 },
+    { wch: 22 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 30 },
+    { wch: 11 },
+    { wch: 12 },
+    { wch: 11 },
+    { wch: 11 },
+    { wch: 18 },
+    { wch: 16 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 24 },
+    { wch: 18 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsShift, 'Production Logs');
 
-  // Sheet 3: QC Report (QC Logger)
+  // Sheet 3: QC Logs (All entries from QC Logger in Period)
   const qcRowsJson =
     report.qcRows.length > 0
       ? report.qcRows.map((q) => ({
@@ -1161,17 +1257,331 @@ export function exportUnifiedProductionReportExcel(report: UnifiedProductionRepo
           Product: q.product,
           PPH: q.pph ?? '',
           'Kgs/Hr': q.kgsPerHr ?? '',
-          Weight: q.weightKg ?? '',
+          'Weight (kg)': q.weightKg ?? '',
           'Drop/Bend': q.dropBend,
           Fitting: q.fitting,
           Colour: q.color,
-          OD: q.od ?? '',
-          ID: q.idMm ?? '',
+          'OD (mm)': q.od ?? '',
+          'ID (mm)': q.idMm ?? '',
           'Reported By': q.reporter || q.loggedBy,
         }))
-      : [{ Notice: `No QC Inspection records found between ${report.fromDate} and ${report.toDate}.` }];
+      : [{ Notice: `No QC Inspection entries found between ${report.fromDate} and ${report.toDate}.` }];
   const wsQc = XLSX.utils.json_to_sheet(qcRowsJson);
-  XLSX.utils.book_append_sheet(wb, wsQc, 'QC Report');
+  XLSX.utils.book_append_sheet(wb, wsQc, 'QC Logs');
+
+  // Sheet 4: Fuel Logs (Issues + GRN Replenishments + Bowser Level)
+  const aoaFuel: (string | number)[][] = [
+    ['LG PLAST — DIESEL BOWSER FUEL LOGS (ISSUES & GRN RECEIPTS)'],
+    [`Period: ${report.fromDate} to ${report.toDate}`],
+    [
+      'Current Tank Level (L)',
+      report.dieselTank?.currentLevelLitres ?? '',
+      'Tank Capacity (L)',
+      report.dieselTank?.capacityLitres ?? '',
+      'Period Issued (L)',
+      report.totals.totalFuelIssuedLitres,
+      'Period GRN Added (L)',
+      report.totals.totalFuelGrnLitres,
+    ],
+    [],
+    ['SECTION A: DIESEL FUEL REQUEST & DISPENSE ENTRIES'],
+    [
+      'Voucher No',
+      'Date',
+      'Shift',
+      'Vehicle / Equipment',
+      'Driver Name',
+      'Requested (L)',
+      'HOD Approved (L)',
+      'HOD Approved By',
+      '1st Meter Reading',
+      '2nd Meter Reading',
+      'Actual Taken (L)',
+      'Tank Before (L)',
+      'Tank After (L)',
+      'Purpose',
+      'Status',
+    ],
+  ];
+  if (report.fuelIssueRows.length === 0) {
+    aoaFuel.push([`No Diesel Fuel Request/Issue entries between ${report.fromDate} and ${report.toDate}.`]);
+  } else {
+    report.fuelIssueRows.forEach((f) => {
+      aoaFuel.push([
+        f.requestNo,
+        f.date,
+        f.shift,
+        f.vehicleOrForklift,
+        f.driverName,
+        f.requestedLitres,
+        f.hodApprovedLitres ?? '',
+        f.hodApprovedBy || 'Pending',
+        f.firstMeterReading ?? '',
+        f.secondMeterReading ?? '',
+        f.actualLitresTaken ?? '',
+        f.tankLevelBefore ?? '',
+        f.tankLevelAfter ?? '',
+        f.purpose || '',
+        f.status,
+      ]);
+    });
+    aoaFuel.push([
+      'TOTAL FUEL ISSUED (PERIOD)',
+      '',
+      '',
+      '',
+      `${report.fuelIssueRows.length} voucher(s)`,
+      '',
+      '',
+      '',
+      '',
+      '',
+      report.totals.totalFuelIssuedLitres,
+      '',
+      '',
+      '',
+      '',
+    ]);
+  }
+
+  aoaFuel.push([]);
+  aoaFuel.push(['SECTION B: BULK DIESEL BOWSER GRN RECEIPTS']);
+  aoaFuel.push([
+    'GRN No',
+    'Date',
+    'Shift',
+    'Supplier',
+    'Delivery Note No',
+    'LG PLAST Receiver',
+    '1st Meter',
+    '2nd Meter',
+    'Litres Added (+L)',
+    'Tank Before (L)',
+    'Tank After (L)',
+    'Unit Price',
+    'Total Cost',
+    'Notes',
+  ]);
+  if (report.fuelGrnRows.length === 0) {
+    aoaFuel.push([`No Fuel GRN deliveries recorded between ${report.fromDate} and ${report.toDate}.`]);
+  } else {
+    report.fuelGrnRows.forEach((g) => {
+      aoaFuel.push([
+        g.grnNo,
+        g.date,
+        g.shift,
+        g.supplierName,
+        g.deliveryNoteNo || '',
+        g.receiverName,
+        g.firstMeterReading,
+        g.secondMeterReading,
+        g.litresAdded,
+        g.tankLevelBefore,
+        g.tankLevelAfter,
+        g.unitPrice ?? '',
+        g.totalCost ?? '',
+        g.notes || '',
+      ]);
+    });
+    aoaFuel.push([
+      'TOTAL GRN RECEIVED (PERIOD)',
+      '',
+      '',
+      `${report.fuelGrnRows.length} GRN(s)`,
+      '',
+      '',
+      '',
+      '',
+      report.totals.totalFuelGrnLitres,
+      '',
+      '',
+      '',
+      '',
+      '',
+    ]);
+  }
+  const wsFuel = XLSX.utils.aoa_to_sheet(aoaFuel);
+  wsFuel['!cols'] = [
+    { wch: 22 },
+    { wch: 12 },
+    { wch: 9 },
+    { wch: 24 },
+    { wch: 20 },
+    { wch: 15 },
+    { wch: 15 },
+    { wch: 18 },
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 15 },
+    { wch: 15 },
+    { wch: 15 },
+    { wch: 24 },
+    { wch: 20 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsFuel, 'Fuel Logs');
+
+  // Sheet 5: Generator Start Up & Stop Logs (Litres)
+  const aoaGen: (string | number)[][] = [
+    ['LG PLAST — GENERATOR START UP & STOP LOGS (FUEL IN LITRES)'],
+    [`Period: ${report.fromDate} to ${report.toDate}`, `Total Fuel Used: ${report.totals.totalGenFuelLitres} L`],
+    [],
+    [
+      'Date',
+      'Shift',
+      'Time Started',
+      'Start Fuel Level (L)',
+      'Time Stopped',
+      'Stop Fuel Level (L)',
+      'Fuel Used (L)',
+      'Run Duration (mins)',
+      'Run Duration (hrs)',
+      'Run Duration (H:M)',
+      'Status',
+      'Linked Power Cut / Reason',
+      'Started By',
+      'Stopped By',
+      'Notes',
+    ],
+  ];
+  if (report.generatorRows.length === 0) {
+    aoaGen.push([`No Generator Start/Stop logs found between ${report.fromDate} and ${report.toDate}.`]);
+  } else {
+    report.generatorRows.forEach((g) => {
+      const mins = g.status === 'STOPPED' ? g.durationMinutes : calcDurationMinutes(g.startTime);
+      aoaGen.push([
+        g.date,
+        g.shift,
+        extractTimeLabel(g.startTime),
+        r2(g.startFuelLitres),
+        g.stopTime ? extractTimeLabel(g.stopTime) : 'RUNNING',
+        typeof g.stopFuelLitres === 'number' ? r2(g.stopFuelLitres) : '',
+        typeof g.fuelUsedLitres === 'number' ? r2(g.fuelUsedLitres) : '',
+        mins,
+        r2(mins / 60),
+        formatDurationHm(mins),
+        g.status,
+        g.reason || '',
+        g.operatorName,
+        g.stoppedByName || '',
+        g.notes || '',
+      ]);
+    });
+    aoaGen.push([
+      'TOTAL GENERATOR SUMMARY',
+      '',
+      '',
+      '',
+      '',
+      '',
+      report.totals.totalGenFuelLitres,
+      report.totals.totalGenRunMins,
+      report.totals.totalGenRunHrs,
+      report.totals.totalGenRunHm,
+      `${report.totals.totalGenRuns} run(s)`,
+      '',
+      '',
+      '',
+      '',
+    ]);
+  }
+  const wsGen = XLSX.utils.aoa_to_sheet(aoaGen);
+  wsGen['!cols'] = [
+    { wch: 12 },
+    { wch: 9 },
+    { wch: 13 },
+    { wch: 18 },
+    { wch: 13 },
+    { wch: 18 },
+    { wch: 14 },
+    { wch: 17 },
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 12 },
+    { wch: 28 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 26 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsGen, 'Generator Logs');
+
+  // Sheet 6: Power Cut Logs (+ Total Power Cut Duration)
+  const aoaPower: (string | number)[][] = [
+    ['LG PLAST — PLANT POWER CUT LOGS & TOTAL OUTAGE DURATION'],
+    [
+      `Period: ${report.fromDate} to ${report.toDate}`,
+      `Total Power Cut Duration: ${report.totals.totalPowerCutHm} (${report.totals.totalPowerCutHrs} hrs)`,
+    ],
+    [],
+    [
+      'Date',
+      'Shift',
+      'Time Out',
+      'Time Back',
+      'Duration (mins)',
+      'Duration (hrs)',
+      'Duration (H:M)',
+      'Affected Area',
+      'Generator Started?',
+      'Status',
+      'Reason / Notes',
+      'Logged By',
+      'Restored By',
+    ],
+  ];
+  if (report.powerCutRows.length === 0) {
+    aoaPower.push([`No Power Cut logs found between ${report.fromDate} and ${report.toDate}.`]);
+  } else {
+    report.powerCutRows.forEach((p) => {
+      const mins = p.status === 'RESTORED' ? p.durationMinutes : calcDurationMinutes(p.timeOut);
+      aoaPower.push([
+        p.date,
+        p.shift,
+        extractTimeLabel(p.timeOut),
+        p.timeBack ? extractTimeLabel(p.timeBack) : 'ONGOING',
+        mins,
+        r2(mins / 60),
+        formatDurationHm(mins),
+        p.affectedArea,
+        p.generatorUsed ? 'Yes' : 'No',
+        p.status,
+        p.reason || '',
+        p.loggedBy,
+        p.restoredBy || '',
+      ]);
+    });
+    aoaPower.push([
+      'TOTAL POWER CUT DURATION',
+      '',
+      '',
+      '',
+      report.totals.totalPowerCutMins,
+      report.totals.totalPowerCutHrs,
+      report.totals.totalPowerCutHm,
+      `${report.totals.totalPowerCutEvents} incident(s)`,
+      '',
+      '',
+      '',
+      '',
+      '',
+    ]);
+  }
+  const wsPower = XLSX.utils.aoa_to_sheet(aoaPower);
+  wsPower['!cols'] = [
+    { wch: 12 },
+    { wch: 9 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 15 },
+    { wch: 14 },
+    { wch: 15 },
+    { wch: 24 },
+    { wch: 18 },
+    { wch: 12 },
+    { wch: 30 },
+    { wch: 18 },
+    { wch: 18 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsPower, 'Power Cut Logs');
 
   const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   saveFileBlob(
@@ -1179,3 +1589,4 @@ export function exportUnifiedProductionReportExcel(report: UnifiedProductionRepo
     new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   );
 }
+

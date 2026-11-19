@@ -30,6 +30,7 @@ import {
   Volume2,
   VolumeX,
   X,
+  Zap,
 } from 'lucide-react';
 import { AttendanceLoggerApp } from './components/AttendanceLoggerApp';
 import { AuthModal } from './components/AuthModal';
@@ -44,6 +45,7 @@ import { LoginGate } from './components/LoginGate';
 import { MachineStatusBoard } from './components/MachineStatusBoard';
 import { PeriodProductionReportView } from './components/PeriodProductionReportView';
 import { PeriodReportView } from './components/PeriodReportView';
+import { PowerCutAndGeneratorView } from './components/PowerCutAndGeneratorView';
 import { ProductionPlanningView } from './components/ProductionPlanningView';
 import { PWAInstallModal } from './components/PWAInstallModal';
 import {
@@ -56,6 +58,7 @@ import { SignedCertificateModal } from './components/SignedCertificateModal';
 import { SopFloorApkView } from './components/SopFloorApkView';
 import { SopPopupAlert, SopSubTab } from './components/SopPopupAlert';
 import { SyncAndMachinesView } from './components/SyncAndMachinesView';
+import polymerWatermarkImg from './assets/images/polymer_3d_watermark_1795109115357.jpg';
 import {
   auth,
   ensureFirebaseAuth,
@@ -137,6 +140,15 @@ import {
   subscribeSopScrap,
 } from './services/sopStore';
 import {
+  flushPendingPowerGenData,
+  getLocalGeneratorLogs,
+  getLocalPowerCutLogs,
+  pollGeneratorLogs,
+  pollPowerCutLogs,
+  subscribeGeneratorLogs,
+  subscribePowerCutLogs,
+} from './services/powerGenStore';
+import {
   ensurePushServiceWorkerRegistration,
   evaluateAndDispatchPushNotifications,
   getPushPermissionStatus,
@@ -153,7 +165,9 @@ import {
   DieselTankConfig,
   DispatchEntry,
   DowntimeEntry,
+  GeneratorLog,
   PlantUserAccount,
+  PowerCutLog,
   ProductionPlanItem,
   SopMixingReport,
   SopProductionRecord,
@@ -170,6 +184,7 @@ export type DowntimeTab =
   | 'dispatch'
   | 'prod_planning'
   | 'diesel'
+  | 'power_gen'
   | 'sop_overview'
   | 'sop_production'
   | 'sop_qc'
@@ -220,9 +235,12 @@ export default function App() {
   const [activeDowntimeTab, setActiveDowntimeTab] = useState<DowntimeTab>('status');
   const [requestedDispatchStage, setRequestedDispatchStage] = useState<DispatchSubStage | null>(null);
   const [requestedDieselSubTab, setRequestedDieselSubTab] = useState<DieselSubTab | null>(null);
+  const [requestedPowerGenSubTab, setRequestedPowerGenSubTab] = useState<'power_cuts' | 'generator'>(
+    'power_cuts'
+  );
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Core Data State - Machinery Downtime, 3-Stage Dispatch, Planning, Diesel Bowser, SOP Floor APK & Attendance
+  // Core Data State - Machinery Downtime, Dispatch, Planning, Diesel, Power Cut & Generator, SOP Floor & Attendance
   const [machines, setMachines] = useState<string[]>(getActiveMachines());
   const [entries, setEntries] = useState<DowntimeEntry[]>(getStoredEntries());
   const [dispatchEntries, setDispatchEntries] = useState<DispatchEntry[]>([]);
@@ -237,6 +255,8 @@ export default function App() {
     getLocalDieselRequests()
   );
   const [dieselGrns, setDieselGrns] = useState<DieselGrnRecord[]>(() => getLocalDieselGrns());
+  const [powerCutLogs, setPowerCutLogs] = useState<PowerCutLog[]>(() => getLocalPowerCutLogs());
+  const [generatorLogs, setGeneratorLogs] = useState<GeneratorLog[]>(() => getLocalGeneratorLogs());
   const [sopProductionLogs, setSopProductionLogs] = useState<SopProductionRecord[]>(() =>
     getLocalSopProductionLogs()
   );
@@ -294,103 +314,49 @@ export default function App() {
   const [pushClockTick, setPushClockTick] = useState<number>(() => Date.now());
   const [pushTestStatus, setPushTestStatus] = useState<string | null>(null);
 
-  // Wider display side interface colour theme (all colours selector — pure Tailwind gradients)
+  // Formal Display Background Theme Selector (Default: Formal White; changeable via dropdown only)
   const DISPLAY_THEMES = [
     {
-      id: 'royal',
-      label: 'Royal Blue',
-      swatchClass: 'bg-blue-600',
-      bgClass: 'bg-gradient-to-br from-[#0f2f66] via-[#14408a] to-[#0a214a]',
+      id: 'white',
+      label: 'Formal White',
+      swatchClass: 'bg-slate-50 border-slate-300',
+      bgClass: 'bg-[#F8FAFC] text-slate-900',
+      isDarkCanvas: false,
     },
     {
-      id: 'sky',
-      label: 'Sky Blue',
-      swatchClass: 'bg-sky-500',
-      bgClass: 'bg-gradient-to-br from-sky-950 via-sky-800 to-slate-950',
+      id: 'cream',
+      label: 'Formal Cream',
+      swatchClass: 'bg-[#FAF6EE] border-amber-200',
+      bgClass: 'bg-[#FAF6EE] text-slate-900',
+      isDarkCanvas: false,
     },
     {
-      id: 'teal',
-      label: 'Ocean Teal',
-      swatchClass: 'bg-teal-500',
-      bgClass: 'bg-gradient-to-br from-teal-950 via-teal-800 to-slate-950',
+      id: 'pearl',
+      label: 'Executive Pearl',
+      swatchClass: 'bg-slate-100 border-slate-300',
+      bgClass: 'bg-[#F1F5F9] text-slate-900',
+      isDarkCanvas: false,
     },
     {
-      id: 'cyan',
-      label: 'Cyan Surge',
-      swatchClass: 'bg-cyan-500',
-      bgClass: 'bg-gradient-to-br from-cyan-950 via-cyan-800 to-slate-950',
+      id: 'linen',
+      label: 'Warm Linen',
+      swatchClass: 'bg-[#F5F1E8] border-stone-300',
+      bgClass: 'bg-[#F5F1E8] text-slate-900',
+      isDarkCanvas: false,
     },
     {
-      id: 'emerald',
-      label: 'Emerald Green',
-      swatchClass: 'bg-emerald-500',
-      bgClass: 'bg-gradient-to-br from-emerald-950 via-emerald-800 to-slate-950',
+      id: 'navy',
+      label: 'Executive Navy',
+      swatchClass: 'bg-[#0F1E36] border-slate-600',
+      bgClass: 'bg-[#0F172A] text-slate-100',
+      isDarkCanvas: true,
     },
     {
-      id: 'green',
-      label: 'Forest Green',
-      swatchClass: 'bg-green-600',
-      bgClass: 'bg-gradient-to-br from-green-950 via-green-800 to-slate-950',
-    },
-    {
-      id: 'lime',
-      label: 'Lime Olive',
-      swatchClass: 'bg-lime-500',
-      bgClass: 'bg-gradient-to-br from-lime-950 via-lime-900 to-slate-950',
-    },
-    {
-      id: 'indigo',
-      label: 'Cobalt Indigo',
-      swatchClass: 'bg-indigo-500',
-      bgClass: 'bg-gradient-to-br from-indigo-950 via-indigo-800 to-slate-950',
-    },
-    {
-      id: 'violet',
-      label: 'Deep Violet',
-      swatchClass: 'bg-violet-500',
-      bgClass: 'bg-gradient-to-br from-violet-950 via-violet-800 to-slate-950',
-    },
-    {
-      id: 'purple',
-      label: 'Royal Purple',
-      swatchClass: 'bg-purple-500',
-      bgClass: 'bg-gradient-to-br from-purple-950 via-purple-800 to-slate-950',
-    },
-    {
-      id: 'fuchsia',
-      label: 'Magenta Fuchsia',
-      swatchClass: 'bg-fuchsia-500',
-      bgClass: 'bg-gradient-to-br from-fuchsia-950 via-fuchsia-900 to-slate-950',
-    },
-    {
-      id: 'rose',
-      label: 'Crimson Rose',
-      swatchClass: 'bg-rose-500',
-      bgClass: 'bg-gradient-to-br from-rose-950 via-rose-800 to-slate-950',
-    },
-    {
-      id: 'red',
-      label: 'Cardinal Red',
-      swatchClass: 'bg-red-600',
-      bgClass: 'bg-gradient-to-br from-red-950 via-red-800 to-slate-950',
-    },
-    {
-      id: 'orange',
-      label: 'Burnt Orange',
-      swatchClass: 'bg-orange-500',
-      bgClass: 'bg-gradient-to-br from-orange-950 via-orange-800 to-slate-950',
-    },
-    {
-      id: 'amber',
-      label: 'Gold Amber',
-      swatchClass: 'bg-amber-500',
-      bgClass: 'bg-gradient-to-br from-amber-950 via-amber-800 to-slate-950',
-    },
-    {
-      id: 'slate',
+      id: 'charcoal',
       label: 'Charcoal Slate',
-      swatchClass: 'bg-slate-500',
-      bgClass: 'bg-gradient-to-br from-slate-950 via-slate-800 to-zinc-950',
+      swatchClass: 'bg-zinc-900 border-zinc-600',
+      bgClass: 'bg-[#18181B] text-slate-100',
+      isDarkCanvas: true,
     },
   ] as const;
 
@@ -399,7 +365,7 @@ export default function App() {
       const saved = localStorage.getItem('lgplast_display_theme');
       if (saved && DISPLAY_THEMES.some((t) => t.id === saved)) return saved;
     } catch {}
-    return 'royal';
+    return 'white';
   });
 
   // Always-Live Screen Wake Lock & Heartbeat state
@@ -549,6 +515,12 @@ export default function App() {
     const unsubDieselGrns = subscribeDieselGrns((grns) => {
       setDieselGrns(grns);
     });
+    const unsubPowerCuts = subscribePowerCutLogs((rows) => {
+      setPowerCutLogs(rows);
+    });
+    const unsubGenLogs = subscribeGeneratorLogs((rows) => {
+      setGeneratorLogs(rows);
+    });
 
     const pendingTimer = setInterval(() => {
       setPendingSyncCount(getPendingSyncQueue().length);
@@ -572,6 +544,7 @@ export default function App() {
           flushPendingUploadedBackgroundDispatches().catch(() => 0),
           flushPendingProductionPlans().catch(() => 0),
           flushPendingDieselData().catch(() => 0),
+          flushPendingPowerGenData().catch(() => 0),
         ]);
         const [
           updated,
@@ -586,6 +559,8 @@ export default function App() {
           updatedTank,
           updatedDieselReqs,
           updatedDieselGrns,
+          updatedPowerCuts,
+          updatedGenLogs,
         ] = await Promise.all([
           pollFirebaseEntries(),
           pollDispatchEntries().catch(() => null),
@@ -599,6 +574,8 @@ export default function App() {
           pollDieselTank().catch(() => null),
           pollDieselRequests().catch(() => null),
           pollDieselGrns().catch(() => null),
+          pollPowerCutLogs().catch(() => null),
+          pollGeneratorLogs().catch(() => null),
         ]);
         setEntries(updated);
         if (updatedDispatches) setDispatchEntries(updatedDispatches);
@@ -612,6 +589,8 @@ export default function App() {
         if (updatedTank) setDieselTank(updatedTank);
         if (updatedDieselReqs) setDieselRequests(updatedDieselReqs);
         if (updatedDieselGrns) setDieselGrns(updatedDieselGrns);
+        if (updatedPowerCuts) setPowerCutLogs(updatedPowerCuts);
+        if (updatedGenLogs) setGeneratorLogs(updatedGenLogs);
         setPendingSyncCount(getPendingSyncQueue().length);
         setLastLiveHeartbeat(
           new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -651,6 +630,8 @@ export default function App() {
       unsubTank();
       unsubDieselReqs();
       unsubDieselGrns();
+      unsubPowerCuts();
+      unsubGenLogs();
       clearInterval(pendingTimer);
       clearInterval(keepAliveTimer);
       document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
@@ -885,6 +866,7 @@ export default function App() {
         'dispatch',
         'prod_planning',
         'diesel',
+        'power_gen',
         'sop_overview',
         'sop_production',
         'sop_qc',
@@ -1043,6 +1025,9 @@ export default function App() {
       tabs.push('prod_planning');
     }
     if (hasDieselAccess) tabs.push('diesel');
+    if (isAdmin || effectivePermissions.logDowntime || effectivePermissions.viewMachineStatus) {
+      tabs.push('power_gen');
+    }
     if (isAdmin || effectivePermissions.sopFloorAccess) {
       tabs.push('sop_overview', 'sop_production', 'sop_qc');
     }
@@ -1059,8 +1044,7 @@ export default function App() {
       tabs.push('sop_handover');
     }
     if (effectivePermissions.attendanceLogger || isAdmin) tabs.push('attendance');
-    if (isAdmin || effectivePermissions.productionReportAccess) tabs.push('prod_report');
-    if (isAdmin) tabs.push('rep');
+    if (isAdmin) tabs.push('prod_report', 'rep');
     if (isAdmin || effectivePermissions.manageMachinesAndSync) tabs.push('data');
     return tabs;
   }, [effectivePermissions, hasDispatchAccess, hasDieselAccess, isAdmin]);
@@ -1167,6 +1151,7 @@ export default function App() {
         flushPendingUploadedBackgroundDispatches().catch(() => 0),
         flushPendingProductionPlans().catch(() => 0),
         flushPendingDieselData().catch(() => 0),
+        flushPendingPowerGenData().catch(() => 0),
       ]);
       const [
         updated,
@@ -1181,6 +1166,8 @@ export default function App() {
         updatedTank,
         updatedDieselReqs,
         updatedDieselGrns,
+        updatedPowerCuts,
+        updatedGenLogs,
       ] = await Promise.all([
         pollFirebaseEntries(),
         pollDispatchEntries().catch(() => dispatchEntries),
@@ -1194,6 +1181,8 @@ export default function App() {
         pollDieselTank().catch(() => dieselTank),
         pollDieselRequests().catch(() => dieselRequests),
         pollDieselGrns().catch(() => dieselGrns),
+        pollPowerCutLogs().catch(() => powerCutLogs),
+        pollGeneratorLogs().catch(() => generatorLogs),
       ]);
       setEntries(updated);
       setDispatchEntries(updatedDispatches);
@@ -1207,6 +1196,8 @@ export default function App() {
       setDieselTank(updatedTank);
       setDieselRequests(updatedDieselReqs);
       setDieselGrns(updatedDieselGrns);
+      setPowerCutLogs(updatedPowerCuts);
+      setGeneratorLogs(updatedGenLogs);
       setPendingSyncCount(getPendingSyncQueue().length);
       const err = getLastSyncError();
       setSyncErrorMsg(err);
@@ -1227,12 +1218,12 @@ export default function App() {
   // 1. Initial Auth Loading Screen
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center text-slate-400 gap-3 font-sans">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse">
-          <ShieldCheck className="h-7 w-7" />
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center text-slate-700 gap-3 font-sans">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#0F1E36] text-white shadow-sm">
+          <ShieldCheck className="h-6 w-6" />
         </div>
-        <div className="text-xs font-semibold tracking-wider text-slate-300">
-          INITIALIZING PLANTOPS SYSTEM...
+        <div className="text-xs font-semibold tracking-wider text-slate-600 uppercase">
+          Initializing LG PLAST Operations System
         </div>
       </div>
     );
@@ -1306,6 +1297,14 @@ export default function App() {
       icon: <Fuel className="h-4 w-4" />,
       badge: dieselBadgeCount,
     },
+    {
+      id: 'power_gen',
+      group: '1. Live Floor Operations',
+      label: 'Power Cut & Generator',
+      subtitle: 'Outages · Gen Fuel (L)',
+      icon: <Zap className="h-4 w-4" />,
+      badge: powerCutLogs.filter((p) => p.status === 'ONGOING' || !p.timeBack).length,
+    },
     // Priority 2: Daily SOP Floor APKs
     {
       id: 'sop_production',
@@ -1377,9 +1376,9 @@ export default function App() {
       id: 'prod_report',
       group: '3. Reports, Attendance & Admin',
       label: 'Production Report',
-      subtitle: 'SUMIF · Shift · QC · Hrs',
+      subtitle: 'All Entries · 6-Sheet Excel',
       icon: <BarChart3 className="h-4 w-4" />,
-      adminTag: isAdmin,
+      adminTag: true,
     },
     {
       id: 'rep',
@@ -1406,42 +1405,42 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Compact Top Utility Header */}
-      <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/95 backdrop-blur-md">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans">
+      {/* Formal Corporate Header */}
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-md">
         <div className="flex items-center justify-between px-3 py-2 sm:px-5">
           <div className="flex items-center gap-2.5">
             {/* Mobile Left Drawer Toggle */}
             <button
               type="button"
               onClick={() => setMobileMenuOpen((v) => !v)}
-              className="md:hidden rounded-xl border border-slate-700 bg-slate-900 p-2 text-slate-200 hover:bg-slate-800"
+              className="md:hidden rounded-lg border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-100"
               aria-label="Toggle navigation menu"
             >
               {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
             </button>
 
-            <LgplastLogo size="md" showSubtitle={false} />
+            <LgplastLogo size="md" variant="light" showSubtitle={false} />
 
-            <div className="border-l border-slate-800 pl-2.5">
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm sm:text-base font-black tracking-tight text-white">
+            <div className="border-l border-slate-200 pl-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-sm sm:text-base font-bold tracking-tight text-[#0F1E36]">
                   LG PLAST
                 </span>
-                <span className="hidden sm:inline rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-extrabold text-sky-300 border border-sky-400/30">
-                  LIVE APK
+                <span className="hidden sm:inline text-xs font-medium text-slate-500">
+                  Plant Operations
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                <span className="flex items-center gap-1 font-medium">
+              <div className="flex items-center gap-2 text-[11px] text-slate-500 tabular-nums">
+                <span className="flex items-center gap-1.5 font-medium">
                   {isOnline ? (
-                    <span className="text-emerald-400 flex items-center gap-1">
-                      <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                      Always Live · {lastLiveHeartbeat}
+                    <span className="text-slate-600 flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                      Online · {lastLiveHeartbeat}
                     </span>
                   ) : (
-                    <span className="text-amber-400 flex items-center gap-1">
-                      <CloudOff className="h-3 w-3" /> Offline Cache
+                    <span className="text-amber-700 flex items-center gap-1">
+                      <CloudOff className="h-3 w-3" /> Offline Mode
                     </span>
                   )}
                 </span>
@@ -1449,25 +1448,25 @@ export default function App() {
                 {syncErrorMsg || syncStatus === 'error' ? (
                   <button
                     onClick={handleManualSyncNow}
-                    className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-bold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition"
+                    className="rounded border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-100 transition"
                     title={syncErrorMsg || syncStatusMsg}
                   >
-                    ⚠ Retry Cloud Sync
+                    Retry Sync
                   </button>
                 ) : pendingSyncCount > 0 ? (
-                  <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300 border border-amber-500/40 animate-pulse">
-                    ⚡ {pendingSyncCount} Syncing
+                  <span className="text-[10px] font-medium text-amber-700">
+                    · {pendingSyncCount} Pending Sync
                   </span>
                 ) : (
-                  <span className="hidden sm:inline rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 border border-emerald-500/30">
-                    ✓ Live Synced
+                  <span className="hidden sm:inline text-[10px] font-medium text-emerald-700">
+                    · Synced
                   </span>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Right Header Controls */}
+          {/* Right Header Utility Controls */}
           <div className="flex items-center gap-1.5 sm:gap-2">
             {actionableDispatchCount > 0 && hasDispatchAccess && (
               <button
@@ -1478,9 +1477,9 @@ export default function App() {
                     effectivePermissions.dispatchWHConfirm ? 'wh' : 'hod'
                   );
                 }}
-                className="flex items-center gap-1.5 rounded-xl border border-amber-500/50 bg-amber-500/15 px-2.5 py-1.5 text-xs font-black text-amber-300 animate-pulse hover:bg-amber-500/25 transition"
+                className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 transition tabular-nums"
               >
-                <Bell className="h-3.5 w-3.5" />
+                <Bell className="h-3.5 w-3.5 text-amber-700" />
                 <span className="hidden sm:inline">Pending Dispatch:</span>
                 <span>{actionableDispatchCount}</span>
               </button>
@@ -1494,24 +1493,24 @@ export default function App() {
                     <button
                       type="button"
                       onClick={handleTestPhonePush}
-                      className="flex items-center gap-1 rounded-xl border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1.5 text-xs font-bold text-emerald-300 transition"
-                      title="Phone push notifications active like email alerts — click to send test alert"
+                      className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-700 transition"
+                      title="Device push notifications active — click to send test alert"
                     >
-                      <BellRing className="h-3.5 w-3.5 text-emerald-400" />
+                      <BellRing className="h-3.5 w-3.5 text-emerald-700" />
                       <span className="hidden md:inline">
-                        {pushTestStatus || 'Phone Push: ON'}
+                        {pushTestStatus || 'Push Active'}
                       </span>
                     </button>
                     <button
                       type="button"
                       onClick={handleTogglePushSound}
-                      className="rounded-xl border border-slate-700 bg-slate-900 hover:bg-slate-800 p-1.5 text-slate-300 transition"
-                      title={pushSoundOn ? 'Mute alert chime' : 'Unmute alert chime'}
+                      className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-1.5 text-slate-600 transition"
+                      title={pushSoundOn ? 'Mute alert tone' : 'Unmute alert tone'}
                     >
                       {pushSoundOn ? (
-                        <Volume2 className="h-3.5 w-3.5 text-sky-400" />
+                        <Volume2 className="h-3.5 w-3.5 text-[#0F1E36]" />
                       ) : (
-                        <VolumeX className="h-3.5 w-3.5 text-slate-500" />
+                        <VolumeX className="h-3.5 w-3.5 text-slate-400" />
                       )}
                     </button>
                   </>
@@ -1519,21 +1518,21 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleEnablePhonePush}
-                    className={`flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-xs font-black transition ${
+                    className={`flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${
                       pushPermission === 'denied'
-                        ? 'border-rose-500/40 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25'
-                        : 'border-amber-400/60 bg-amber-500 text-slate-950 hover:bg-amber-400 animate-pulse'
+                        ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                        : 'border-[#0F1E36] bg-[#0F1E36] text-white hover:bg-[#193054]'
                     }`}
                     title={
                       pushPermission === 'denied'
-                        ? 'Notifications blocked in browser settings — allow notifications for this site in Chrome/Safari settings'
-                        : 'Enable live OS phone push notifications like email alerts'
+                        ? 'Notifications blocked in browser settings — allow notifications for this site'
+                        : 'Enable live device push notifications'
                     }
                   >
                     <BellRing className="h-3.5 w-3.5" />
                     <span className="hidden sm:inline">
                       {pushTestStatus ||
-                        (pushPermission === 'denied' ? 'Push Blocked' : 'Enable Push')}
+                        (pushPermission === 'denied' ? 'Alerts Blocked' : 'Enable Alerts')}
                     </span>
                   </button>
                 )}
@@ -1543,65 +1542,55 @@ export default function App() {
             <button
               onClick={handleManualSyncNow}
               disabled={isManualSyncing}
-              className="flex items-center gap-1 rounded-xl border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/20 px-2.5 py-1.5 text-xs font-semibold text-blue-300 transition"
-              title="Force immediate cloud sync"
+              className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-700 transition"
+              title="Synchronize records"
             >
-              <RefreshCw className={`h-3.5 w-3.5 text-blue-400 ${isManualSyncing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-3.5 w-3.5 text-[#0F1E36] ${isManualSyncing ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">{isManualSyncing ? 'Syncing...' : 'Sync'}</span>
             </button>
 
             <button
               onClick={handleCopyDirectLink}
-              className="flex items-center gap-1 rounded-xl border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 transition"
-              title="Copy Direct App Link"
+              className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-700 transition"
+              title="Copy Application Link"
             >
-              <Share2 className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="hidden lg:inline">{copiedLink ? 'Copied!' : 'Share Link'}</span>
+              <Share2 className="h-3.5 w-3.5 text-[#0F1E36]" />
+              <span className="hidden lg:inline">{copiedLink ? 'Link Copied' : 'Share'}</span>
             </button>
 
             {isInstallable && !isInstalled ? (
               <button
                 onClick={() => install()}
-                className="flex items-center gap-1 rounded-xl bg-sky-500 hover:bg-sky-400 px-2.5 py-1.5 text-xs font-black text-slate-950 transition shadow"
+                className="flex items-center gap-1 rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-2.5 py-1.5 text-xs font-semibold text-white transition shadow-2xs"
               >
                 <Smartphone className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Install APK</span>
+                <span className="hidden sm:inline">Install App</span>
               </button>
             ) : (
               <button
                 onClick={() => setIsInstallModalOpen(true)}
-                className="hidden sm:flex items-center gap-1 rounded-xl border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition"
+                className="hidden sm:flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
               >
-                <Smartphone className="h-3.5 w-3.5 text-sky-400" />
-                <span className="hidden lg:inline">Install APK</span>
+                <Smartphone className="h-3.5 w-3.5 text-[#0F1E36]" />
+                <span className="hidden lg:inline">Install App</span>
               </button>
             )}
 
-            <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
-              <div
-                className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold border uppercase ${
-                  isAdmin
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                    : 'bg-blue-500/20 text-blue-300 border-blue-500/40'
-                }`}
-              >
-                {isAdmin ? '★' : user.displayName?.slice(0, 1) || user.email?.slice(0, 1) || 'U'}
+            <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#0F1E36] text-xs font-semibold text-white uppercase">
+                {user.displayName?.slice(0, 1) || user.email?.slice(0, 1) || 'U'}
               </div>
               <div className="hidden sm:flex flex-col text-left">
-                <span className="text-[11px] font-bold text-slate-200 leading-tight truncate max-w-[130px]">
+                <span className="text-[11px] font-semibold text-slate-900 leading-tight truncate max-w-[130px]">
                   {user.displayName || user.email?.split('@')[0]}
                 </span>
-                <span
-                  className={`text-[9px] font-extrabold uppercase leading-none ${
-                    isAdmin ? 'text-amber-400' : 'text-emerald-400'
-                  }`}
-                >
+                <span className="text-[9px] font-medium text-slate-500 uppercase leading-none">
                   {effectiveRoleLabel}
                 </span>
               </div>
               <button
                 onClick={handleLogout}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-rose-400 transition"
+                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-rose-700 transition"
                 title="Sign Out"
               >
                 <LogOut className="h-3.5 w-3.5" />
@@ -1611,38 +1600,38 @@ export default function App() {
         </div>
       </header>
 
-      {/* RESHAPED SPLIT WORKSPACE: Left Section + 0.2cm Vertical Dividing Bar + Right Clicked View */}
+      {/* FORMAL CORPORATE WORKSPACE: Executive Navy Sidebar + 0.2cm Divider + White/Cream Polymer Watermarked Canvas */}
       <div className="flex flex-1 min-h-0 relative">
         {/* Mobile Overlay Backdrop */}
         {mobileMenuOpen && (
           <div
             onClick={() => setMobileMenuOpen(false)}
-            className="fixed inset-0 z-30 bg-slate-950/75 backdrop-blur-xs md:hidden"
+            className="fixed inset-0 z-30 bg-slate-950/60 backdrop-blur-xs md:hidden"
           />
         )}
 
-        {/* LEFT NAVIGATION PANEL (Dark Obsidian) */}
+        {/* LEFT NAVIGATION PANEL (Executive Navy) */}
         <aside
           className={`${
             mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
-          } fixed md:static inset-y-0 left-0 z-30 w-64 md:w-60 shrink-0 bg-[#070b14] flex flex-col justify-between transition-transform duration-200 pt-16 md:pt-4 pb-4 px-3 overflow-y-auto`}
+          } fixed md:static inset-y-0 left-0 z-30 w-64 md:w-60 shrink-0 bg-[#0F1E36] border-r border-[#1E3A5F] flex flex-col justify-between transition-transform duration-200 pt-16 md:pt-4 pb-4 px-3 overflow-y-auto print:hidden`}
         >
           <div className="space-y-4">
             {/* Official LG PLAST Factory Brand Card */}
-            <div className="rounded-xl border border-sky-500/35 bg-slate-900/90 p-2.5 flex items-center justify-center">
-              <LgplastLogo size="md" />
+            <div className="rounded-lg border border-white/15 bg-white p-2.5 flex items-center justify-center shadow-2xs">
+              <LgplastLogo size="md" variant="light" />
             </div>
 
             {/* Confidentiality Clearance Card */}
-            <div className="rounded-xl border border-slate-800 bg-slate-900/90 p-3 space-y-1">
+            <div className="rounded-lg border border-[#1E3A5F] bg-[#162947] p-3 space-y-1">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-300">
                   Access Clearance
                 </span>
-                <Lock className="h-3 w-3 text-sky-400" />
+                <Lock className="h-3 w-3 text-slate-300" />
               </div>
-              <div className="text-xs font-black text-white truncate">{effectiveRoleLabel}</div>
-              <div className="text-[10px] text-slate-400 truncate">{user.email}</div>
+              <div className="text-xs font-semibold text-white truncate">{effectiveRoleLabel}</div>
+              <div className="text-[10px] text-slate-300 truncate">{user.email}</div>
             </div>
 
             {/* Section Menu Buttons (Arranged by Floor Operational Importance) */}
@@ -1652,7 +1641,7 @@ export default function App() {
                 if (groupItems.length === 0) return null;
                 return (
                   <div key={groupTitle} className="space-y-1">
-                    <div className="px-2 pt-1 text-[10px] font-black uppercase tracking-wider text-sky-400/80">
+                    <div className="px-2 pt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                       {groupTitle}
                     </div>
                     {groupItems.map((item) => {
@@ -1662,32 +1651,32 @@ export default function App() {
                           key={item.id}
                           type="button"
                           onClick={() => handleSelectNavTab(item.id)}
-                          className={`w-full flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition ${
+                          className={`w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition ${
                             isActive
-                              ? 'bg-gradient-to-r from-[#0284c7] to-[#2e3192] text-white shadow-lg shadow-blue-950/50 border border-sky-400/40'
-                              : 'border border-transparent text-slate-300 hover:bg-slate-900 hover:border-slate-800 hover:text-white'
+                              ? 'bg-[#1E3A5F] text-white border border-[#3E6396] shadow-2xs'
+                              : 'border border-transparent text-slate-200 hover:bg-[#162947] hover:text-white'
                           }`}
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
                             <span
-                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-                                isActive ? 'bg-white/15 text-white' : 'bg-slate-900 text-slate-400'
+                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
+                                isActive ? 'bg-white/15 text-white' : 'bg-[#162947] text-slate-300'
                               }`}
                             >
                               {item.icon}
                             </span>
                             <div className="min-w-0">
-                              <div className="text-xs font-bold truncate flex items-center gap-1.5">
+                              <div className="text-xs font-semibold truncate flex items-center gap-1.5">
                                 <span>{item.label}</span>
                                 {item.adminTag && (
-                                  <span className="rounded bg-amber-500/20 px-1 py-0.5 text-[8px] font-black text-amber-300 border border-amber-500/40">
+                                  <span className="rounded bg-white/15 px-1 py-0.5 text-[8px] font-semibold text-slate-200 border border-white/20">
                                     ADMIN
                                   </span>
                                 )}
                               </div>
                               <div
                                 className={`text-[10px] truncate ${
-                                  isActive ? 'text-sky-100' : 'text-slate-500'
+                                  isActive ? 'text-slate-200' : 'text-slate-400'
                                 }`}
                               >
                                 {item.subtitle}
@@ -1696,7 +1685,7 @@ export default function App() {
                           </div>
 
                           {typeof item.badge === 'number' && item.badge > 0 && (
-                            <span className="shrink-0 rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-black text-white">
+                            <span className="shrink-0 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white tabular-nums">
                               {item.badge}
                             </span>
                           )}
@@ -1709,34 +1698,54 @@ export default function App() {
             </nav>
           </div>
 
-          <div className="pt-4 mt-4 border-t border-slate-800/80 px-2 text-[10px] text-slate-500 space-y-1">
-            <div className="font-semibold text-slate-400">Immutable Record Lock</div>
-            <div>All posted Downtime &amp; Dispatch logs are permanent and cannot be deleted.</div>
+          <div className="pt-4 mt-4 border-t border-[#1E3A5F] px-2 text-[10px] text-slate-400 space-y-1">
+            <div className="font-semibold text-slate-300">Audit Record Policy</div>
+            <div>Submitted production and dispatch entries are locked for compliance.</div>
           </div>
         </aside>
 
-        {/* EXACT 0.2CM VERTICAL DIVIDING BAR (LG PLAST Sky-Blue to Royal-Blue) */}
+        {/* EXACT 0.2CM VERTICAL DIVIDING BAR (Executive Navy) */}
         <div
           aria-hidden="true"
-          className="w-[0.2cm] shrink-0 bg-gradient-to-b from-[#00aeef] via-[#2563eb] to-[#2e3192] border-x border-sky-300/20 shadow-inner"
-          title="0.2cm LG PLAST Dashboard Divider"
+          className="w-[0.2cm] shrink-0 bg-gradient-to-b from-[#1E3A5F] via-[#0F1E36] to-[#1E3A5F] border-x border-[#2B4B78] print:hidden"
+          title="LG PLAST Workspace Divider"
         />
 
-        {/* RIGHT WIDER DISPLAY INTERFACE (Distinct Colored Corporate Display Surface) */}
+        {/* RIGHT WIDER DISPLAY INTERFACE (Formal White/Cream Default + Polymer Structure Watermark) */}
         <main
-          className={`flex-1 min-w-0 px-3 py-4 sm:px-6 overflow-y-auto transition-colors duration-300 ${activeDisplayTheme.bgClass}`}
+          className={`relative flex-1 min-w-0 px-3 py-4 sm:px-6 overflow-y-auto transition-colors duration-300 ${activeDisplayTheme.bgClass}`}
         >
-          <div className="mx-auto max-w-6xl space-y-4">
-            {/* Compact Display Bar: Full-Spectrum Colour Switcher + Always-Live Screen Wake Toggle */}
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-sky-400/25 bg-slate-950/45 backdrop-blur-sm px-3 py-2 text-[11px]">
-              <div className="flex flex-wrap items-center gap-2 text-sky-100 font-semibold">
-                <span className={`inline-block h-2.5 w-2.5 rounded-full ${activeDisplayTheme.swatchClass}`} />
-                <span>Display Colour:</span>
+          {/* 3D Polymer Molecular Structure Background Watermark (APK Workspace Only — Excluded from Reports) */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none fixed inset-y-0 right-0 left-0 md:left-[calc(15rem+0.2cm)] z-0 overflow-hidden select-none print:hidden"
+          >
+            <img
+              src={polymerWatermarkImg}
+              alt=""
+              referrerPolicy="no-referrer"
+              className={`h-full w-full object-cover transition-opacity duration-300 ${
+                activeDisplayTheme.isDarkCanvas
+                  ? 'opacity-[0.09] invert'
+                  : 'opacity-[0.11] mix-blend-multiply'
+              }`}
+            />
+          </div>
+
+          <div className="relative z-10 mx-auto max-w-6xl space-y-4">
+            {/* Compact Display Bar: Formal Dropdown Colour Selector Only + Screen Awake Toggle */}
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white/90 px-3.5 py-2 text-[11px] text-slate-700 shadow-2xs print:hidden">
+              <div className="flex items-center gap-2 font-medium">
+                <span className={`inline-block h-3 w-3 rounded border ${activeDisplayTheme.swatchClass}`} />
+                <label htmlFor="lgplast-theme-select" className="text-slate-600 font-semibold">
+                  Display Theme:
+                </label>
                 <select
+                  id="lgplast-theme-select"
                   aria-label="Select display background colour"
                   value={activeDisplayTheme.id}
                   onChange={(e) => handleSelectDisplayTheme(e.target.value)}
-                  className="rounded-lg border border-slate-700 bg-slate-900/90 px-2 py-0.5 text-[11px] font-bold text-white focus:border-sky-400 focus:outline-none"
+                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-900 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                 >
                   {DISPLAY_THEMES.map((theme) => (
                     <option key={theme.id} value={theme.id}>
@@ -1744,25 +1753,6 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                <div className="flex flex-wrap items-center gap-1">
-                  {DISPLAY_THEMES.map((theme) => {
-                    const selected = activeDisplayTheme.id === theme.id;
-                    return (
-                      <button
-                        key={theme.id}
-                        type="button"
-                        onClick={() => handleSelectDisplayTheme(theme.id)}
-                        title={theme.label}
-                        aria-label={`Select ${theme.label} background colour`}
-                        className={`h-4 w-4 rounded-full transition border ${theme.swatchClass} ${
-                          selected
-                            ? 'ring-2 ring-white scale-110 border-white'
-                            : 'border-white/30 opacity-80 hover:opacity-100 hover:scale-105'
-                        }`}
-                      />
-                    );
-                  })}
-                </div>
               </div>
 
               <button
@@ -1774,34 +1764,34 @@ export default function App() {
                     localStorage.setItem('lgplast_keep_awake', next ? '1' : '0');
                   } catch {}
                 }}
-                className={`rounded-lg px-2.5 py-1 text-[10px] font-bold border transition ${
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold border transition ${
                   keepAwakeEnabled
-                    ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/50'
-                    : 'bg-slate-900/70 text-slate-300 border-slate-700 hover:text-white'
+                    ? 'bg-[#0F1E36] text-white border-[#0F1E36]'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                 }`}
-                title="Prevents device screen from sleeping so dashboard stays live continuously"
+                title="Prevents device screen from sleeping so dashboard stays active continuously"
               >
                 {keepAwakeEnabled
                   ? wakeLockActive
-                    ? 'Screen Always On: ACTIVE'
-                    : 'Keep Screen On: ENABLED'
-                  : 'Keep Screen On: OFF'}
+                    ? 'Screen Awake: Active'
+                    : 'Keep Screen On: Enabled'
+                  : 'Keep Screen On: Off'}
               </button>
             </div>
 
             {/* One-Tap Phone Push Notification Opt-In Banner */}
             {pushPermission === 'default' && !pushBannerDismissed && (
-              <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-amber-400/50 bg-amber-500/15 px-3.5 py-2.5 text-xs">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-400 text-slate-950">
+              <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-xs shadow-2xs print:hidden">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#0F1E36] text-white">
                     <BellRing className="h-4 w-4" />
                   </div>
                   <div className="min-w-0">
-                    <div className="font-black text-amber-200">
-                      Turn On Phone Push Notifications (Like Email Alerts)
+                    <div className="font-semibold text-slate-900">
+                      Enable Device Push Notifications
                     </div>
-                    <div className="text-[11px] text-amber-100/90">
-                      Receive instant phone alerts for Dispatch, Diesel fuel approvals, Scrap/Mixing, 09:45–06:45 Weight Checks &amp; Breakdowns whenever connected to network.
+                    <div className="text-[11px] text-slate-600">
+                      Receive instant phone and desktop notifications for Dispatch, Diesel approvals, SOP handovers, shift weight updates, and stoppages.
                     </div>
                   </div>
                 </div>
@@ -1809,14 +1799,14 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleEnablePhonePush}
-                    className="rounded-xl bg-amber-400 hover:bg-amber-300 px-3.5 py-1.5 text-xs font-black text-slate-950 shadow transition"
+                    className="rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-3.5 py-1.5 text-xs font-semibold text-white transition"
                   >
-                    Allow Phone Alerts
+                    Enable Notifications
                   </button>
                   <button
                     type="button"
                     onClick={() => setPushBannerDismissed(true)}
-                    className="rounded-lg p-1 text-amber-200 hover:bg-amber-500/20 transition"
+                    className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
                     title="Dismiss banner"
                   >
                     <X className="h-4 w-4" />
@@ -1824,23 +1814,24 @@ export default function App() {
                 </div>
               </div>
             )}
-            {/* Quick Mobile Navigation Pills Bar (So phones also jump rapidly without opening drawer) */}
-            <div className="flex md:hidden items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+
+            {/* Quick Mobile Navigation Bar */}
+            <div className="flex md:hidden items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none print:hidden">
               {navItems.map((item) => (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => handleSelectNavTab(item.id)}
-                  className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold whitespace-nowrap transition ${
+                  className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition ${
                     activeDowntimeTab === item.id
-                      ? 'bg-blue-600 text-white'
-                      : 'border border-slate-800 bg-slate-900 text-slate-300'
+                      ? 'bg-[#0F1E36] text-white'
+                      : 'border border-slate-300 bg-white text-slate-700'
                   }`}
                 >
                   {item.icon}
                   <span>{item.label}</span>
                   {typeof item.badge === 'number' && item.badge > 0 && (
-                    <span className="rounded-full bg-rose-500 px-1.5 text-[10px] font-black text-white">
+                    <span className="rounded-full bg-rose-600 px-1.5 text-[10px] font-semibold text-white">
                       {item.badge}
                     </span>
                   )}
@@ -1849,11 +1840,11 @@ export default function App() {
             </div>
 
             {allowedTabs.length === 0 ? (
-              <div className="rounded-2xl border border-rose-500/40 bg-slate-900/95 p-8 text-center space-y-2">
-                <Lock className="h-10 w-10 text-rose-400 mx-auto" />
-                <h3 className="text-base font-bold text-white">Account Access Restricted</h3>
-                <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  Your account is currently locked or has no sections enabled. Please contact the Plant Administrator (<span className="text-amber-300">h250862h@hit.ac.zw</span>).
+              <div className="rounded-xl border border-rose-200 bg-white/95 p-8 text-center space-y-2 shadow-xs">
+                <Lock className="h-9 w-9 text-rose-600 mx-auto" />
+                <h3 className="text-base font-semibold text-slate-900">Account Access Restricted</h3>
+                <p className="text-xs text-slate-600 max-w-md mx-auto">
+                  Your account is currently restricted or has no modules assigned. Contact the Plant Administrator (<span className="font-mono font-semibold text-[#0F1E36]">h250862h@hit.ac.zw</span>).
                 </p>
               </div>
             ) : (
@@ -1865,6 +1856,12 @@ export default function App() {
                     dispatchEntries={dispatchEntries}
                     sopProductionLogs={sopProductionLogs}
                     sopScrapPipeline={sopScrapPipeline}
+                    generatorLogs={generatorLogs}
+                    powerCutLogs={powerCutLogs}
+                    onOpenPowerGenTab={(sub) => {
+                      setRequestedPowerGenSubTab(sub || 'generator');
+                      setActiveDowntimeTab('power_gen');
+                    }}
                     onLogStoppage={handleLogStoppageFromBoard}
                     onRestoreRunning={handleRestoreRunning}
                     onSaveEntry={handleSaveEntry}
@@ -1966,6 +1963,26 @@ export default function App() {
                   />
                 )}
 
+                {activeDowntimeTab === 'power_gen' &&
+                  (isAdmin ||
+                    effectivePermissions.logDowntime ||
+                    effectivePermissions.viewMachineStatus) && (
+                    <PowerCutAndGeneratorView
+                      powerCutLogs={powerCutLogs}
+                      generatorLogs={generatorLogs}
+                      downtimeEntries={entries}
+                      isAdmin={isAdmin}
+                      currentUserName={user.displayName || currentReporter}
+                      currentUserEmail={user.email || ''}
+                      initialSubTab={requestedPowerGenSubTab}
+                      onDataChanged={() => {
+                        setEntries(getStoredEntries());
+                        setPowerCutLogs(getLocalPowerCutLogs());
+                        setGeneratorLogs(getLocalGeneratorLogs());
+                      }}
+                    />
+                  )}
+
                 {SOP_TAB_TO_SUBTAB[activeDowntimeTab] && (
                   <SopFloorApkView
                     machines={machines}
@@ -1994,18 +2011,22 @@ export default function App() {
                     />
                   )}
 
-                {activeDowntimeTab === 'prod_report' &&
-                  (isAdmin || effectivePermissions.productionReportAccess) && (
-                    <PeriodProductionReportView
-                      machines={machines}
-                      downtimeEntries={entries}
-                      allDispatches={allDispatchesWithBackground}
-                      sopProductionLogs={sopProductionLogs}
-                      sopQcChecks={sopQcChecks}
-                      currentUserName={user.displayName || currentReporter}
-                      canExport={isAdmin || Boolean(effectivePermissions.productionReportAccess)}
-                    />
-                  )}
+                {activeDowntimeTab === 'prod_report' && isAdmin && (
+                  <PeriodProductionReportView
+                    machines={machines}
+                    downtimeEntries={entries}
+                    allDispatches={allDispatchesWithBackground}
+                    sopProductionLogs={sopProductionLogs}
+                    sopQcChecks={sopQcChecks}
+                    dieselRequests={dieselRequests}
+                    dieselGrns={dieselGrns}
+                    dieselTank={dieselTank}
+                    generatorLogs={generatorLogs}
+                    powerCutLogs={powerCutLogs}
+                    currentUserName={user.displayName || currentReporter}
+                    isAdmin={isAdmin}
+                  />
+                )}
 
                 {activeDowntimeTab === 'rep' && isAdmin && (
                   <PeriodReportView machines={machines} entries={entries} isAdmin={isAdmin} />

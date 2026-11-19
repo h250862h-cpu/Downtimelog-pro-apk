@@ -38,6 +38,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { calculateDayStats, dtl, fmtT, getCurrentShift, getOpenEntry, r2, ymd } from '../services/downtimeCalc';
+import { extractTimeLabel } from '../services/powerGenStore';
 import {
   normalizeMachineMatchKey,
   saveSopProductionToFirebase,
@@ -47,11 +48,13 @@ import {
   DispatchEntry,
   DowntimeEntry,
   EXTRUSION_MACHINES,
+  GeneratorLog,
   getMachineDepartment,
   INJECTION_MACHINES,
   MachineDepartment,
   MIXER_MACHINES,
   normalizeMachineName,
+  PowerCutLog,
   RECYCLING_MACHINES,
   SopProductionRecord,
   SopScrapRecord,
@@ -70,6 +73,9 @@ interface MachineStatusBoardProps {
   dispatchEntries?: DispatchEntry[];
   sopProductionLogs?: SopProductionRecord[];
   sopScrapPipeline?: SopScrapRecord[];
+  generatorLogs?: GeneratorLog[];
+  powerCutLogs?: PowerCutLog[];
+  onOpenPowerGenTab?: (sub?: 'power_cuts' | 'generator') => void;
   onLogStoppage: (machine: string) => void;
   onRestoreRunning: (entryId: string, machine: string) => void;
   onSaveEntry?: (entry: DowntimeEntry) => Promise<void> | void;
@@ -86,6 +92,9 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
   dispatchEntries = [],
   sopProductionLogs = [],
   sopScrapPipeline = [],
+  generatorLogs = [],
+  powerCutLogs = [],
+  onOpenPowerGenTab,
   onLogStoppage,
   onRestoreRunning,
   onSaveEntry,
@@ -534,58 +543,50 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Top Banner / Floor Overview */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900/90 p-4 shadow-sm backdrop-blur">
+      {/* Top Banner / Floor Overview (Dark Blue Executive Machines Board) */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-xl border border-[#1E3A66] bg-[#0B1E3B] p-4 text-slate-100 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 via-teal-600 to-blue-600 text-slate-950 font-black shadow-md shadow-emerald-950/50">
-            <Activity className="h-6 w-6 text-slate-950" />
+          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#163668] border border-blue-400/30 text-white shrink-0">
+            <Activity className="h-5 w-5 text-emerald-300" />
           </div>
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-base sm:text-lg font-black text-white" id="sumline">
-                {runningCount} Running • {offCount} Stopped of {machines.length} Units
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="text-base sm:text-lg font-bold tracking-tight text-white tabular-nums" id="sumline">
+                {runningCount} Running · {offCount} Stopped ({machines.length} Units)
               </span>
               <span
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-black uppercase tracking-wider ${
-                  breakdownCount > 0
-                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse'
-                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                className={`text-xs font-semibold ${
+                  breakdownCount > 0 ? 'text-rose-300' : 'text-emerald-300'
                 }`}
               >
-                <span className={`h-2 w-2 rounded-full ${breakdownCount > 0 ? 'bg-rose-500' : 'bg-emerald-400'}`} />
                 {breakdownCount > 0
-                  ? `${breakdownCount} Breakdown (Red) • ${noPlanningCount} No Planning (Yellow)`
-                  : 'All Systems Operational'}
+                  ? `${breakdownCount} Breakdown${noPlanningCount > 0 ? ` · ${noPlanningCount} No Planning` : ''}`
+                  : 'Operational'}
               </span>
             </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 mt-1">
-              <span className="inline-flex items-center gap-1 text-slate-300 font-semibold">
-                <Clock className="h-3.5 w-3.5 text-amber-400" />
-                Current Shift: <b className="text-amber-300">{currentShift.label}</b>
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-300 mt-1 tabular-nums">
+              <span>
+                Shift: <b className="text-white">{currentShift.label}</b>
               </span>
-              <span>•</span>
-              <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/15 border border-sky-500/35 px-2 py-0.5 text-[11px] font-bold text-sky-300">
-                <Truck className="h-3 w-3" />
-                Dispatch Waiting: {totalWaitingDispatchQty.toLocaleString()} pcs
+              <span aria-hidden="true">·</span>
+              <span>
+                Dispatch Waiting: <b className="text-sky-300">{totalWaitingDispatchQty.toLocaleString()} pcs</b>
                 {totalWaitingDispatchWeight > 0 ? ` (${totalWaitingDispatchWeight.toLocaleString()} kg)` : ''} · {totalWaitingTrollies} trollies
               </span>
               {onOpenWeightOutputSchedule && (
-                <button
-                  type="button"
-                  onClick={onOpenWeightOutputSchedule}
-                  className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 px-2 py-0.5 text-[11px] font-bold text-amber-200 transition"
-                  title="Open Scheduled Shift In Charge Running Weight & Output Update (09:45, 12:45, 18:00, 23:45, 03:45, 06:45)"
-                >
-                  <AlarmClock className="h-3 w-3 text-amber-300" />
-                  <span>Weight &amp; Output Check (09:45 · 12:45 · 18:00 · 23:45 · 03:45 · 06:45)</span>
-                </button>
+                <>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    onClick={onOpenWeightOutputSchedule}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-sky-300 underline decoration-sky-400/50 underline-offset-2 hover:text-white transition whitespace-nowrap"
+                    title="Update Shift Running Weight & Output"
+                  >
+                    <AlarmClock className="h-3 w-3 text-sky-300" />
+                    <span>Shift Weight Update</span>
+                  </button>
+                </>
               )}
-              <span>•</span>
-              <span className="text-emerald-400 font-bold">● Running</span>
-              <span>•</span>
-              <span className="text-yellow-400 font-bold">● No Plan</span>
-              <span>•</span>
-              <span className="text-rose-400 font-bold">● Breakdown</span>
             </div>
           </div>
         </div>
@@ -599,55 +600,55 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
               placeholder="Search machine..."
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
-              className="w-full rounded-xl border border-slate-800 bg-slate-950 py-1.5 pl-8 pr-3 text-xs text-slate-200 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+              className="w-full rounded-lg border border-blue-400/35 bg-[#08152B] py-1.5 pl-8 pr-3 text-xs text-white placeholder:text-slate-400 focus:border-sky-400 focus:outline-none"
             />
           </div>
 
-          <div className="flex rounded-xl border border-slate-800 bg-slate-950 p-1 text-xs font-semibold overflow-x-auto gap-1">
+          <div className="flex rounded-lg border border-blue-400/30 bg-[#08152B] p-1 text-xs font-semibold overflow-x-auto gap-1 tabular-nums">
             <button
               onClick={() => setStatusFilter('ALL')}
-              className={`rounded-lg px-2.5 py-1 transition whitespace-nowrap ${
-                statusFilter === 'ALL' ? 'bg-slate-800 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+              className={`rounded-md px-2.5 py-1 transition whitespace-nowrap ${
+                statusFilter === 'ALL' ? 'bg-[#1B3B6F] text-white shadow-xs' : 'text-slate-300 hover:text-white'
               }`}
             >
               All ({machines.length})
             </button>
             <button
               onClick={() => setStatusFilter('RUNNING')}
-              className={`rounded-lg px-2.5 py-1 transition whitespace-nowrap ${
-                statusFilter === 'RUNNING' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-emerald-400'
+              className={`rounded-md px-2.5 py-1 transition whitespace-nowrap ${
+                statusFilter === 'RUNNING' ? 'bg-emerald-600 text-white shadow-xs' : 'text-emerald-300 hover:bg-emerald-950/60'
               }`}
             >
               Run ({runningCount})
             </button>
             <button
               onClick={() => setStatusFilter('BREAKDOWN')}
-              className={`rounded-lg px-2.5 py-1 transition whitespace-nowrap ${
-                statusFilter === 'BREAKDOWN' ? 'bg-rose-600 text-white shadow' : 'text-rose-400 hover:bg-rose-950/40'
+              className={`rounded-md px-2.5 py-1 transition whitespace-nowrap ${
+                statusFilter === 'BREAKDOWN' ? 'bg-rose-600 text-white shadow-xs' : 'text-rose-300 hover:bg-rose-950/60'
               }`}
             >
               Breakdown ({breakdownCount})
             </button>
             <button
               onClick={() => setStatusFilter('NOPLANNING')}
-              className={`rounded-lg px-2.5 py-1 transition whitespace-nowrap ${
-                statusFilter === 'NOPLANNING' ? 'bg-yellow-500 text-slate-950 font-black shadow' : 'text-yellow-400 hover:bg-yellow-950/40'
+              className={`rounded-md px-2.5 py-1 transition whitespace-nowrap ${
+                statusFilter === 'NOPLANNING' ? 'bg-amber-600 text-white shadow-xs' : 'text-amber-300 hover:bg-amber-950/50'
               }`}
             >
-              No Planning ({noPlanningCount})
+              No Plan ({noPlanningCount})
             </button>
             <button
               onClick={() => setStatusFilter('PLANFINISH')}
-              className={`rounded-lg px-2.5 py-1 transition whitespace-nowrap ${
-                statusFilter === 'PLANFINISH' ? 'bg-amber-500 text-slate-950 font-black shadow' : 'text-amber-400 hover:bg-amber-950/40'
+              className={`rounded-md px-2.5 py-1 transition whitespace-nowrap ${
+                statusFilter === 'PLANFINISH' ? 'bg-[#1B3B6F] text-white shadow-xs' : 'text-slate-300 hover:text-white'
               }`}
             >
               Plan Finish ({planFinishCount})
             </button>
             <button
               onClick={() => setStatusFilter('CHANGEOVER')}
-              className={`rounded-lg px-2.5 py-1 transition whitespace-nowrap ${
-                statusFilter === 'CHANGEOVER' ? 'bg-orange-600 text-white shadow' : 'text-slate-400 hover:text-orange-400'
+              className={`rounded-md px-2.5 py-1 transition whitespace-nowrap ${
+                statusFilter === 'CHANGEOVER' ? 'bg-orange-600 text-white shadow-xs' : 'text-orange-300 hover:bg-orange-950/50'
               }`}
             >
               Changeover ({changeoverCount})
@@ -657,69 +658,69 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
       </div>
 
       {/* Department Tabs Bar (Extrusion -> Injection -> Mixer -> Recycling -> Utility) */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-bold scrollbar-thin">
-        <span className="text-[11px] uppercase tracking-wider text-slate-500 pr-1 shrink-0 font-extrabold">
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-semibold scrollbar-thin">
+        <span className="text-[11px] text-slate-600 pr-1 shrink-0 font-semibold">
           Section:
         </span>
         <button
           onClick={() => setDeptFilter('ALL')}
-          className={`shrink-0 rounded-xl px-3 py-1.5 transition border ${
+          className={`shrink-0 rounded-lg px-3 py-1.5 transition border ${
             deptFilter === 'ALL'
-              ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-sm'
-              : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+              ? 'bg-[#0B1E3B] text-white border-emerald-500 shadow-xs'
+              : 'border-blue-400/30 bg-[#0F264A]/90 text-slate-200 hover:bg-[#0B1E3B]'
           }`}
         >
-          All Sections ({machines.length})
+          All ({machines.length})
         </button>
         <button
           onClick={() => setDeptFilter('Extrusion')}
-          className={`shrink-0 rounded-xl px-3 py-1.5 transition border ${
+          className={`shrink-0 rounded-lg px-3 py-1.5 transition border ${
             deptFilter === 'Extrusion'
-              ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-              : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+              ? 'bg-[#0B1E3B] text-white border-emerald-500 shadow-xs'
+              : 'border-blue-400/30 bg-[#0F264A]/90 text-slate-200 hover:bg-[#0B1E3B]'
           }`}
         >
-          1. Extrusion ({EXTRUSION_MACHINES.length})
+          Extrusion ({EXTRUSION_MACHINES.length})
         </button>
         <button
           onClick={() => setDeptFilter('Injection')}
-          className={`shrink-0 rounded-xl px-3 py-1.5 transition border ${
+          className={`shrink-0 rounded-lg px-3 py-1.5 transition border ${
             deptFilter === 'Injection'
-              ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
-              : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+              ? 'bg-[#0B1E3B] text-white border-emerald-500 shadow-xs'
+              : 'border-blue-400/30 bg-[#0F264A]/90 text-slate-200 hover:bg-[#0B1E3B]'
           }`}
         >
-          2. Injection ({INJECTION_MACHINES.length})
+          Injection ({INJECTION_MACHINES.length})
         </button>
         <button
           onClick={() => setDeptFilter('Mixer')}
-          className={`shrink-0 rounded-xl px-3 py-1.5 transition border ${
+          className={`shrink-0 rounded-lg px-3 py-1.5 transition border ${
             deptFilter === 'Mixer'
-              ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
-              : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+              ? 'bg-[#0B1E3B] text-white border-emerald-500 shadow-xs'
+              : 'border-blue-400/30 bg-[#0F264A]/90 text-slate-200 hover:bg-[#0B1E3B]'
           }`}
         >
-          3. Mixer ({MIXER_MACHINES.length})
+          Mixer ({MIXER_MACHINES.length})
         </button>
         <button
           onClick={() => setDeptFilter('Recycling')}
-          className={`shrink-0 rounded-xl px-3 py-1.5 transition border ${
+          className={`shrink-0 rounded-lg px-3 py-1.5 transition border ${
             deptFilter === 'Recycling'
-              ? 'bg-teal-600 text-white border-teal-500 shadow-sm'
-              : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+              ? 'bg-[#0B1E3B] text-white border-emerald-500 shadow-xs'
+              : 'border-blue-400/30 bg-[#0F264A]/90 text-slate-200 hover:bg-[#0B1E3B]'
           }`}
         >
-          4. Recycling ({RECYCLING_MACHINES.length})
+          Recycling ({RECYCLING_MACHINES.length})
         </button>
         <button
           onClick={() => setDeptFilter('Utility')}
-          className={`shrink-0 rounded-xl px-3 py-1.5 transition border ${
+          className={`shrink-0 rounded-lg px-3 py-1.5 transition border ${
             deptFilter === 'Utility'
-              ? 'bg-cyan-600 text-white border-cyan-500 shadow-sm'
-              : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+              ? 'bg-[#0B1E3B] text-white border-emerald-500 shadow-xs'
+              : 'border-blue-400/30 bg-[#0F264A]/90 text-slate-200 hover:bg-[#0B1E3B]'
           }`}
         >
-          5. Utility ({UTILITY_MACHINES.length})
+          Utility ({UTILITY_MACHINES.length})
         </button>
       </div>
 
@@ -738,13 +739,12 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
           const isGenerator = item.name.toLowerCase() === 'generator';
           const isUtility = item.isUtility;
 
-          // Exact Color Coding per factory floor specifications:
-          // 1. RUNNING -> GREEN is OK
-          // 2. NO PLANNING -> YELLOW color
-          // 3. PLANNING FINISH -> GOLD color
-          // 4. BREAKDOWN -> RED color
-          let statusBadgeClass = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
-          let borderAccentClass = 'border-l-4 border-l-emerald-500 border-slate-800 bg-slate-900/90';
+          // Dark Blue Machines Board Card Styling:
+          // - Running machines display bold green edges all around
+          // - Off / Stopped machines display bold red edges all around
+          let statusTextClass = 'text-emerald-300';
+          let cardSurfaceClass =
+            'border-2 border-emerald-500 ring-1 ring-emerald-500/45 bg-[#0B1E3B] shadow-[0_0_0_1px_rgba(16,185,129,0.22)]';
           let statusLabel = 'RUNNING';
 
           const isBreakdown = isOff && open?.cat === 'Breakdown';
@@ -760,38 +760,38 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
           const isChangeover = isOff && open?.cat.startsWith('Changeover');
 
           if (isBreakdown) {
-            // RED color
-            statusBadgeClass = 'bg-rose-500/20 text-rose-300 border-rose-500/50';
-            borderAccentClass = 'border-l-4 border-l-rose-500 border-rose-600/50 bg-rose-950/25 shadow-md shadow-rose-950/20';
+            statusTextClass = 'text-rose-300';
+            cardSurfaceClass =
+              'border-2 border-rose-500 ring-1 ring-rose-500/50 bg-[#0B1E3B] shadow-[0_0_0_1px_rgba(244,63,94,0.28)]';
             statusLabel = 'BREAKDOWN';
+          } else if (isOff) {
+            cardSurfaceClass =
+              'border-2 border-rose-500 ring-1 ring-rose-500/50 bg-[#0B1E3B] shadow-[0_0_0_1px_rgba(244,63,94,0.28)]';
+            if (isNoPlanning) {
+              statusTextClass = 'text-amber-300';
+              statusLabel = 'NO PLANNING';
+            } else if (isPlanFinish) {
+              statusTextClass = 'text-amber-200';
+              statusLabel = 'PLAN FINISH';
+            } else if (isChangeover) {
+              statusTextClass = 'text-orange-300';
+              statusLabel = 'CHANGEOVER';
+            } else if (open?.cat.startsWith('Planned')) {
+              statusTextClass = 'text-sky-300';
+              statusLabel = 'MAINTENANCE';
+            } else {
+              statusTextClass = 'text-rose-300';
+              statusLabel = 'OFF';
+            }
           } else if (isNoPlanning) {
-            // YELLOW color
-            statusBadgeClass = 'bg-yellow-400/20 text-yellow-300 border-yellow-400/60 font-bold';
-            borderAccentClass = 'border-l-4 border-l-yellow-400 border-yellow-500/50 bg-yellow-950/25 shadow-md shadow-yellow-950/20';
+            statusTextClass = 'text-amber-300';
             statusLabel = 'NO PLANNING';
           } else if (isPlanFinish) {
-            // GOLD color
-            statusBadgeClass = 'bg-amber-500/25 text-amber-300 border-amber-400/70 font-bold';
-            borderAccentClass = 'border-l-4 border-l-amber-500 border-amber-500/50 bg-amber-950/30 shadow-md shadow-amber-950/20';
+            statusTextClass = 'text-amber-200';
             statusLabel = 'PLAN FINISH';
-          } else if (isChangeover) {
-            // ORANGE color
-            statusBadgeClass = 'bg-orange-500/20 text-orange-300 border-orange-500/50';
-            borderAccentClass = 'border-l-4 border-l-orange-500 border-orange-600/50 bg-orange-950/20 shadow-md shadow-orange-950/20';
-            statusLabel = 'CHANGEOVER';
-          } else if (isOff && open?.cat.startsWith('Planned')) {
-            // BLUE color
-            statusBadgeClass = 'bg-blue-500/20 text-blue-300 border-blue-500/50';
-            borderAccentClass = 'border-l-4 border-l-blue-500 border-blue-600/50 bg-blue-950/20';
-            statusLabel = 'MAINTENANCE';
-          } else if (isOff) {
-            statusBadgeClass = 'bg-slate-700/60 text-slate-300 border-slate-600';
-            borderAccentClass = 'border-l-4 border-l-slate-500 border-slate-700 bg-slate-900/90';
-            statusLabel = 'OFF';
           }
 
           // Machine Dashboard state resolved strictly from Machine Board entries
-          // (Production Logger updates NEVER overwrite Machine Dashboard values)
           const runningJobCard = open?.jcn || latest?.jcn || 'Not Set';
           const runningPlan = open?.jcp || latest?.jcp || (isOff ? 'In progress' : 'On Target');
           const runningOperator = open?.operator || latest?.operator || 'Plant Operator';
@@ -805,66 +805,55 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
           return (
             <React.Fragment key={item.name}>
               {showRunningBanner && (
-                <div className="col-span-full flex items-center justify-between rounded-xl border border-emerald-500/30 bg-emerald-950/25 px-3.5 py-2 text-xs font-black uppercase tracking-wider text-emerald-300">
-                  <span className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
-                    Running Machines ({runningFilteredCount})
-                  </span>
-                  <span className="text-[10px] font-semibold text-emerald-300/80 normal-case">
-                    Active units shown first • Auto-reorders when machine status changes
+                <div className="col-span-full flex items-center justify-between border-2 border-emerald-500/80 bg-[#0B1E3B] rounded-lg px-3.5 py-2 text-xs font-bold text-emerald-300 shadow-xs">
+                  <span>Running Machines ({runningFilteredCount})</span>
+                  <span className="text-[11px] font-normal text-slate-300">
+                    Active production units shown first
                   </span>
                 </div>
               )}
               {showOffBanner && (
-                <div className="col-span-full mt-2 flex items-center justify-between rounded-xl border border-rose-500/35 bg-rose-950/25 px-3.5 py-2 text-xs font-black uppercase tracking-wider text-rose-300">
-                  <span className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full bg-rose-400 animate-pulse" />
-                    Off / Stopped Machines ({offFilteredCount})
-                  </span>
-                  <span className="text-[10px] font-semibold text-rose-200/80 normal-case">
-                    Moves up to Running automatically once switched ON
+                <div className="col-span-full mt-2 flex items-center justify-between border-2 border-rose-500/80 bg-[#0B1E3B] rounded-lg px-3.5 py-2 text-xs font-bold text-rose-300 shadow-xs">
+                  <span>Off / Stopped Machines ({offFilteredCount})</span>
+                  <span className="text-[11px] font-normal text-slate-300">
+                    Returns to Running section once restarted
                   </span>
                 </div>
               )}
               <div
-                className={`flex flex-col justify-between rounded-2xl border p-4 transition-all duration-200 hover:shadow-lg ${borderAccentClass}`}
+                className={`flex flex-col justify-between rounded-xl p-4 text-slate-100 transition-shadow duration-200 hover:shadow-md ${cardSurfaceClass}`}
               >
               <div>
                 {/* Header Line */}
-                <div className="flex items-start justify-between gap-2 mb-2.5">
+                <div className="flex items-start justify-between gap-2 mb-3">
                   <div>
-                    <span className="text-[10px] font-black tracking-wider uppercase text-slate-500 block">
-                      {item.dept} SECTION
+                    <span className="text-[11px] font-medium text-slate-300 block">
+                      {item.dept}
                     </span>
-                    <h3 className="font-black text-sm sm:text-base text-white leading-tight">
+                    <h3 className="font-bold text-sm sm:text-base text-white leading-tight">
                       {item.name}
                     </h3>
                   </div>
 
                   <span
-                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider border ${statusBadgeClass}`}
+                    className={`text-[11px] font-bold tracking-wide shrink-0 ${statusTextClass}`}
                   >
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        isOff ? 'bg-rose-400 animate-pulse' : 'bg-emerald-400'
-                      }`}
-                    />
                     {statusLabel}
                   </span>
                 </div>
 
                 {/* Stoppage Alert Banner if Stopped */}
                 {isOff && open && (
-                  <div className="rounded-xl border border-rose-500/30 bg-rose-950/40 p-2.5 mb-3 text-xs text-rose-200">
-                    <div className="font-bold flex items-center justify-between">
+                  <div className="rounded-lg border border-rose-400/50 bg-[#08152B] p-2.5 mb-3 text-xs text-slate-100">
+                    <div className="font-semibold flex items-center justify-between">
                       <span className="text-rose-300">{open.cat}</span>
-                      <span className="font-mono text-[10px] text-rose-400">Since {fmtT(open.start)}</span>
+                      <span className="font-mono text-[10px] text-slate-300 tabular-nums">Since {fmtT(open.start)}</span>
                     </div>
-                    <p className="mt-1 text-slate-300 leading-snug line-clamp-2">{open.reason}</p>
+                    <p className="mt-1 text-slate-200 leading-snug line-clamp-2">{open.reason}</p>
                     {open.mtncePerson && (
-                      <div className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-300 font-semibold">
-                        <Wrench className="h-3 w-3 shrink-0" />
-                        <span>Mtnce Attending: {open.mtncePerson}</span>
+                      <div className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-200 font-medium">
+                        <Wrench className="h-3 w-3 shrink-0 text-slate-300" />
+                        <span>Technician: {open.mtncePerson}</span>
                       </div>
                     )}
                   </div>
@@ -872,29 +861,29 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
 
                 {/* Utility Special Interface: Chiller */}
                 {isChiller && (
-                  <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/30 p-2.5 mb-3 space-y-1.5 text-xs">
-                    <div className="flex items-center justify-between text-cyan-300 font-bold text-[11px] uppercase tracking-wider">
+                  <div className="rounded-lg border border-blue-400/25 bg-[#08152B] p-2.5 mb-3 space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between text-sky-200 font-semibold text-[11px]">
                       <span className="flex items-center gap-1">
-                        <Gauge className="h-3.5 w-3.5" /> Chiller Telemetry
+                        <Gauge className="h-3.5 w-3.5 text-sky-300" /> Chiller Readings
                       </span>
-                      <span className="text-[10px] text-cyan-400/80">Online Loop</span>
+                      <span className="text-[10px] text-slate-300">Loop Active</span>
                     </div>
-                    <div className="grid grid-cols-3 gap-1.5 text-center pt-0.5">
-                      <div className="rounded-lg bg-slate-950/70 p-1.5 border border-cyan-900/40">
-                        <span className="text-[9px] uppercase text-slate-400 block font-bold">Temperature</span>
-                        <span className="text-xs font-black text-cyan-300">
+                    <div className="grid grid-cols-3 gap-1.5 text-center pt-0.5 tabular-nums">
+                      <div className="rounded-md bg-[#10284D] p-1.5 border border-blue-400/25">
+                        <span className="text-[10px] text-slate-300 block">Temp</span>
+                        <span className="text-xs font-bold text-white">
                           {open?.chillerTemp !== undefined ? `${open.chillerTemp} °C` : '13.5 °C'}
                         </span>
                       </div>
-                      <div className="rounded-lg bg-slate-950/70 p-1.5 border border-cyan-900/40">
-                        <span className="text-[9px] uppercase text-slate-400 block font-bold">Pressure</span>
-                        <span className="text-xs font-black text-cyan-300">
+                      <div className="rounded-md bg-[#10284D] p-1.5 border border-blue-400/25">
+                        <span className="text-[10px] text-slate-300 block">Pressure</span>
+                        <span className="text-xs font-bold text-white">
                           {open?.chillerPressure !== undefined ? `${open.chillerPressure} bar` : '4.2 bar'}
                         </span>
                       </div>
-                      <div className="rounded-lg bg-slate-950/70 p-1.5 border border-cyan-900/40">
-                        <span className="text-[9px] uppercase text-slate-400 block font-bold">Frequency</span>
-                        <span className="text-xs font-black text-cyan-300">
+                      <div className="rounded-md bg-[#10284D] p-1.5 border border-blue-400/25">
+                        <span className="text-[10px] text-slate-300 block">Frequency</span>
+                        <span className="text-xs font-bold text-white">
                           {open?.chillerFreq !== undefined ? `${open.chillerFreq} Hz` : '50.0 Hz'}
                         </span>
                       </div>
@@ -902,83 +891,137 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                   </div>
                 )}
 
-                {/* Utility Special Interface: Generator */}
-                {isGenerator && (
-                  <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 p-2.5 mb-3 space-y-1.5 text-xs">
-                    <div className="flex items-center justify-between text-amber-300 font-bold text-[11px] uppercase tracking-wider">
-                      <span className="flex items-center gap-1">
-                        <Zap className="h-3.5 w-3.5" /> Generator Telemetry
-                      </span>
-                      <span className="text-[10px] text-amber-400/80">Standby Ready</span>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-center pt-0.5">
-                      <div className="rounded-lg bg-slate-950/70 p-1 border border-amber-900/40">
-                        <span className="text-[9px] uppercase text-slate-400 block font-bold">Start Up</span>
-                        <span className="text-[11px] font-black text-amber-300">
-                          {open?.genStartTime || '08:00'}
-                        </span>
-                      </div>
-                      <div className="rounded-lg bg-slate-950/70 p-1 border border-amber-900/40">
-                        <span className="text-[9px] uppercase text-slate-400 block font-bold">Start Fuel</span>
-                        <span className="text-[11px] font-black text-amber-300">
-                          {open?.genStartFuel !== undefined ? `${open.genStartFuel}%` : '90%'}
-                        </span>
-                      </div>
-                      <div className="rounded-lg bg-slate-950/70 p-1 border border-amber-900/40">
-                        <span className="text-[9px] uppercase text-slate-400 block font-bold">Off Time</span>
-                        <span className="text-[11px] font-black text-amber-300">
-                          {open?.genOffTime || '12:00'}
-                        </span>
-                      </div>
-                      <div className="rounded-lg bg-slate-950/70 p-1 border border-amber-900/40">
-                        <span className="text-[9px] uppercase text-slate-400 block font-bold">Off Fuel</span>
-                        <span className="text-[11px] font-black text-amber-300">
-                          {open?.genOffFuel !== undefined ? `${open.genOffFuel}%` : '82%'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* Utility Special Interface: Generator (Litres & Linked with Power Cut / Generator Logs) */}
+                {isGenerator && (() => {
+                  const activeGenLog =
+                    generatorLogs.find((g) => g.status === 'RUNNING') ||
+                    [...generatorLogs].sort((a, b) =>
+                      (b.date + b.startTime).localeCompare(a.date + a.startTime)
+                    )[0];
+                  const ongoingPwrCount = powerCutLogs.filter(
+                    (p) => p.status === 'ONGOING' || !p.timeBack
+                  ).length;
+                  const isGenRunning = activeGenLog?.status === 'RUNNING';
+                  const startTimeVal = activeGenLog
+                    ? extractTimeLabel(activeGenLog.startTime)
+                    : open?.genStartTime || latest?.genStartTime || '08:00';
+                  const startFuelVal = activeGenLog
+                    ? activeGenLog.startFuelLitres
+                    : open?.genStartFuel ?? latest?.genStartFuel ?? 185;
+                  const stopTimeVal = activeGenLog
+                    ? activeGenLog.stopTime
+                      ? extractTimeLabel(activeGenLog.stopTime)
+                      : 'RUNNING'
+                    : open?.genOffTime || latest?.genOffTime || '12:00';
+                  const stopFuelVal = activeGenLog
+                    ? activeGenLog.stopFuelLitres
+                    : open?.genOffFuel ?? latest?.genOffFuel;
+                  const usedFuelVal =
+                    activeGenLog?.fuelUsedLitres ??
+                    (typeof startFuelVal === 'number' && typeof stopFuelVal === 'number'
+                      ? r2(Math.max(0, startFuelVal - stopFuelVal))
+                      : undefined);
 
-                {/* Small Interface Floor Data Grid — Ordered by Floor Priority */}
-                <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-950/80 p-2.5 border border-slate-800 text-xs text-slate-300 mb-2.5">
-                  {/* Priority 1: Running Product, Output & Weight */}
+                  return (
+                    <div className="rounded-lg border border-blue-400/25 bg-[#08152B] p-2.5 mb-3 space-y-2 text-xs">
+                      <div className="flex items-center justify-between text-sky-200 font-semibold text-[11px]">
+                        <span className="flex items-center gap-1">
+                          <Zap className="h-3.5 w-3.5 text-amber-300" /> Generator Fuel (Litres)
+                        </span>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                            isGenRunning
+                              ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/40'
+                              : 'bg-[#152E54] text-slate-200 border border-blue-400/30'
+                          }`}
+                        >
+                          {isGenRunning ? 'ON LOAD' : 'STANDBY'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-center pt-0.5 tabular-nums">
+                        <div className="rounded-md bg-[#10284D] p-1 border border-blue-400/25">
+                          <span className="text-[10px] text-slate-300 block">Start</span>
+                          <span className="text-[11px] font-bold text-white">
+                            {startTimeVal}
+                          </span>
+                        </div>
+                        <div className="rounded-md bg-[#10284D] p-1 border border-blue-400/25">
+                          <span className="text-[10px] text-slate-300 block">Start Fuel</span>
+                          <span className="text-[11px] font-bold text-white">
+                            {`${r2(startFuelVal)} L`}
+                          </span>
+                        </div>
+                        <div className="rounded-md bg-[#10284D] p-1 border border-blue-400/25">
+                          <span className="text-[10px] text-slate-300 block">Stop</span>
+                          <span className="text-[11px] font-bold text-white">
+                            {stopTimeVal}
+                          </span>
+                        </div>
+                        <div className="rounded-md bg-[#10284D] p-1 border border-blue-400/25">
+                          <span className="text-[10px] text-slate-300 block">Stop Fuel</span>
+                          <span className="text-[11px] font-bold text-white">
+                            {typeof stopFuelVal === 'number' ? `${r2(stopFuelVal)} L` : '—'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 pt-0.5 text-[11px] tabular-nums">
+                        <span className="font-semibold text-amber-300">
+                          {typeof usedFuelVal === 'number'
+                            ? `Fuel Used: ${usedFuelVal} L`
+                            : 'Fuel Tracking Active (L)'}
+                          {ongoingPwrCount > 0 ? ` · ${ongoingPwrCount} Power Cut Active` : ''}
+                        </span>
+                        {onOpenPowerGenTab && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenPowerGenTab('generator')}
+                            className="rounded bg-[#1B3B6F] hover:bg-[#244D8F] border border-blue-400/40 px-2 py-1 text-[10px] font-semibold text-white transition whitespace-nowrap"
+                          >
+                            Start / Stop Log
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Floor Details Summary */}
+                <div className="grid grid-cols-2 gap-2.5 rounded-lg bg-[#08152B] p-3 border border-blue-400/25 text-xs text-slate-200 mb-3 tabular-nums">
                   <div className="col-span-2">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Running Product</span>
-                    <span className="font-mono font-bold text-amber-300 text-[11px] truncate block" title={runningJobCard}>
+                    <span className="text-[11px] font-medium text-slate-300 block">Running Product</span>
+                    <span className="font-semibold text-white text-xs truncate block" title={runningJobCard}>
                       {runningJobCard}
                     </span>
-                    <span className="text-[10px] text-slate-400">
-                      Plan: {runningPlan} · Shift: {shiftText} · Run: <b className="text-emerald-400">{r2(stats.run)}h</b>
+                    <span className="text-[11px] text-slate-300">
+                      Plan: {runningPlan} · {shiftText} · Run: <b className="text-emerald-300">{r2(stats.run)}h</b>
                     </span>
                   </div>
 
-                  <div className="pt-1 border-t border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Running Output</span>
-                    <b className="text-emerald-400 font-mono text-xs">{runningOutput}</b>
+                  <div className="pt-1.5 border-t border-blue-400/20">
+                    <span className="text-[11px] font-medium text-slate-300 block">Running Output</span>
+                    <b className="text-emerald-300 font-mono text-xs">{runningOutput}</b>
                   </div>
 
-                  <div className="pt-1 border-t border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Running Weight</span>
+                  <div className="pt-1.5 border-t border-blue-400/20">
+                    <span className="text-[11px] font-medium text-slate-300 block">Running Weight</span>
                     <b className="text-white font-mono text-xs">{runningWeight}</b>
                   </div>
 
-                  {/* Priority 2: Stock Waiting Dispatch */}
                   {!isUtility && (
                     <div
-                      className={`col-span-2 mt-0.5 rounded-lg border px-2 py-1.5 flex items-center justify-between gap-2 ${
+                      className={`col-span-2 mt-0.5 rounded-md border px-2.5 py-1.5 flex items-center justify-between gap-2 ${
                         item.waitingDispatches.length > 0
-                          ? 'border-sky-500/40 bg-sky-950/35 text-sky-200'
-                          : 'border-slate-800/90 bg-slate-900/60 text-slate-400'
+                          ? 'border-sky-400/45 bg-[#10284D] text-white'
+                          : 'border-blue-400/20 bg-[#0D2142] text-slate-300'
                       }`}
                     >
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <Truck className={`h-3.5 w-3.5 shrink-0 ${item.waitingDispatches.length > 0 ? 'text-sky-400' : 'text-slate-500'}`} />
+                        <Truck className={`h-3.5 w-3.5 shrink-0 ${item.waitingDispatches.length > 0 ? 'text-sky-300' : 'text-slate-400'}`} />
                         <div className="min-w-0">
-                          <span className="text-[9px] uppercase font-black tracking-wider block text-slate-400">
+                          <span className="text-[10px] font-medium block text-slate-300">
                             Stock Waiting Dispatch
                           </span>
-                          <span className="text-[11px] font-black truncate block">
+                          <span className="text-[11px] font-semibold truncate block text-white">
                             {item.waitingDispatches.length > 0
                               ? `${item.waitingQty.toLocaleString()} pcs${item.waitingWeightKg > 0 ? ` (${item.waitingWeightKg} kg)` : ''}`
                               : '0 waiting'}
@@ -986,53 +1029,45 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                         </div>
                       </div>
                       {item.waitingDispatches.length > 0 && (
-                        <div className="text-right shrink-0 text-[9px] font-bold space-y-0.5">
+                        <div className="text-right shrink-0 text-[10px] font-semibold space-y-0.5 text-slate-200">
                           {item.waitingWhCount > 0 && (
-                            <span className="block rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-300 border border-amber-500/30">
-                              {item.waitingWhCount} WH Wait
-                            </span>
+                            <span className="block text-amber-300">{item.waitingWhCount} WH Wait</span>
                           )}
                           {item.waitingHodCount > 0 && (
-                            <span className="block rounded bg-sky-500/20 px-1.5 py-0.5 text-sky-300 border border-sky-500/30">
-                              {item.waitingHodCount} HOD Wait
-                            </span>
+                            <span className="block text-sky-300">{item.waitingHodCount} HOD Wait</span>
                           )}
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* Priority 3: Operator & Assistant Crew */}
-                  <div className="pt-1 border-t border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Operator</span>
-                    <span className="font-semibold text-slate-200 text-[11px] truncate block">
+                  <div className="pt-1.5 border-t border-blue-400/20">
+                    <span className="text-[11px] font-medium text-slate-300 block">Operator</span>
+                    <span className="font-semibold text-white text-[11px] truncate block">
                       {runningOperator}
                     </span>
                   </div>
 
-                  <div className="pt-1 border-t border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Assistant / G.Hand</span>
-                    <span className="font-semibold text-slate-200 text-[11px] truncate block">
+                  <div className="pt-1.5 border-t border-blue-400/20">
+                    <span className="text-[11px] font-medium text-slate-300 block">Assistant</span>
+                    <span className="font-semibold text-white text-[11px] truncate block">
                       {runningGeneralHand}
                     </span>
                   </div>
 
-                  {/* Priority 4: Assistant SOP Scrap & Wastage */}
                   {!isUtility && (
-                    <div className="col-span-2 pt-1 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
+                    <div className="col-span-2 pt-1.5 border-t border-blue-400/20 flex items-center justify-between text-[11px]">
                       <div className="flex items-center gap-1">
-                        <Recycle className="h-3 w-3 text-amber-400 shrink-0" />
-                        <span className="text-[10px] uppercase font-bold text-slate-500">SOP Scrap:</span>
+                        <span className="text-slate-300">SOP Scrap:</span>
                         <b className="text-amber-300 font-mono">{item.todayScrapKg} kg</b>
                         {item.pendingRecycleCount > 0 && (
-                          <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300 border border-amber-500/30">
-                            {item.pendingRecycleCount} pending
+                          <span className="text-[10px] font-semibold text-amber-200">
+                            ({item.pendingRecycleCount} pending)
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1">
-                        <Trash2 className="h-3 w-3 text-rose-400 shrink-0" />
-                        <span className="text-[10px] uppercase font-bold text-slate-500">Wastage:</span>
+                        <span className="text-slate-300">Wastage:</span>
                         <b className="text-rose-300 font-mono">{item.todayWastageKg} kg</b>
                       </div>
                     </div>
@@ -1040,48 +1075,46 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                 </div>
               </div>
 
-              {/* Action Buttons: Quick Floor Log, Machine History & Stoppage Control */}
+              {/* Action Buttons */}
               <div className="space-y-1.5 pt-1">
                 {canQuickLog && (
                   <button
                     type="button"
                     onClick={() => openQuickLogModal(item)}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/40 text-sky-200 py-2 px-2.5 text-xs font-black transition active:scale-[0.98]"
-                    title={`Quickly log Running Product, Weight, Output, Assistant SOP Scrap & Wastage for ${item.name}`}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-[#163668] hover:bg-[#1E4785] border border-blue-400/35 text-white py-2 px-3 text-xs font-semibold transition"
+                    title={`Update product, weight, output, scrap & wastage for ${item.name}`}
                   >
-                    <Scale className="h-3.5 w-3.5 text-sky-400" />
-                    <span>Log Product / Weight / Output / Scrap</span>
+                    <Scale className="h-3.5 w-3.5" />
+                    <span>Update Product / Weight / Scrap</span>
                   </button>
                 )}
 
                 <div className="flex gap-1.5">
-                  {/* Button: Click to show machine log history */}
                   <button
                     type="button"
                     onClick={() => setSelectedHistoryMachine(item.name)}
-                    className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/90 hover:bg-slate-750 text-slate-200 py-2 px-2.5 text-xs font-semibold hover:border-blue-500/50 hover:text-blue-300 transition"
-                    title={`View historical log entries for ${item.name}`}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-blue-300/35 bg-[#10284D] hover:bg-[#173668] text-slate-100 py-2 px-2.5 text-xs font-semibold transition tabular-nums"
+                    title={`View log history for ${item.name}`}
                   >
-                    <History className="h-3.5 w-3.5 text-blue-400" />
-                    <span>Log History ({item.historyCount})</span>
+                    <History className="h-3.5 w-3.5 text-sky-300" />
+                    <span>History ({item.historyCount})</span>
                   </button>
 
-                  {/* Primary Action Button */}
                   {isOff && open ? (
                     <button
                       type="button"
                       onClick={() => onRestoreRunning(open.id, item.name)}
-                      className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white py-2 px-2.5 text-xs font-bold transition shadow-sm active:scale-[0.98]"
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white py-2 px-2.5 text-xs font-semibold transition"
                       title="Clear stoppage and mark machine as running"
                     >
                       <Play className="h-3.5 w-3.5 fill-current" />
-                      <span>Back to running</span>
+                      <span>Resume Run</span>
                     </button>
                   ) : (
                     <button
                       type="button"
                       onClick={() => onLogStoppage(item.name)}
-                      className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 py-2 px-2.5 text-xs font-bold transition active:scale-[0.98]"
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-rose-400/60 bg-rose-950/70 hover:bg-rose-900/90 text-rose-100 py-2 px-2.5 text-xs font-semibold transition"
                     >
                       <Plus className="h-3.5 w-3.5" />
                       <span>Log Stoppage</span>
@@ -1096,32 +1129,26 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
       </div>
 
       {filteredMachines.length === 0 && (
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
+        <div className="rounded-xl border border-slate-200 bg-white/95 p-8 text-center text-slate-600">
           <p className="text-sm">No machines match your search or filter.</p>
         </div>
       )}
 
-      {/* ============================================================== */}
-      {/* MACHINE LOG HISTORY MODAL (Requested: "Click button to show machine log history for that machine") */}
-      {/* ============================================================== */}
+      {/* MACHINE LOG HISTORY MODAL */}
       {selectedHistoryMachine && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm animate-fade-in">
-          <div className="relative w-full max-w-3xl rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl max-h-[90vh] flex flex-col text-slate-100">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 backdrop-blur-xs">
+          <div className="relative w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl max-h-[90vh] flex flex-col text-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
-                  <History className="h-5 w-5" />
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0F1E36] text-white">
+                  <History className="h-4 w-4" />
                 </div>
                 <div>
-                  <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-                    <span>{selectedHistoryMachine}</span>
-                    <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-400">
-                      {getMachineDepartment(selectedHistoryMachine)}
-                    </span>
+                  <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                    {selectedHistoryMachine} · {getMachineDepartment(selectedHistoryMachine)}
                   </h3>
-                  <p className="text-xs text-slate-400">
-                    Floor Operational History • {activeMachineHistory.length} total entries recorded
+                  <p className="text-xs text-slate-500">
+                    Operational History · {activeMachineHistory.length} recorded entries
                   </p>
                 </div>
               </div>
@@ -1129,14 +1156,13 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedHistoryMachine(null)}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-800"
               >
                 ✕
               </button>
             </div>
 
-            {/* History Search & Controls */}
-            <div className="py-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80">
+            <div className="py-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200">
               <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                 <input
@@ -1144,7 +1170,7 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                   placeholder="Search reason, job card, operator, technician..."
                   value={historySearch}
                   onChange={(e) => setHistorySearch(e.target.value)}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 py-1.5 pl-8 pr-3 text-xs text-slate-200 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none"
                 />
               </div>
 
@@ -1154,14 +1180,13 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                   onLogStoppage(selectedHistoryMachine);
                   setSelectedHistoryMachine(null);
                 }}
-                className="flex items-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 px-3 py-1.5 text-xs font-bold transition shadow"
+                className="flex items-center gap-1.5 rounded-lg bg-[#0F1E36] hover:bg-[#193054] text-white px-3 py-1.5 text-xs font-semibold transition"
               >
                 <Plus className="h-3.5 w-3.5" />
-                <span>Log New Entry for {selectedHistoryMachine}</span>
+                <span>Log Stoppage</span>
               </button>
             </div>
 
-            {/* Scrollable History List */}
             <div className="overflow-y-auto pr-1 py-3 space-y-3 flex-1 text-xs">
               {activeMachineHistory.length > 0 ? (
                 activeMachineHistory.map((entry) => {
@@ -1169,68 +1194,68 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                   return (
                     <div
                       key={entry.id}
-                      className={`rounded-xl border p-3.5 space-y-2 transition ${
+                      className={`rounded-lg border p-3.5 space-y-2 ${
                         isCurrentOpen
-                          ? 'border-rose-500/60 bg-rose-950/20 shadow-md shadow-rose-950/20'
-                          : 'border-slate-800 bg-slate-950/70 hover:border-slate-700'
+                          ? 'border-rose-300 bg-rose-50/70'
+                          : 'border-slate-200 bg-slate-50/80'
                       }`}
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 text-xs font-semibold">
                           <span
-                            className={`rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider ${
+                            className={
                               entry.cat === 'Breakdown'
-                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                ? 'text-rose-700'
                                 : entry.cat.startsWith('Changeover')
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                                : 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
-                            }`}
+                                ? 'text-amber-800'
+                                : 'text-[#0F1E36]'
+                            }
                           >
                             {entry.cat}
                           </span>
-                          <span className="font-mono text-xs text-amber-300 font-bold">
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono text-slate-700">
                             {entry.jcn || 'No JC'}
                           </span>
                           {isCurrentOpen && (
-                            <span className="rounded bg-rose-600 px-1.5 py-0.2 text-[9px] font-black text-white uppercase animate-pulse">
-                              Active Stoppage
+                            <span className="text-[11px] font-bold text-rose-700">
+                              (Active)
                             </span>
                           )}
                         </div>
 
-                        <div className="text-[11px] font-mono text-slate-400">
-                          {fmtT(entry.start)} ➔ {entry.end ? fmtT(entry.end) : 'Ongoing (OFF)'}
+                        <div className="text-[11px] font-mono text-slate-500 tabular-nums">
+                          {fmtT(entry.start)} — {entry.end ? fmtT(entry.end) : 'Ongoing (OFF)'}
                         </div>
                       </div>
 
-                      <p className="text-slate-200 leading-relaxed font-medium">
+                      <p className="text-slate-800 leading-relaxed font-medium">
                         {entry.reason || 'No description provided.'}
                       </p>
 
-                      {/* Floor Details Footer */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/80 text-[11px] text-slate-400">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-200 text-[11px] text-slate-600">
                         <div>
-                          <span className="text-[10px] uppercase font-bold text-slate-500 block">Operator</span>
-                          <span className="text-slate-300 font-semibold">{entry.operator || entry.rep || '-'}</span>
+                          <span className="text-[10px] font-medium text-slate-500 block">Operator</span>
+                          <span className="text-slate-900 font-semibold">{entry.operator || entry.rep || '-'}</span>
                         </div>
                         <div>
-                          <span className="text-[10px] uppercase font-bold text-slate-500 block">General Hand</span>
-                          <span className="text-slate-300 font-semibold">{entry.generalHand || '-'}</span>
+                          <span className="text-[10px] font-medium text-slate-500 block">Assistant</span>
+                          <span className="text-slate-900 font-semibold">{entry.generalHand || '-'}</span>
                         </div>
                         <div>
-                          <span className="text-[10px] uppercase font-bold text-slate-500 block">Mtnce Person</span>
-                          <span className="text-amber-300 font-semibold">{entry.mtncePerson || '-'}</span>
+                          <span className="text-[10px] font-medium text-slate-500 block">Technician</span>
+                          <span className="text-slate-900 font-semibold">{entry.mtncePerson || '-'}</span>
                         </div>
                         <div>
-                          <span className="text-[10px] uppercase font-bold text-slate-500 block">Attributed To</span>
-                          <span className="text-slate-300 font-mono text-[10px]">{entry.loggedByEmail || entry.by || '-'}</span>
+                          <span className="text-[10px] font-medium text-slate-500 block">Logged By</span>
+                          <span className="text-slate-700 font-mono text-[10px]">{entry.loggedByEmail || entry.by || '-'}</span>
                         </div>
                       </div>
 
                       {entry.signature && (
-                        <div className="flex items-center gap-2 pt-1 text-[10px] text-emerald-400">
+                        <div className="flex items-center gap-2 pt-1 text-[10px] text-emerald-700 font-medium">
                           <CheckCircle2 className="h-3.5 w-3.5" />
-                          <span>Digitally signed by technician ({entry.signedAt ? fmtT(entry.signedAt) : 'Logged'})</span>
+                          <span>Digitally signed ({entry.signedAt ? fmtT(entry.signedAt) : 'Logged'})</span>
                         </div>
                       )}
                     </div>
@@ -1238,49 +1263,46 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                 })
               ) : (
                 <div className="p-8 text-center text-slate-500 space-y-1">
-                  <p className="text-sm font-semibold">No log history records found for {selectedHistoryMachine}.</p>
-                  <p className="text-xs">Click &quot;Log New Entry&quot; above to record breakdown or operational data.</p>
+                  <p className="text-sm font-semibold">No records found for {selectedHistoryMachine}.</p>
                 </div>
               )}
             </div>
 
-            {/* Modal Footer */}
-            <div className="pt-3 border-t border-slate-800 flex justify-end">
+            <div className="pt-3 border-t border-slate-200 flex justify-end">
               <button
                 type="button"
                 onClick={() => setSelectedHistoryMachine(null)}
-                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-750"
+                className="rounded-lg border border-slate-300 bg-white px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
-                Close History
+                Close
               </button>
             </div>
           </div>
         </div>
       )}
-      {/* ============================================================== */}
-      {/* QUICK FLOOR & SOP LOG MODAL (Running Product, Weight, Output, Assistant SOP Scrap & Wastage) */}
-      {/* ============================================================== */}
+
+      {/* QUICK FLOOR & SOP LOG MODAL */}
       {quickLogMachine && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm">
-          <div className="relative w-full max-w-2xl rounded-2xl border border-sky-500/40 bg-slate-900 p-5 shadow-2xl max-h-[92vh] overflow-y-auto text-slate-100 space-y-4">
-            <div className="flex items-start justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 backdrop-blur-xs">
+          <div className="relative w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl max-h-[92vh] overflow-y-auto text-slate-900 space-y-4">
+            <div className="flex items-start justify-between border-b border-slate-200 pb-3">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/20 text-sky-300 border border-sky-500/40">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#0F1E36] text-white">
                   <Scale className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-white">
-                    {quickLogMachine} — Quick Floor &amp; SOP Log
+                  <h3 className="text-base font-bold text-slate-900">
+                    {quickLogMachine} — Running &amp; SOP Update
                   </h3>
-                  <p className="text-xs text-slate-400">
-                    Update Running Product, Weight, Output, Assistant SOP Scrap &amp; Wastage directly on machine card
+                  <p className="text-xs text-slate-500">
+                    Record Running Product, Weight, Output Rate, SOP Scrap, and Wastage
                   </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setQuickLogMachine(null)}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-800"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1291,13 +1313,13 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
               const mState = machineStates.find((ms) => ms.name === quickLogMachine);
               if (!mState) return null;
               return (
-                <div className="rounded-xl border border-sky-500/30 bg-sky-950/30 p-3 space-y-1.5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <span className="font-black text-sky-300 flex items-center gap-1.5 uppercase tracking-wider text-[11px]">
+                    <span className="font-semibold text-[#0F1E36] flex items-center gap-1.5">
                       <Truck className="h-3.5 w-3.5" />
-                      Stock Waiting on Dispatch ({mState.name})
+                      Stock Waiting Dispatch ({mState.name})
                     </span>
-                    <span className="font-black text-white">
+                    <span className="font-bold text-slate-900 tabular-nums">
                       {mState.waitingQty.toLocaleString()} pcs
                       {mState.waitingWeightKg > 0 ? ` · ${mState.waitingWeightKg} kg` : ''} ({mState.waitingDispatches.length} trollies)
                     </span>
@@ -1307,14 +1329,14 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                       {mState.waitingDispatches.slice(0, 6).map((d) => (
                         <span
                           key={d.id}
-                          className="rounded-lg bg-slate-950/80 border border-slate-800 px-2 py-0.5 text-slate-200"
+                          className="rounded-md bg-white border border-slate-200 px-2 py-0.5 text-slate-700"
                         >
                           <b>#{d.trolleyNo}</b>: {d.product} — {d.whReceivedQty ?? d.recordedQty} pcs ({d.status === 'PENDING_WH' ? 'Wait WH' : 'Wait HOD'})
                         </span>
                       ))}
                     </div>
                   ) : (
-                    <p className="text-[11px] text-slate-400">No trollies currently waiting dispatch for this machine.</p>
+                    <p className="text-[11px] text-slate-500">No trollies currently waiting dispatch for this machine.</p>
                   )}
                 </div>
               );
@@ -1322,10 +1344,10 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
 
             {qlFeedback && (
               <div
-                className={`rounded-xl border px-3 py-2 text-xs font-bold flex items-center gap-2 ${
+                className={`rounded-lg border px-3 py-2 text-xs font-semibold flex items-center gap-2 ${
                   qlFeedback.type === 'ok'
-                    ? 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300'
-                    : 'border-rose-500/40 bg-rose-950/40 text-rose-300'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-rose-200 bg-rose-50 text-rose-800'
                 }`}
               >
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
@@ -1334,16 +1356,15 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
             )}
 
             <form onSubmit={handleSaveQuickLog} className="space-y-3 text-xs">
-              {/* Running Product + Weight + Output */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="sm:col-span-2">
-                  <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
+                  <label className="text-[11px] font-semibold text-slate-700 block mb-1">
                     Running Product *
                   </label>
                   <select
                     value={qlProduct}
                     onChange={(e) => setQlProduct(e.target.value)}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                   >
                     {MASTER_JOB_CARDS.map((prod) => (
                       <option key={prod} value={prod}>
@@ -1358,13 +1379,13 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                       value={qlCustomProduct}
                       onChange={(e) => setQlCustomProduct(e.target.value)}
                       placeholder="Type running product name..."
-                      className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                      className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     />
                   )}
                 </div>
 
                 <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
+                  <label className="text-[11px] font-semibold text-slate-700 block mb-1">
                     Running Weight (kg)
                   </label>
                   <input
@@ -1372,12 +1393,12 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                     value={qlRunningWeight}
                     onChange={(e) => setQlRunningWeight(e.target.value)}
                     placeholder="e.g. 650 kg"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
+                  <label className="text-[11px] font-semibold text-slate-700 block mb-1">
                     Running Output (per hr)
                   </label>
                   <input
@@ -1385,21 +1406,20 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                     value={qlRunningOutput}
                     onChange={(e) => setQlRunningOutput(e.target.value)}
                     placeholder="e.g. 160 m/hr or 150 kg/hr"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                   />
                 </div>
               </div>
 
-              {/* Operator & Assistant */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-slate-800">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200">
                 <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">
+                  <label className="text-[11px] font-semibold text-slate-700 block mb-1">
                     Machine Operator
                   </label>
                   <select
                     value={qlOperator}
                     onChange={(e) => setQlOperator(e.target.value)}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                   >
                     {OPERATOR_OPTIONS.map((op) => (
                       <option key={op.value} value={op.value}>
@@ -1411,15 +1431,15 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
 
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400">
+                    <label className="text-[11px] font-semibold text-slate-700">
                       Operator Assistant (SOP)
                     </label>
-                    <label className="flex items-center gap-1 text-[10px] text-amber-300 cursor-pointer">
+                    <label className="flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={qlIsCasualAssistant}
                         onChange={(e) => setQlIsCasualAssistant(e.target.checked)}
-                        className="rounded border-slate-600"
+                        className="rounded border-slate-300"
                       />
                       <span>Casual Name</span>
                     </label>
@@ -1430,13 +1450,13 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                       value={qlCasualName}
                       onChange={(e) => setQlCasualName(e.target.value)}
                       placeholder="Enter casual assistant full name"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     />
                   ) : (
                     <select
                       value={qlAssistant}
                       onChange={(e) => setQlAssistant(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     >
                       {GENERAL_HAND_OPTIONS.map((ast) => (
                         <option key={ast.value} value={ast.value}>
@@ -1448,16 +1468,15 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                 </div>
               </div>
 
-              {/* Assistant SOP Scrap + Wastage + Optional Qty */}
-              <div className="rounded-xl border border-amber-500/30 bg-amber-950/15 p-3 space-y-3">
-                <div className="text-[11px] font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+                <div className="text-[11px] font-bold text-[#0F1E36] flex items-center gap-1.5">
                   <Recycle className="h-3.5 w-3.5" />
-                  <span>Assistant SOP Scrap &amp; Wastage Log (Auto-Links to Dispatch &amp; Recycling)</span>
+                  <span>Assistant SOP Scrap &amp; Wastage Log</span>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-amber-200 block mb-1">
+                    <label className="text-[11px] font-medium text-slate-600 block mb-1">
                       SOP Scrap (kg)
                     </label>
                     <input
@@ -1467,11 +1486,11 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                       value={qlScrapKg}
                       onChange={(e) => setQlScrapKg(e.target.value)}
                       placeholder="0.00"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-rose-200 block mb-1">
+                    <label className="text-[11px] font-medium text-slate-600 block mb-1">
                       Wastage (kg)
                     </label>
                     <input
@@ -1481,11 +1500,11 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                       value={qlWastageKg}
                       onChange={(e) => setQlWastageKg(e.target.value)}
                       placeholder="0.00"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-white focus:border-rose-400 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
+                    <label className="text-[11px] font-medium text-slate-600 block mb-1">
                       Prod Qty (pcs)
                     </label>
                     <input
@@ -1494,11 +1513,11 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                       value={qlProdQty}
                       onChange={(e) => setQlProdQty(e.target.value)}
                       placeholder="Optional"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
+                    <label className="text-[11px] font-medium text-slate-600 block mb-1">
                       Prod Weight (kg)
                     </label>
                     <input
@@ -1508,14 +1527,14 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                       value={qlProdKg}
                       onChange={(e) => setQlProdKg(e.target.value)}
                       placeholder="Optional"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-white focus:border-sky-400 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
+                    <label className="text-[11px] font-medium text-slate-600 block mb-1">
                       Scrap Reason
                     </label>
                     <input
@@ -1523,17 +1542,17 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                       value={qlScrapReason}
                       onChange={(e) => setQlScrapReason(e.target.value)}
                       placeholder="e.g. Start-up purge, die trim, color change"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1">
+                    <label className="text-[11px] font-medium text-slate-600 block mb-1">
                       Assign Recycling Team
                     </label>
                     <select
                       value={qlAssignedRecycler}
                       onChange={(e) => setQlAssignedRecycler(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                     >
                       {RECYCLING_OPTIONS.map((r) => (
                         <option key={r.value} value={r.value}>
@@ -1544,33 +1563,33 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                   </div>
                 </div>
 
-                <label className="flex items-center gap-2 text-[11px] text-amber-200 cursor-pointer pt-0.5">
+                <label className="flex items-center gap-2 text-[11px] text-slate-700 cursor-pointer pt-0.5">
                   <input
                     type="checkbox"
                     checked={qlSendScrapPopup}
                     onChange={(e) => setQlSendScrapPopup(e.target.checked)}
-                    className="rounded border-slate-600"
+                    className="rounded border-slate-300"
                   />
                   <span>
-                    Send live Assistant SOP Scrap pop-up alert to Recycling Team when Scrap &gt; 0 kg
+                    Notify Recycling Team when Scrap &gt; 0 kg
                   </span>
                 </label>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
                 <button
                   type="button"
                   onClick={() => setQuickLogMachine(null)}
-                  className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-bold text-slate-300 hover:bg-slate-700"
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   Close
                 </button>
                 <button
                   type="submit"
                   disabled={qlSaving}
-                  className="rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 px-5 py-2 text-xs font-black text-slate-950 transition shadow"
+                  className="rounded-lg bg-[#0F1E36] hover:bg-[#193054] disabled:opacity-50 px-5 py-2 text-xs font-bold text-white transition shadow-xs"
                 >
-                  {qlSaving ? 'Saving Live Update...' : 'Save Machine & SOP Update'}
+                  {qlSaving ? 'Saving Update...' : 'Save Update'}
                 </button>
               </div>
             </form>

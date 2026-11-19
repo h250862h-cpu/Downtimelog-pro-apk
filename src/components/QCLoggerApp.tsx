@@ -35,6 +35,7 @@ interface QCLoggerAppProps {
   onBackToDashboard: () => void;
   machines: string[];
   userEmail: string;
+  isAdmin?: boolean;
 }
 
 export const QCLoggerApp: React.FC<QCLoggerAppProps> = ({
@@ -43,6 +44,7 @@ export const QCLoggerApp: React.FC<QCLoggerAppProps> = ({
   onBackToDashboard,
   machines,
   userEmail,
+  isAdmin = false,
 }) => {
   // WhatsApp copy-paste text state
   const [inputText, setInputText] = useState('');
@@ -264,8 +266,12 @@ Status: Hold`;
 
   // Posted QC inspection records are permanent and cannot be deleted.
 
-  // Excel Export with Date Filtering
+  // Excel Export with Date Filtering (Strictly Admin Only)
   const handleExportExcel = () => {
+    if (!isAdmin) {
+      showToast('QC Excel reports are restricted strictly to Plant Admin / Production HOD.');
+      return;
+    }
     const filtered = logs.filter((l) => {
       if (filterFromDate && l.date < filterFromDate) return false;
       if (filterToDate && l.date > filterToDate) return false;
@@ -702,14 +708,21 @@ Status: Hold`;
             </p>
           </div>
 
-          <button
-            onClick={handleExportExcel}
-            disabled={!filteredLogs.length}
-            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-4 py-2 text-xs font-bold text-white shadow transition active:scale-[0.98] disabled:opacity-50"
-          >
-            <Download className="h-4 w-4" />
-            <span>Download QC Excel (.xlsx)</span>
-          </button>
+          {isAdmin ? (
+            <button
+              onClick={handleExportExcel}
+              disabled={!filteredLogs.length}
+              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-4 py-2 text-xs font-bold text-white shadow transition active:scale-[0.98] disabled:opacity-50"
+            >
+              <Download className="h-4 w-4" />
+              <span>Download QC Excel (.xlsx)</span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/90 px-3.5 py-2 text-xs font-semibold text-slate-400">
+              <Lock className="h-4 w-4 text-amber-400" />
+              <span>QC Excel Report: Admin Only</span>
+            </div>
+          )}
         </div>
 
         {/* Date Filters & Search */}

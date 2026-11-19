@@ -258,6 +258,46 @@
         "upd": { "type": "number" }
       },
       "required": ["grnNo", "date", "supplierName", "firstMeterReading", "secondMeterReading", "litresAdded"]
+    },
+    "power_cut_log": {
+      "title": "Plant Power Cut Log",
+      "description": "Records ZESA/mains power cut time out, time back, duration in minutes/hours, and generator activation",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "timeOut": { "type": "string", "maxLength": 40 },
+        "timeBack": { "type": "string", "maxLength": 40 },
+        "durationMinutes": { "type": "number" },
+        "affectedArea": { "type": "string", "maxLength": 150 },
+        "generatorUsed": { "type": "boolean" },
+        "status": { "type": "string", "maxLength": 30 },
+        "reason": { "type": "string", "maxLength": 500 },
+        "loggedBy": { "type": "string", "maxLength": 120 },
+        "upd": { "type": "number" }
+      },
+      "required": ["date", "shift", "timeOut", "status"]
+    },
+    "generator_log": {
+      "title": "Factory Generator Start Up & Stop Log",
+      "description": "Records generator start/stop times, fuel levels in Litres (start/stop/consumed), and linkage to Generator machine",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "startTime": { "type": "string", "maxLength": 40 },
+        "startFuelLitres": { "type": "number" },
+        "stopTime": { "type": "string", "maxLength": 40 },
+        "stopFuelLitres": { "type": "number" },
+        "fuelUsedLitres": { "type": "number" },
+        "durationMinutes": { "type": "number" },
+        "linkedPowerCutId": { "type": "string", "maxLength": 120 },
+        "linkedDowntimeEntryId": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "maxLength": 30 },
+        "operatorName": { "type": "string", "maxLength": 120 },
+        "upd": { "type": "number" }
+      },
+      "required": ["date", "shift", "startTime", "startFuelLitres", "status"]
     }
   },
   "firestore": {
@@ -296,6 +336,14 @@
     "/diesel_grn_records/{id}": {
       "schema": "diesel_grn_record",
       "description": "Signed fuel GRN bulk deliveries into the factory bowser tank"
+    },
+    "/power_cut_logs/{id}": {
+      "schema": "power_cut_log",
+      "description": "Plant mains power cut time out, time back, and total outage duration logs"
+    },
+    "/generator_logs/{id}": {
+      "schema": "generator_log",
+      "description": "Factory generator start up and stop logs with Litre fuel levels linked to Machines"
     },
     "/sop_production_logs/{id}": {
       "schema": "sop_production_log",

@@ -26,6 +26,7 @@ import {
 import { isUserAdmin } from '../services/downtimeStore';
 import { PlantRole } from '../types';
 import { LgplastLogo } from './LgplastLogo';
+import polymerWatermarkImg from '../assets/images/polymer_structure_watermark_1795107461403.jpg';
 
 interface LoginGateProps {
   onLoginSuccess: () => void;
@@ -207,38 +208,48 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4 sm:p-6 text-slate-100 selection:bg-amber-500 selection:text-slate-950 font-sans">
-      <div className="w-full max-w-md space-y-6">
+    <div className="relative min-h-screen bg-[#FAF8F3] flex flex-col justify-center items-center p-4 sm:p-6 text-slate-900 selection:bg-[#0F1E36] selection:text-white font-sans overflow-hidden">
+      {/* Subtle Polymer Molecular Structure Watermark Background (APK Only) */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 z-0 overflow-hidden print:hidden"
+      >
+        <img
+          src={polymerWatermarkImg}
+          alt=""
+          referrerPolicy="no-referrer"
+          className="h-full w-full object-cover opacity-[0.08] mix-blend-multiply"
+        />
+      </div>
+
+      <div className="relative z-10 w-full max-w-md space-y-6">
         {/* App Branding Header */}
-        <div className="text-center space-y-3">
-          <div className="inline-flex rounded-2xl border border-amber-500/40 bg-slate-900/90 px-5 py-3 shadow-xl shadow-amber-950/40">
-            <LgplastLogo size="lg" />
+        <div className="text-center space-y-2.5">
+          <div className="inline-flex rounded-xl border border-slate-200 bg-white px-5 py-3 shadow-xs">
+            <LgplastLogo size="lg" variant="light" />
           </div>
-          <div className="flex items-center justify-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white">
-              PlantOps Industrial Suite
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#0F1E36]">
+              LG PLAST Plant Operations
             </h1>
-            <span className="rounded-md bg-amber-500/20 px-2 py-0.5 text-xs font-extrabold text-amber-400 border border-amber-500/30">
-              PRO APK
-            </span>
+            <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
+              Production Control · Dispatch · Quality Assurance
+            </p>
           </div>
-          <p className="text-xs sm:text-sm text-slate-400 max-w-sm mx-auto">
-            Equipment Downtime • 3-Stage Stock Dispatch • Shift Handover Logs
-          </p>
         </div>
 
         {/* Auth Card Container */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-6 shadow-2xl backdrop-blur-md">
+        <div className="rounded-xl border border-slate-200 bg-white/95 p-6 shadow-lg backdrop-blur-xs">
           {/* ============================================================== */}
           {/* VIEW 1: REGULAR SIGN IN ONLY */}
           {/* ============================================================== */}
           {mode === 'signin' && (
             <div className="space-y-4">
-              {/* Plant Access Lock Badge */}
-              <div className="flex items-center gap-2.5 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-xs text-blue-300">
-                <Lock className="h-4 w-4 shrink-0 text-blue-400" />
+              {/* Plant Access Lock Notice */}
+              <div className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                <Lock className="h-4 w-4 shrink-0 text-[#0F1E36]" />
                 <span>
-                  <b>Plant Access Restricted:</b> Sign in with your work email and password to access machinery logs and daily hours.
+                  <strong>Authorized Staff Only:</strong> Sign in with your work credentials to continue.
                 </span>
               </div>
 
@@ -247,7 +258,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                 type="button"
                 onClick={handleGoogleSignIn}
                 disabled={loading}
-                className="w-full flex items-center justify-center gap-2.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-750 p-2.5 text-xs font-bold text-slate-200 hover:text-white transition shadow-sm active:scale-[0.99] disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 p-2.5 text-xs font-semibold text-slate-800 transition shadow-2xs disabled:opacity-50"
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24">
                   <path
@@ -308,52 +319,52 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
               )}
 
               <div className="relative flex py-1 items-center">
-                <div className="flex-grow border-t border-slate-800"></div>
-                <span className="flex-shrink mx-3 text-[11px] text-slate-500 uppercase tracking-wider font-semibold">
+                <div className="flex-grow border-t border-slate-200"></div>
+                <span className="flex-shrink mx-3 text-[11px] text-slate-500 uppercase tracking-wider font-medium">
                   Or Sign in with Email
                 </span>
-                <div className="flex-grow border-t border-slate-800"></div>
+                <div className="flex-grow border-t border-slate-200"></div>
               </div>
 
               {/* Email/Password Form */}
               <form onSubmit={handleSignIn} className="space-y-3.5">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Work Email, Admin Login, or Phone Number
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Work Email or Phone Number
                   </label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
                       type="text"
                       required
-                      placeholder="e.g. 0714282338, operator email, or admin email"
+                      placeholder="e.g. operator email or phone number"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Password
                   </label>
                   <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
                       type="password"
                       required
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none"
                     />
                   </div>
                 </div>
 
                 {errorMsg && (
-                  <div className="flex items-start gap-2 rounded-xl bg-rose-500/10 border border-rose-500/30 p-2.5 text-xs text-rose-300">
-                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-400" />
+                  <div className="flex items-start gap-2 rounded-lg bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-800">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-600" />
                     <span className="leading-snug">{errorMsg}</span>
                   </div>
                 )}
@@ -361,21 +372,21 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 py-2.5 text-xs sm:text-sm font-bold text-slate-950 shadow-md shadow-amber-950/50 transition active:scale-[0.98] disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] py-2.5 text-xs sm:text-sm font-bold text-white shadow-xs transition disabled:opacity-50"
                 >
                   <LogIn className="h-4 w-4" />
-                  <span>{loading ? 'Authenticating...' : 'Sign In to APK'}</span>
+                  <span>{loading ? 'Authenticating...' : 'Sign In'}</span>
                 </button>
               </form>
 
-              {/* Registration Guard Notice: ONLY ADMIN CAN REGISTER */}
-              <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950/70 p-3.5 space-y-2 text-center">
-                <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-amber-400">
-                  <ShieldAlert className="h-3.5 w-3.5 text-amber-400" />
-                  <span>Need an Operator Account?</span>
+              {/* Registration Guard Notice */}
+              <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3.5 space-y-2 text-center">
+                <div className="flex items-center justify-center gap-1.5 text-[11px] font-semibold text-slate-700">
+                  <ShieldAlert className="h-3.5 w-3.5 text-[#0F1E36]" />
+                  <span>Account Provisioning</span>
                 </div>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Self-registration is disabled. New accounts are provisioned exclusively by the Plant Administrator.
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  New staff accounts are issued exclusively by the Plant Administrator.
                 </p>
                 <button
                   type="button"
@@ -383,10 +394,10 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                     setErrorMsg('');
                     setMode('admin_auth');
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 text-[11px] font-bold text-amber-300 transition"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 px-3 py-1.5 text-[11px] font-semibold text-slate-800 transition"
                 >
-                  <KeyRound className="h-3.5 w-3.5" />
-                  <span>Admin Registration Portal (Admin Login)</span>
+                  <KeyRound className="h-3.5 w-3.5 text-[#0F1E36]" />
+                  <span>Administrator Registration</span>
                 </button>
               </div>
             </div>
@@ -397,74 +408,74 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
           {/* ============================================================== */}
           {mode === 'admin_auth' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
                 <button
                   type="button"
                   onClick={() => {
                     setErrorMsg('');
                     setMode('signin');
                   }}
-                  className="flex items-center gap-1 text-xs text-slate-400 hover:text-white"
+                  className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900"
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
                   <span>Back to Sign In</span>
                 </button>
-                <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-black text-amber-400 uppercase">
-                  ADMIN ONLY
+                <span className="rounded bg-slate-100 border border-slate-300 px-2 py-0.5 text-[10px] font-bold text-[#0F1E36] uppercase tracking-wider">
+                  Admin Only
                 </span>
               </div>
 
-              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-1 text-xs text-amber-200">
-                <div className="flex items-center gap-1.5 font-bold text-amber-300">
-                  <ShieldCheck className="h-4 w-4 text-amber-400" />
-                  <span>Plant Admin Authorization Required</span>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-1 text-xs text-slate-700">
+                <div className="flex items-center gap-1.5 font-semibold text-[#0F1E36]">
+                  <ShieldCheck className="h-4 w-4 text-[#0F1E36]" />
+                  <span>Administrator Authorization Required</span>
                 </div>
-                <p className="text-[11px] text-amber-100/90 leading-relaxed">
-                  Only designated Plant Administrators can register and provision new operator accounts. Please verify administrator identity below.
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  Only designated Plant Administrators may provision new operator accounts. Verify your administrator credentials below.
                 </p>
               </div>
 
               <form onSubmit={handleAdminVerify} className="space-y-3.5">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Designated Admin Email
                   </label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
                       type="email"
                       required
                       value={adminEmail}
                       onChange={(e) => setAdminEmail(e.target.value)}
                       placeholder="h250862h@hit.ac.zw"
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                     />
                   </div>
-                  <span className="text-[10px] text-slate-500">
-                    Primary Plant Admin: <code className="text-amber-400">h250862h@hit.ac.zw</code>
+                  <span className="text-[10px] text-slate-500 mt-1 block">
+                    Primary Plant Admin: <code className="font-mono text-[#0F1E36] font-semibold">h250862h@hit.ac.zw</code>
                   </span>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Admin Password
                   </label>
                   <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
                       type="password"
                       required
                       placeholder="••••••••"
                       value={adminPassword}
                       onChange={(e) => setAdminPassword(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                     />
                   </div>
                 </div>
 
                 {errorMsg && (
-                  <div className="flex items-start gap-2 rounded-xl bg-rose-500/10 border border-rose-500/30 p-2.5 text-xs text-rose-300">
-                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-400" />
+                  <div className="flex items-start gap-2 rounded-lg bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-700">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-600" />
                     <span className="leading-snug">{errorMsg}</span>
                   </div>
                 )}
@@ -472,10 +483,10 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 py-2.5 text-xs sm:text-sm font-bold text-slate-950 shadow-md shadow-amber-950/50 transition active:scale-[0.98] disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] py-2.5 text-xs sm:text-sm font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:opacity-50"
                 >
                   <KeyRound className="h-4 w-4" />
-                  <span>{loading ? 'Verifying Admin...' : 'Unlock Registration Form'}</span>
+                  <span>{loading ? 'Verifying Administrator...' : 'Verify & Unlock Form'}</span>
                 </button>
               </form>
             </div>
@@ -486,16 +497,16 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
           {/* ============================================================== */}
           {mode === 'admin_provision' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
                 <div className="flex items-center gap-2">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/40">
-                    ✓
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
                   </span>
                   <div>
-                    <span className="text-xs font-bold text-white block">
+                    <span className="text-xs font-semibold text-slate-900 block">
                       Admin Authorized
                     </span>
-                    <span className="text-[10px] text-amber-400 font-mono">
+                    <span className="text-[10px] text-slate-500 font-mono">
                       {adminVerifiedEmail}
                     </span>
                   </div>
@@ -506,78 +517,78 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                     setErrorMsg('');
                     setMode('signin');
                   }}
-                  className="text-xs text-slate-400 hover:text-white"
+                  className="text-xs font-medium text-slate-500 hover:text-slate-900"
                 >
-                  Cancel / Sign In
+                  Cancel
                 </button>
               </div>
 
-              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                <UserPlus className="h-4 w-4 text-amber-400" />
-                <span>Provision New Plant User</span>
+              <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-1.5">
+                <UserPlus className="h-4 w-4 text-[#0F1E36]" />
+                <span>Provision New Staff Account</span>
               </h3>
 
               <form onSubmit={handleAdminProvision} className="space-y-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Operator Full Name
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Full Name
                   </label>
                   <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
                       type="text"
                       required
                       placeholder="e.g. Eric Nyamapanda"
                       value={newOpName}
                       onChange={(e) => setNewOpName(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Username or Work Email (Login ID)
                   </label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
                       type="text"
                       required
                       placeholder="wh1 or operator@plant.co.zw"
                       value={newOpEmail}
                       onChange={(e) => setNewOpEmail(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Set Initial Password
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Initial Password
                   </label>
                   <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
                       type="password"
                       required
-                      placeholder="At least 6 characters"
+                      placeholder="Minimum 6 characters"
                       value={newOpPassword}
                       onChange={(e) => setNewOpPassword(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Role
                     </label>
                     <select
                       value={newOpRole}
                       onChange={(e) => setNewOpRole(e.target.value as PlantRole)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                     >
                       <option value="WH Personnel">WH Personnel (WH Goods Confirm Only)</option>
                       <option value="Shift In Charge">Shift In Charge (Machines &amp; Shift Dispatch)</option>
@@ -591,13 +602,13 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
                       Department
                     </label>
                     <select
                       value={newOpDept}
                       onChange={(e) => setNewOpDept(e.target.value)}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-slate-100 focus:border-amber-500 focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                     >
                       <option value="Warehouse & Dispatch (WH)">Warehouse &amp; Dispatch (WH)</option>
                       <option value="Extrusion & Production">Extrusion</option>
@@ -612,8 +623,8 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                 </div>
 
                 {errorMsg && (
-                  <div className="flex items-start gap-2 rounded-xl bg-rose-500/10 border border-rose-500/30 p-2.5 text-xs text-rose-300">
-                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-400" />
+                  <div className="flex items-start gap-2 rounded-lg bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-700">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-600" />
                     <span className="leading-snug">{errorMsg}</span>
                   </div>
                 )}
@@ -621,10 +632,10 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 py-2.5 text-xs sm:text-sm font-bold text-slate-950 shadow-md shadow-emerald-950/50 transition active:scale-[0.98] disabled:opacity-50 mt-2"
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] py-2.5 text-xs sm:text-sm font-semibold text-white shadow-sm transition active:scale-[0.99] disabled:opacity-50 mt-2"
                 >
                   <UserPlus className="h-4 w-4" />
-                  <span>{loading ? 'Creating Account in Firebase...' : 'Register Operator Account'}</span>
+                  <span>{loading ? 'Provisioning Account...' : 'Create Staff Account'}</span>
                 </button>
               </form>
             </div>
@@ -635,37 +646,37 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
           {/* ============================================================== */}
           {mode === 'provision_success' && lastCreatedUser && (
             <div className="space-y-4 text-center">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-                <CheckCircle2 className="h-8 w-8" />
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <CheckCircle2 className="h-7 w-7" />
               </div>
 
               <div>
-                <h3 className="text-base font-bold text-white">
-                  Operator Registered Successfully!
+                <h3 className="text-base font-semibold text-slate-900">
+                  Account Provisioned Successfully
                 </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  The account has been created in Firebase and is ready for login.
+                <p className="text-xs text-slate-500 mt-1">
+                  The operator account has been registered and is ready for immediate sign-in.
                 </p>
               </div>
 
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-left space-y-1.5 text-xs">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-left space-y-1.5 text-xs">
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Full Name:</span>
-                  <span className="font-bold text-slate-200">{lastCreatedUser.name}</span>
+                  <span className="text-slate-500">Full Name:</span>
+                  <span className="font-semibold text-slate-900">{lastCreatedUser.name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Login Email:</span>
-                  <span className="font-mono text-emerald-400 font-semibold">
+                  <span className="text-slate-500">Login ID:</span>
+                  <span className="font-mono text-[#0F1E36] font-semibold">
                     {lastCreatedUser.email}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Plant Role:</span>
-                  <span className="font-semibold text-amber-400">{lastCreatedUser.role}</span>
+                  <span className="text-slate-500">Assigned Role:</span>
+                  <span className="font-semibold text-slate-800">{lastCreatedUser.role}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Department:</span>
-                  <span className="text-slate-300">{lastCreatedUser.dept}</span>
+                  <span className="text-slate-500">Department:</span>
+                  <span className="text-slate-700">{lastCreatedUser.dept}</span>
                 </div>
               </div>
 
@@ -676,10 +687,10 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                     setErrorMsg('');
                     setMode('admin_provision');
                   }}
-                  className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-750 py-2 text-xs font-bold text-slate-200 hover:text-white transition"
+                  className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 py-2 text-xs font-semibold text-slate-800 transition"
                 >
-                  <UserPlus className="h-3.5 w-3.5 text-amber-400" />
-                  <span>Register Another Operator</span>
+                  <UserPlus className="h-3.5 w-3.5 text-[#0F1E36]" />
+                  <span>Provision Another Account</span>
                 </button>
 
                 <button
@@ -688,22 +699,19 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                     setErrorMsg('');
                     setMode('signin');
                   }}
-                  className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 py-2 text-xs font-bold text-slate-950 transition shadow-md"
+                  className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-[#0F1E36] hover:bg-[#193054] py-2 text-xs font-semibold text-white transition shadow-sm"
                 >
                   <LogIn className="h-3.5 w-3.5" />
-                  <span>Go to Sign In Screen</span>
+                  <span>Return to Sign In</span>
                 </button>
               </div>
             </div>
           )}
 
           {/* Plant Admin Contact Footer */}
-          <div className="mt-5 border-t border-slate-800/80 pt-4 text-center">
-            <p className="text-[11px] text-slate-400">
-              Designated Plant Admin: <span className="font-mono text-amber-400 font-semibold">{PRIMARY_ADMIN_EMAIL}</span>
-            </p>
-            <p className="text-[10px] text-slate-500 mt-1">
-              Live Firebase Database: <span className="font-mono text-slate-400">downtime-log-d484f</span>
+          <div className="mt-5 border-t border-slate-200 pt-4 text-center">
+            <p className="text-[11px] text-slate-500">
+              Plant Administrator: <span className="font-mono text-[#0F1E36] font-semibold">{PRIMARY_ADMIN_EMAIL}</span>
             </p>
           </div>
         </div>

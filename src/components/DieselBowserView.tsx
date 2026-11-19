@@ -211,7 +211,7 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
   const canRequestFuel = isAdmin || Boolean(permissions.dieselFuelRequest);
   const canHodApprove = isAdmin || Boolean(permissions.dieselHODApprove);
   const canGrn = isAdmin || Boolean(permissions.dieselGRN);
-  const canExportExcel = isAdmin || Boolean(permissions.dieselExportExcel);
+  const canExportExcel = isAdmin;
 
   const allowedSubTabs = useMemo<DieselSubTab[]>(() => {
     const list: DieselSubTab[] = [];

@@ -356,25 +356,20 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 sm:p-4 backdrop-blur-sm">
-      <div className="w-full max-w-4xl rounded-2xl border border-sky-500/60 bg-slate-900 shadow-2xl shadow-sky-950/60 overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 sm:p-4 backdrop-blur-xs">
+      <div className="w-full max-w-4xl rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-sky-500/30 bg-gradient-to-r from-sky-500/20 via-blue-600/15 to-slate-900">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-400 text-slate-950 animate-bounce shrink-0">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white border border-white/15 shrink-0">
               <AlarmClock className="h-5 w-5" />
             </div>
             <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-sm sm:text-base font-black uppercase tracking-wide text-white">
-                  {activeSlot.slot} Scheduled Check — Update Running Weight &amp; Machine Output
-                </h3>
-                <span className="rounded-md bg-amber-500/20 border border-amber-400/50 px-2 py-0.5 text-[10px] font-black text-amber-300">
-                  SHIFT IN CHARGE ALERT
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-300 mt-0.5">
-                Daily Check Times: <b>09:45 · 12:45 · 18:00</b> (Day) &amp; <b>23:45 · 03:45 · 06:45</b> (Night). Enter updated running weight &amp; machine output below.
+              <h3 className="text-sm sm:text-base font-bold tracking-tight text-white">
+                Running Weight &amp; Machine Output Update
+              </h3>
+              <p className="text-[11px] text-slate-300">
+                Enter updated running weight (kg) and output rate (/hr) for active shift machines.
               </p>
             </div>
           </div>
@@ -382,35 +377,35 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
           <button
             type="button"
             onClick={handleDismissForNow}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
-            title="Dismiss pop-up for now"
+            className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10 hover:text-white transition"
+            title="Dismiss notice"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* Dept Filter & Quick Jump */}
-        <div className="px-5 py-2.5 border-b border-slate-800 bg-slate-950/70 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="px-5 py-2.5 border-b border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="flex flex-wrap items-center gap-1.5">
             {(['ALL', 'Extrusion', 'Injection', 'Mixer', 'Recycling'] as const).map((d) => (
               <button
                 key={d}
                 type="button"
                 onClick={() => setDeptFilter(d)}
-                className={`rounded-lg px-2.5 py-1 text-[11px] font-bold border transition ${
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold border transition ${
                   deptFilter === d
-                    ? 'bg-sky-500 text-slate-950 border-sky-300'
-                    : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                    ? 'bg-[#0F1E36] text-white border-[#0F1E36]'
+                    : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
                 }`}
               >
-                {d === 'ALL' ? `All Active (${productionMachines.length})` : d}
+                {d === 'ALL' ? `All (${productionMachines.length})` : d}
               </button>
             ))}
           </div>
 
           <div className="flex items-center gap-2 text-[11px]">
-            <span className="text-slate-400">
-              Modified: <b className="text-sky-300">{dirtyRows.length}</b>
+            <span className="text-slate-600 tabular-nums">
+              Modified: <b className="text-[#0F1E36]">{dirtyRows.length}</b>
             </span>
             <button
               type="button"
@@ -418,16 +413,16 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
                 handleDismissForNow();
                 onOpenMachinesBoard();
               }}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2.5 py-1 font-bold text-slate-200 transition"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 px-2.5 py-1 font-semibold text-slate-700 transition"
             >
-              <Activity className="h-3 w-3 text-emerald-400" />
-              <span>Open Machine Board</span>
+              <Activity className="h-3 w-3 text-emerald-700" />
+              <span>Machine Board</span>
             </button>
           </div>
         </div>
 
         {feedback && (
-          <div className="mx-5 mt-3 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-3 py-2 text-xs font-bold text-emerald-300 flex items-center gap-2">
+          <div className="mx-5 mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             <span>{feedback}</span>
           </div>
@@ -435,9 +430,9 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
 
         {/* Scrollable Fast-Edit Machine Table */}
         <div className="p-4 sm:p-5 overflow-y-auto flex-1">
-          <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-950 text-[10px] font-black uppercase text-slate-400 sticky top-0">
+              <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-600 sticky top-0">
                 <tr>
                   <th className="p-2.5">Machine</th>
                   <th className="p-2.5">Running Product</th>
@@ -445,15 +440,15 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
                   <th className="p-2.5">Machine Output (/hr)</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800 bg-slate-950/50">
+              <tbody className="divide-y divide-slate-200 bg-white">
                 {visibleRows.map((row) => (
                   <tr
                     key={row.machine}
-                    className={row.dirty ? 'bg-sky-950/30' : 'hover:bg-slate-900/60'}
+                    className={row.dirty ? 'bg-blue-50/60' : 'hover:bg-slate-50'}
                   >
                     <td className="p-2 whitespace-nowrap">
-                      <div className="font-bold text-white">{row.machine}</div>
-                      <div className="text-[10px] text-slate-400">{row.dept}</div>
+                      <div className="font-semibold text-slate-900">{row.machine}</div>
+                      <div className="text-[10px] text-slate-500">{row.dept}</div>
                     </td>
                     <td className="p-2 min-w-[180px]">
                       <input
@@ -463,7 +458,7 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
                           updateRowField(row.machine, 'product', e.target.value)
                         }
                         placeholder="Running product"
-                        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-amber-200 focus:border-sky-400 focus:outline-none"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                       />
                     </td>
                     <td className="p-2 min-w-[130px]">
@@ -474,7 +469,7 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
                           updateRowField(row.machine, 'weight', e.target.value)
                         }
                         placeholder="e.g. 650 kg"
-                        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-mono text-white focus:border-sky-400 focus:outline-none"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-slate-900 focus:border-[#0F1E36] focus:outline-none"
                       />
                     </td>
                     <td className="p-2 min-w-[140px]">
@@ -485,7 +480,7 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
                           updateRowField(row.machine, 'output', e.target.value)
                         }
                         placeholder="e.g. 160 m/hr"
-                        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-mono text-emerald-300 focus:border-sky-400 focus:outline-none"
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums text-emerald-800 focus:border-[#0F1E36] focus:outline-none"
                       />
                     </td>
                   </tr>
@@ -496,11 +491,11 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
         </div>
 
         {/* Footer Actions */}
-        <div className="px-5 py-3.5 border-t border-slate-800 bg-slate-950/90 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-            <Clock className="h-3.5 w-3.5 text-sky-400" />
+        <div className="px-5 py-3.5 border-t border-slate-200 bg-slate-50 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
+            <Clock className="h-3.5 w-3.5 text-slate-500" />
             <span>
-              Check Slot: <b className="text-white">{activeSlot.slot}</b> ({activeSlot.shiftLabel} Shift)
+              {activeSlot.shiftLabel} Shift · {activeSlot.slot}
             </span>
           </div>
 
@@ -508,22 +503,22 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
             <button
               type="button"
               onClick={handleDismissForNow}
-              className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3.5 py-2 text-xs font-bold text-slate-300 transition"
+              className="rounded-lg border border-slate-300 bg-white hover:bg-slate-100 px-3.5 py-2 text-xs font-semibold text-slate-700 transition"
             >
-              Remind Me Later
+              Remind Later
             </button>
             <button
               type="button"
               onClick={handleConfirmNoChanges}
-              className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 px-3.5 py-2 text-xs font-bold text-emerald-300 transition"
+              className="rounded-lg border border-emerald-600/30 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-2 text-xs font-semibold text-emerald-800 transition"
             >
-              Mark {activeSlot.slot} Checked
+              Confirm No Change
             </button>
             <button
               type="button"
               disabled={saving}
               onClick={handleSaveAllUpdates}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-sky-400 to-blue-500 hover:from-sky-300 hover:to-blue-400 disabled:opacity-50 px-5 py-2 text-xs font-black text-slate-950 shadow-lg transition"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F1E36] hover:bg-[#193054] disabled:opacity-50 px-5 py-2 text-xs font-bold text-white shadow-xs transition"
             >
               {saving ? (
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -532,10 +527,10 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
               )}
               <span>
                 {saving
-                  ? 'Saving Live Updates...'
+                  ? 'Saving Updates...'
                   : dirtyRows.length > 0
-                  ? `Save ${dirtyRows.length} Machine Update(s)`
-                  : 'Confirm All Weights & Outputs OK'}
+                  ? `Save ${dirtyRows.length} Update(s)`
+                  : 'Confirm All Weights OK'}
               </span>
               <ArrowRight className="h-3.5 w-3.5" />
             </button>

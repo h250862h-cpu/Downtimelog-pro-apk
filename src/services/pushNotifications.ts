@@ -175,8 +175,8 @@ export async function requestPhonePushPermission(): Promise<
     if (result === 'granted') {
       await sendOsPushNotification({
         tag: 'lgplast_alerts_enabled',
-        title: 'LG PLAST Phone Push Alerts Active',
-        body: 'You will receive live push notifications like emails whenever Dispatch, Diesel, Scrap/Mixing, Weight Checks, or Breakdown updates arrive.',
+        title: 'LG PLAST — Phone Notifications Enabled',
+        body: 'Official notifications are active. You will receive real-time alerts for Dispatch, Diesel, SOP Floor, Weight Updates, and Stoppages when connected to the network.',
         targetTab: 'status',
         urgent: false,
       });
@@ -190,8 +190,8 @@ export async function requestPhonePushPermission(): Promise<
 export async function sendTestPhonePushNotification(): Promise<boolean> {
   return sendOsPushNotification({
     tag: `lgplast_test_${Date.now()}`,
-    title: '🔔 LG PLAST Test Phone Notification',
-    body: 'Push notifications are connected. New APK updates will appear on your phone tray as long as you are connected to the network.',
+    title: 'LG PLAST — Notification Verification',
+    body: 'Notifications are connected. Official plant updates will appear on your device tray while online.',
     targetTab: 'status',
     urgent: false,
   });
@@ -201,8 +201,8 @@ export function updateAppBadgeCount(count: number): void {
   if (typeof document !== 'undefined') {
     document.title =
       count > 0
-        ? `(${count}) LG PLAST Live Operations APK`
-        : 'LG PLAST - Live Operations APK';
+        ? `(${count}) LG PLAST - Plant Operations System`
+        : 'LG PLAST - Plant Operations System';
   }
   if (typeof navigator !== 'undefined') {
     const navAny = navigator as unknown as {
@@ -324,8 +324,8 @@ export async function evaluateAndDispatchPushNotifications(
       .forEach((e) => {
         candidates.push({
           tag: `PUSH_DSP_${e.id}_PENDING_WH`,
-          title: `🚚 New Dispatch Waiting WH: Trolley #${e.trolleyNo}`,
-          body: `${normalizeMachineName(e.machine)} • ${e.product} (${e.recordedQty}) sent by ${e.shiftInChargeName}. Tap to confirm & sign.`,
+          title: `Dispatch WH Confirmation: Trolley #${e.trolleyNo}`,
+          body: `${normalizeMachineName(e.machine)} / ${e.product} (${e.recordedQty}) — Submitted by ${e.shiftInChargeName}.`,
           targetTab: 'dispatch',
           dispatchStage: 'wh',
           urgent: true,
@@ -340,10 +340,10 @@ export async function evaluateAndDispatchPushNotifications(
       .forEach((e) => {
         candidates.push({
           tag: `PUSH_DSP_${e.id}_PENDING_HOD`,
-          title: `✅ Dispatch WH Signed → HOD Approval: Trolley #${e.trolleyNo}`,
-          body: `${normalizeMachineName(e.machine)} • ${e.product} (WH Qty: ${
+          title: `Dispatch HOD Approval: Trolley #${e.trolleyNo}`,
+          body: `${normalizeMachineName(e.machine)} / ${e.product} — WH Qty: ${
             e.whReceivedQty ?? e.recordedQty
-          }). Tap for Production HOD approval.`,
+          }.`,
           targetTab: 'dispatch',
           dispatchStage: 'hod',
           urgent: true,
@@ -358,8 +358,8 @@ export async function evaluateAndDispatchPushNotifications(
       .forEach((s) => {
         candidates.push({
           tag: `PUSH_SOP_REC_${s.id}_SENT_TO_RECYCLING`,
-          title: `♻️ Scrap Sent to Recycling: ${normalizeMachineName(s.machine)}`,
-          body: `${s.scrapKg} kg (${s.product}) sent by ${s.sentByAssistant}. Tap to receive & process.`,
+          title: `Recycling Handover: ${normalizeMachineName(s.machine)}`,
+          body: `${s.scrapKg} kg (${s.product}) submitted by ${s.sentByAssistant}.`,
           targetTab: 'sop_recycling',
           urgent: true,
         });
@@ -373,10 +373,10 @@ export async function evaluateAndDispatchPushNotifications(
       .forEach((s) => {
         candidates.push({
           tag: `PUSH_SOP_MIX_${s.id}_PROCESSED_FOR_MIXER`,
-          title: `🧪 Usable Material Ready for Mixer: ${normalizeMachineName(s.machine)}`,
+          title: `Mixer Material Ready: ${normalizeMachineName(s.machine)}`,
           body: `${s.usableMaterialKg ?? s.receivedKg ?? s.scrapKg} kg processed by ${
             s.processedBy || s.receivedBy || 'Recycling'
-          }. Tap to log mixing.`,
+          }.`,
           targetTab: 'sop_mixing',
           urgent: true,
         });
@@ -390,8 +390,8 @@ export async function evaluateAndDispatchPushNotifications(
       .forEach((m) => {
         candidates.push({
           tag: `PUSH_MIX_HOD_${m.id}_PENDING_HOD`,
-          title: `📊 Mixing Complete → HOD Review: ${normalizeMachineName(m.machine)}`,
-          body: `End Stock: ${m.endOfMixingStockKg} kg · Sweeping: ${m.sweepingMaterialKg} kg (${m.batchesMixed} batches). Tap to review.`,
+          title: `Mixing Report HOD Review: ${normalizeMachineName(m.machine)}`,
+          body: `Closing Stock: ${m.endOfMixingStockKg} kg · Sweeping: ${m.sweepingMaterialKg} kg (${m.batchesMixed} batches).`,
           targetTab: 'sop_mixing',
           urgent: true,
         });
@@ -405,8 +405,8 @@ export async function evaluateAndDispatchPushNotifications(
       .forEach((r) => {
         candidates.push({
           tag: `PUSH_DSL_HOD_${r.id}_PENDING_HOD`,
-          title: `⛽ Forklift Diesel Request: ${r.requestedLitres}L (${r.requestNo})`,
-          body: `${r.vehicleOrForklift} • Driver: ${r.driverName}. Tap to approve & issue PDF voucher.`,
+          title: `Diesel Request Awaiting HOD Approval (${r.requestNo})`,
+          body: `${r.requestedLitres} L requested for ${r.vehicleOrForklift} by ${r.driverName}.`,
           targetTab: 'diesel',
           dieselSubTab: 'hod_approve',
           urgent: true,
@@ -427,10 +427,10 @@ export async function evaluateAndDispatchPushNotifications(
       .forEach((r) => {
         candidates.push({
           tag: `PUSH_DSL_DRV_${r.id}_APPROVED_FOR_DISPENSE`,
-          title: `🔓 Fuel PDF Approved — Bowser Meter Unlocked (${r.requestNo})`,
-          body: `${r.hodApprovedLitres ?? r.requestedLitres}L approved by ${
+          title: `Diesel Approved — Bowser Meter Entry Open (${r.requestNo})`,
+          body: `${r.hodApprovedLitres ?? r.requestedLitres} L approved by ${
             r.hodApprovedBy || 'Production HOD'
-          }. Tap to enter 1st & 2nd meter readings.`,
+          }. Record opening and closing meter readings.`,
           targetTab: 'diesel',
           dieselSubTab: 'dispense',
           urgent: true,
@@ -454,8 +454,8 @@ export async function evaluateAndDispatchPushNotifications(
         : 'hod';
       candidates.push({
         tag: `PUSH_SCHED_DSP_${activeDspSched.slotKey}`,
-        title: `⏰ ${activeDspSched.slot} Dispatch Update Reminder`,
-        body: 'Please update ready dispatch trollies and confirm pending movements before shift closing.',
+        title: `Scheduled Dispatch Update (${activeDspSched.slot})`,
+        body: 'Update ready dispatch trollies and confirm pending stock movements.',
         targetTab: 'dispatch',
         dispatchStage: stage,
         urgent: true,
@@ -470,8 +470,8 @@ export async function evaluateAndDispatchPushNotifications(
     if (activeWoSlot && !doneWoSched.includes(activeWoSlot.slotKey)) {
       candidates.push({
         tag: `PUSH_SCHED_WO_${activeWoSlot.slotKey}`,
-        title: `⚖️ ${activeWoSlot.slot} Weight & Machine Output Check`,
-        body: 'Shift In Charge alert: update running weights (kg) & machine outputs (/hr) across active machines.',
+        title: `Shift Running Weight & Output Update (${activeWoSlot.slot})`,
+        body: 'Record updated running product weight and machine output rates.',
         targetTab: 'status',
         openWeightCheck: true,
         urgent: true,
@@ -494,8 +494,8 @@ export async function evaluateAndDispatchPushNotifications(
         const machineName = normalizeMachineName(e.m);
         candidates.push({
           tag: `PUSH_BD_${e.id}_${e.upd || 0}`,
-          title: `🚨 Machine Breakdown Alert: ${machineName}`,
-          body: `${e.reason || 'Breakdown stoppage'} (${e.jcn || 'Production'}). Logged by ${
+          title: `Breakdown Notice: ${machineName}`,
+          body: `${e.reason || 'Unplanned stoppage'} (${e.jcn || 'Production'}) — Logged by ${
             e.rep || 'Floor'
           }.`,
           targetTab: 'status',
@@ -532,8 +532,8 @@ export async function evaluateAndDispatchPushNotifications(
     const first = unseen[0];
     await sendOsPushNotification({
       tag: `PUSH_DIGEST_${todayStr}_${unseen.length}`,
-      title: `🔔 LG PLAST APK: ${unseen.length} Pending Floor Updates`,
-      body: `${first.title} — plus ${unseen.length - 1} more alert(s) waiting for action. Tap to open.`,
+      title: `LG PLAST: ${unseen.length} Pending Action Items`,
+      body: `${first.title} and ${unseen.length - 1} additional operational update(s).`,
       targetTab: first.targetTab,
       dispatchStage: first.dispatchStage,
       dieselSubTab: first.dieselSubTab,

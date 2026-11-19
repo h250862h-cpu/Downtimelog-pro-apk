@@ -181,70 +181,65 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
     };
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm animate-in fade-in duration-150">
-        <div className="w-full max-w-lg rounded-2xl border border-sky-500/60 bg-slate-900 shadow-2xl shadow-sky-950/50 overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-sky-500/30 bg-gradient-to-r from-sky-500/20 via-blue-600/15 to-slate-900">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+        <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
             <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-400 text-slate-950 animate-bounce">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white border border-white/15">
                 <AlarmClock className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-sm font-black uppercase tracking-wide text-white">
+                <h3 className="text-sm font-bold tracking-tight text-white">
                   {activeSchedule.slot === '06:30'
-                    ? '06:30 AM Dispatch Update Reminder'
-                    : '15:45 Day Shift Dispatch Update Reminder'}
+                    ? 'Morning Dispatch Update Required'
+                    : 'Afternoon Dispatch Update Required'}
                 </h3>
                 <p className="text-[11px] text-slate-300">
-                  Scheduled Dispatch Check · {activeSchedule.shiftLabel}
+                  {activeSchedule.shiftLabel}
                 </p>
               </div>
             </div>
             <button
               type="button"
               onClick={handleSnoozeSchedule}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
-              title="Dismiss pop-up for now"
+              className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10 hover:text-white transition"
+              title="Dismiss for now"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
           <div className="p-5 space-y-4 text-xs">
-            <div className="rounded-xl border border-slate-800 bg-slate-950/90 p-4 space-y-2.5">
-              <p className="text-slate-200 leading-relaxed font-medium">
-                It is <b className="text-sky-300">{activeSchedule.slot}</b> — please update all ready dispatch trollies, unit weights, and confirm pending movement records before shift closing.
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+              <p className="text-slate-700 leading-relaxed font-medium">
+                Please record ready dispatch trollies, unit weights, and confirm pending floor movements before shift close.
               </p>
 
-              <div className="grid grid-cols-3 gap-2 pt-1 text-center">
-                <div className="rounded-lg border border-slate-800 bg-slate-900 p-2">
-                  <span className="text-[10px] uppercase text-slate-400 block font-bold">
-                    Today Logged
+              <div className="grid grid-cols-3 gap-2 text-center tabular-nums">
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <span className="text-[11px] text-slate-500 block font-medium">
+                    Logged Today
                   </span>
-                  <span className="text-base font-black text-white">
+                  <span className="text-base font-bold text-slate-900">
                     {todayEntries.length}
                   </span>
                 </div>
-                <div className="rounded-lg border border-amber-500/30 bg-amber-950/20 p-2">
-                  <span className="text-[10px] uppercase text-amber-300 block font-bold">
-                    Wait WH
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+                  <span className="text-[11px] text-amber-800 block font-medium">
+                    Awaiting WH
                   </span>
-                  <span className="text-base font-black text-amber-300">
+                  <span className="text-base font-bold text-amber-800">
                     {pendingWhCount}
                   </span>
                 </div>
-                <div className="rounded-lg border border-sky-500/30 bg-sky-950/20 p-2">
-                  <span className="text-[10px] uppercase text-sky-300 block font-bold">
-                    Wait HOD
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <span className="text-[11px] text-slate-500 block font-medium">
+                    Awaiting HOD
                   </span>
-                  <span className="text-base font-black text-sky-300">
+                  <span className="text-base font-bold text-[#0F1E36]">
                     {pendingHodCount}
                   </span>
                 </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 text-[11px] text-slate-400 pt-1 border-t border-slate-800/80">
-                <Clock className="h-3.5 w-3.5 text-sky-400" />
-                <span>Scheduled Dispatch Reminders: 06:30 AM &amp; 15:45 Day Shift</span>
               </div>
             </div>
 
@@ -252,24 +247,24 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
               <button
                 type="button"
                 onClick={handleSnoozeSchedule}
-                className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-4 py-2 text-xs font-bold text-slate-300 transition"
+                className="rounded-lg border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700 transition"
               >
-                Remind Me Later
+                Remind Later
               </button>
               <button
                 type="button"
                 onClick={() => handleAckSchedule(false)}
-                className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 px-4 py-2 text-xs font-bold text-emerald-300 transition"
+                className="rounded-lg border border-emerald-600/30 bg-emerald-50 hover:bg-emerald-100 px-4 py-2 text-xs font-semibold text-emerald-800 transition"
               >
-                Mark Checked
+                Mark Reviewed
               </button>
               <button
                 type="button"
                 onClick={() => handleAckSchedule(true)}
-                className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-400 to-blue-500 hover:from-sky-300 hover:to-blue-400 px-5 py-2 text-xs font-black text-slate-950 shadow-lg transition"
+                className="flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-5 py-2 text-xs font-bold text-white shadow-xs transition"
               >
                 <Truck className="h-4 w-4" />
-                <span>Open Dispatch Update</span>
+                <span>Open Dispatch</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
             </div>
@@ -296,50 +291,30 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm animate-in fade-in duration-150">
-      <div
-        className={`w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden ${
-          isWHAlert
-            ? 'border-amber-500/60 bg-slate-900 shadow-amber-950/50'
-            : 'border-emerald-500/60 bg-slate-900 shadow-emerald-950/50'
-        }`}
-      >
-        {/* Urgent Notification Header */}
-        <div
-          className={`flex items-center justify-between px-5 py-3.5 border-b ${
-            isWHAlert
-              ? 'bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-slate-900 border-amber-500/30'
-              : 'bg-gradient-to-r from-emerald-500/20 via-teal-500/15 to-slate-900 border-emerald-500/30'
-          }`}
-        >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden">
+        {/* Formal Header */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
           <div className="flex items-center gap-2.5">
-            <div
-              className={`flex h-9 w-9 items-center justify-center rounded-xl animate-bounce ${
-                isWHAlert
-                  ? 'bg-amber-500 text-slate-950'
-                  : 'bg-emerald-500 text-slate-950'
-              }`}
-            >
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white border border-white/15">
               <BellRing className="h-5 w-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-black uppercase tracking-wide text-white">
-                  {isWHAlert
-                    ? 'New Dispatch Message → WH Confirmation Required'
-                    : 'WH Confirmed → Production HOD Final Approval Required'}
-                </h3>
-              </div>
+              <h3 className="text-sm font-bold tracking-tight text-white">
+                {isWHAlert
+                  ? 'Dispatch Notice — Warehouse Confirmation Required'
+                  : 'Dispatch Notice — Production HOD Approval Required'}
+              </h3>
               <p className="text-[11px] text-slate-300">
-                {activeList.length} pending dispatch {activeList.length === 1 ? 'entry' : 'entries'} awaiting your signature
+                {activeList.length} pending {activeList.length === 1 ? 'record' : 'records'} awaiting authorization
               </p>
             </div>
           </div>
 
           <button
             onClick={() => onDismissKey(stageKey)}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
-            title="Dismiss pop-up for now"
+            className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10 hover:text-white transition"
+            title="Dismiss notice"
           >
             <X className="h-4 w-4" />
           </button>
@@ -347,72 +322,72 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
 
         {/* Message Body */}
         <div className="p-5 space-y-4">
-          <div className="rounded-xl border border-slate-800 bg-slate-950/90 p-4 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
-              <span className="inline-flex items-center gap-1.5 text-xs font-black text-amber-300">
-                <Truck className="h-4 w-4" />
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[#0F1E36] tabular-nums">
+                <Truck className="h-4 w-4 text-slate-600" />
                 Trolley #{latest.trolleyNo}
               </span>
-              <span className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] font-bold text-slate-300">
-                {latest.date} • {latest.shift} Shift
+              <span className="text-[11px] font-medium text-slate-500 tabular-nums">
+                {latest.date} · {latest.shift} Shift
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
-                <div className="text-[10px] font-semibold uppercase text-slate-500">Machine</div>
-                <div className="font-bold text-white">{latest.machine}</div>
+                <div className="text-[11px] font-medium text-slate-500">Machine</div>
+                <div className="font-semibold text-slate-900">{latest.machine}</div>
               </div>
               <div>
-                <div className="text-[10px] font-semibold uppercase text-slate-500">Product</div>
-                <div className="font-bold text-blue-300">{latest.product}</div>
+                <div className="text-[11px] font-medium text-slate-500">Product</div>
+                <div className="font-semibold text-[#0F1E36]">{latest.product}</div>
               </div>
               <div>
-                <div className="text-[10px] font-semibold uppercase text-slate-500">
-                  Shift In Charge Qty
+                <div className="text-[11px] font-medium text-slate-500">
+                  Recorded Qty
                 </div>
-                <div className="text-base font-black text-amber-400">{latest.recordedQty}</div>
+                <div className="text-base font-bold text-slate-900 tabular-nums">{latest.recordedQty}</div>
               </div>
               {isWHAlert ? (
                 <div>
-                  <div className="text-[10px] font-semibold uppercase text-slate-500">
-                    Sent By (Shift In Charge)
+                  <div className="text-[11px] font-medium text-slate-500">
+                    Submitted By
                   </div>
-                  <div className="font-bold text-slate-200">{latest.shiftInChargeName}</div>
+                  <div className="font-semibold text-slate-800">{latest.shiftInChargeName}</div>
                 </div>
               ) : (
                 <div>
-                  <div className="text-[10px] font-semibold uppercase text-slate-500">
-                    WH Qty Received
+                  <div className="text-[11px] font-medium text-slate-500">
+                    WH Confirmed Qty
                   </div>
-                  <div className="text-base font-black text-emerald-400">
+                  <div className="text-base font-bold text-emerald-700 tabular-nums">
                     {latest.whReceivedQty ?? '-'}
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="pt-1.5 border-t border-slate-800/80 text-[11px] text-slate-400 flex flex-wrap gap-x-4 gap-y-1">
+            <div className="pt-2 border-t border-slate-200 text-[11px] text-slate-600 flex flex-wrap gap-x-4 gap-y-1">
               <span>
-                Operator: <b className="text-slate-200">{latest.operatorName}</b>
+                Operator: <b className="text-slate-800">{latest.operatorName}</b>
               </span>
               <span>
-                Assistant: <b className="text-slate-200">{latest.assistantName}</b>
+                Assistant: <b className="text-slate-800">{latest.assistantName}</b>
               </span>
               {!isWHAlert && latest.whPersonnelName && (
                 <span>
-                  WH Signed: <b className="text-emerald-300">{latest.whPersonnelName}</b>
+                  WH Verified: <b className="text-emerald-700">{latest.whPersonnelName}</b>
                 </span>
               )}
             </div>
           </div>
 
           {activeList.length > 1 && (
-            <div className="text-xs font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 flex items-center gap-2">
-              <PackageCheck className="h-4 w-4 shrink-0" />
+            <div className="text-xs font-medium text-slate-700 bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 flex items-center gap-2">
+              <PackageCheck className="h-4 w-4 shrink-0 text-slate-600" />
               <span>
-                Plus {activeList.length - 1} more pending{' '}
-                {activeList.length - 1 === 1 ? 'trolley' : 'trolleys'} waiting in the queue.
+                {activeList.length - 1} additional{' '}
+                {activeList.length - 1 === 1 ? 'entry is' : 'entries are'} pending review.
               </span>
             </div>
           )}
@@ -422,28 +397,24 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
             <button
               type="button"
               onClick={handleSnoozeAll}
-              className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-4 py-2.5 text-xs font-bold text-slate-300 transition"
+              className="rounded-lg border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700 transition"
             >
-              Remind Me Later
+              Remind Later
             </button>
             <button
               type="button"
               onClick={handleOpenConfirm}
-              className={`flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-xs font-black text-slate-950 shadow-lg transition ${
-                isWHAlert
-                  ? 'bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400'
-                  : 'bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-300 hover:to-teal-400'
-              }`}
+              className="flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-5 py-2 text-xs font-bold text-white shadow-xs transition"
             >
               {isWHAlert ? (
                 <>
                   <ClipboardCheck className="h-4 w-4" />
-                  <span>Open WH Confirmation &amp; Sign</span>
+                  <span>Review &amp; Confirm WH</span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 className="h-4 w-4" />
-                  <span>Open Production HOD Final Confirm</span>
+                  <span>Review &amp; Approve</span>
                 </>
               )}
               <ArrowRight className="h-4 w-4" />

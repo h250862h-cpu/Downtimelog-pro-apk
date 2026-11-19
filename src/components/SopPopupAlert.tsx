@@ -126,36 +126,12 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
       : pendingForHOD.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
-      <div
-        className={`w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden bg-slate-900 ${
-          mode === 'RECYCLING'
-            ? 'border-amber-500/60'
-            : mode === 'MIXER'
-            ? 'border-sky-500/60'
-            : 'border-emerald-500/60'
-        }`}
-      >
-        {/* Header */}
-        <div
-          className={`flex items-center justify-between px-5 py-3.5 border-b ${
-            mode === 'RECYCLING'
-              ? 'bg-gradient-to-r from-amber-500/20 via-orange-500/10 to-slate-900 border-amber-500/30'
-              : mode === 'MIXER'
-              ? 'bg-gradient-to-r from-sky-500/20 via-blue-500/10 to-slate-900 border-sky-500/30'
-              : 'bg-gradient-to-r from-emerald-500/20 via-teal-500/10 to-slate-900 border-emerald-500/30'
-          }`}
-        >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden">
+        {/* Formal Header */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
           <div className="flex items-center gap-2.5">
-            <div
-              className={`flex h-9 w-9 items-center justify-center rounded-xl text-slate-950 ${
-                mode === 'RECYCLING'
-                  ? 'bg-amber-500'
-                  : mode === 'MIXER'
-                  ? 'bg-sky-400'
-                  : 'bg-emerald-400'
-              }`}
-            >
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white border border-white/15">
               {mode === 'RECYCLING' ? (
                 <Recycle className="h-5 w-5" />
               ) : mode === 'MIXER' ? (
@@ -165,15 +141,15 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
               )}
             </div>
             <div>
-              <h3 className="text-sm font-black uppercase tracking-wide text-white">
+              <h3 className="text-sm font-bold tracking-tight text-white">
                 {mode === 'RECYCLING'
-                  ? 'Operator Scrap Logged -> Recycling Alert'
+                  ? 'Scrap Handover — Recycling Confirmation'
                   : mode === 'MIXER'
-                  ? 'Scrap Processed -> Mixer Receipt Alert'
-                  : 'Mixing Complete -> Production HOD Stock Alert'}
+                  ? 'Processed Material — Mixer Receipt'
+                  : 'Mixing Summary — Production HOD Review'}
               </h3>
               <p className="text-[11px] text-slate-300">
-                {count} pending floor handoff{count === 1 ? '' : 's'} requiring your confirmation
+                {count} pending handover{count === 1 ? '' : 's'} requiring review
               </p>
             </div>
           </div>
@@ -181,8 +157,8 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
           <button
             type="button"
             onClick={handleCloseOne}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
-            title="Dismiss this pop-up"
+            className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10 hover:text-white transition"
+            title="Dismiss notice"
           >
             <X className="h-4 w-4" />
           </button>
@@ -191,39 +167,39 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
         {/* Body */}
         <div className="p-5 space-y-4">
           {mode !== 'HOD' && latestScrap && (
-            <div className="rounded-xl border border-slate-800 bg-slate-950/90 p-4 space-y-2.5 text-xs tabular-nums">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="font-mono font-black text-amber-300">{latestScrap.id}</span>
-                <span className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] font-bold text-slate-300">
-                  {latestScrap.date} • {latestScrap.time} ({latestScrap.shift})
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-2.5 text-xs tabular-nums">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <span className="font-mono font-bold text-[#0F1E36]">{latestScrap.id}</span>
+                <span className="text-[11px] font-medium text-slate-500">
+                  {latestScrap.date} · {latestScrap.time} ({latestScrap.shift})
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <div className="text-[10px] font-bold uppercase text-slate-500">Machine</div>
-                  <div className="font-bold text-white">{latestScrap.machine}</div>
+                  <div className="text-[11px] font-medium text-slate-500">Machine</div>
+                  <div className="font-semibold text-slate-900">{latestScrap.machine}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-bold uppercase text-slate-500">Product</div>
-                  <div className="font-bold text-sky-300">{latestScrap.product}</div>
+                  <div className="text-[11px] font-medium text-slate-500">Product</div>
+                  <div className="font-semibold text-[#0F1E36]">{latestScrap.product}</div>
                 </div>
 
                 {mode === 'RECYCLING' ? (
                   <>
                     <div>
-                      <div className="text-[10px] font-bold uppercase text-slate-500">
-                        Scrap Logged
+                      <div className="text-[11px] font-medium text-slate-500">
+                        Scrap Recorded
                       </div>
-                      <div className="text-lg font-black text-amber-400">
+                      <div className="text-base font-bold text-amber-800">
                         {latestScrap.scrapKg} kg
                       </div>
                     </div>
                     <div>
-                      <div className="text-[10px] font-bold uppercase text-slate-500">
-                        Sent By Assistant
+                      <div className="text-[11px] font-medium text-slate-500">
+                        Submitted By
                       </div>
-                      <div className="font-bold text-slate-200">
+                      <div className="font-semibold text-slate-800">
                         {latestScrap.sentByAssistant}
                       </div>
                     </div>
@@ -231,18 +207,18 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
                 ) : (
                   <>
                     <div>
-                      <div className="text-[10px] font-bold uppercase text-slate-500">
+                      <div className="text-[11px] font-medium text-slate-500">
                         Usable Material Ready
                       </div>
-                      <div className="text-lg font-black text-sky-400">
+                      <div className="text-base font-bold text-emerald-700">
                         {latestScrap.usableMaterialKg ?? latestScrap.receivedKg ?? latestScrap.scrapKg} kg
                       </div>
                     </div>
                     <div>
-                      <div className="text-[10px] font-bold uppercase text-slate-500">
-                        Processed By (Recycling)
+                      <div className="text-[11px] font-medium text-slate-500">
+                        Processed By
                       </div>
-                      <div className="font-bold text-slate-200">
+                      <div className="font-semibold text-slate-800">
                         {latestScrap.processedBy || latestScrap.receivedBy || latestScrap.assignedRecycler}
                       </div>
                     </div>
@@ -251,82 +227,82 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
               </div>
 
               {latestScrap.scrapReason && (
-                <div className="text-[11px] text-slate-400 border-t border-slate-800/80 pt-1.5">
-                  Reason: <b className="text-slate-200">{latestScrap.scrapReason}</b>
+                <div className="text-[11px] text-slate-600 border-t border-slate-200 pt-2">
+                  Remarks: <b className="text-slate-900">{latestScrap.scrapReason}</b>
                 </div>
               )}
             </div>
           )}
 
           {mode === 'HOD' && latestMix && (
-            <div className="rounded-xl border border-slate-800 bg-slate-950/90 p-4 space-y-2.5 text-xs tabular-nums">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-2.5 text-xs tabular-nums">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <span className="font-bold text-[#0F1E36] flex items-center gap-1.5">
                   <Layers className="h-4 w-4" />
                   {latestMix.machine} — {latestMix.mixerName}
                 </span>
-                <span className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] font-bold text-slate-300">
-                  {latestMix.date} • {latestMix.shift}
+                <span className="text-[11px] font-medium text-slate-500">
+                  {latestMix.date} · {latestMix.shift}
                 </span>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-2">
-                  <div className="text-[10px] font-bold uppercase text-slate-500">
-                    Scrap From Recycling
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <div className="text-[11px] font-medium text-slate-500">
+                    Scrap Received
                   </div>
-                  <div className="text-sm font-black text-sky-300">
+                  <div className="text-sm font-bold text-slate-900">
                     {latestMix.scrapReceivedFromRecyclingKg} kg
                   </div>
                 </div>
-                <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-2">
-                  <div className="text-[10px] font-bold uppercase text-slate-500">
-                    Scrap Used in Mixing
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <div className="text-[11px] font-medium text-slate-500">
+                    Scrap Used
                   </div>
-                  <div className="text-sm font-black text-amber-300">
+                  <div className="text-sm font-bold text-amber-800">
                     {latestMix.scrapUsedInMixingKg} kg
                   </div>
                 </div>
-                <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-2">
-                  <div className="text-[10px] font-bold uppercase text-slate-500">
-                    WH Material Used
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <div className="text-[11px] font-medium text-slate-500">
+                    WH Material
                   </div>
-                  <div className="text-sm font-black text-white">
+                  <div className="text-sm font-bold text-slate-900">
                     {latestMix.whMaterialUsedKg} kg
                   </div>
                 </div>
-                <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-2">
-                  <div className="text-[10px] font-bold uppercase text-slate-500">
-                    Sweeping Generated
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <div className="text-[11px] font-medium text-slate-500">
+                    Sweeping
                   </div>
-                  <div className="text-sm font-black text-rose-300">
+                  <div className="text-sm font-bold text-rose-700">
                     {latestMix.sweepingMaterialKg} kg
                   </div>
                 </div>
-                <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-2">
-                  <div className="text-[10px] font-bold uppercase text-slate-500">
-                    Batches Mixed / Pending
+                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                  <div className="text-[11px] font-medium text-slate-500">
+                    Batches Mixed
                   </div>
-                  <div className="text-sm font-black text-slate-100">
+                  <div className="text-sm font-bold text-slate-900">
                     {latestMix.batchesMixed} / {latestMix.pendingMix}
                   </div>
                 </div>
-                <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-2">
-                  <div className="text-[10px] font-bold uppercase text-emerald-300">
-                    End-of-Mixing Stock
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2.5">
+                  <div className="text-[11px] font-medium text-emerald-800">
+                    Closing Stock
                   </div>
-                  <div className="text-sm font-black text-emerald-300">
+                  <div className="text-sm font-bold text-emerald-800">
                     {latestMix.endOfMixingStockKg} kg
                   </div>
                 </div>
               </div>
 
-              <div className="text-[11px] text-slate-400 border-t border-slate-800/80 pt-1.5 flex flex-wrap justify-between gap-2">
+              <div className="text-[11px] text-slate-600 border-t border-slate-200 pt-2 flex flex-wrap justify-between gap-2">
                 <span>
-                  WH Reserved: <b className="text-slate-200">{latestMix.whReservedMaterialKg} kg</b>
+                  WH Reserved: <b className="text-slate-900">{latestMix.whReservedMaterialKg} kg</b>
                 </span>
                 <span>
-                  Assistant: <b className="text-slate-200">{latestMix.assistantName}</b>
+                  Assistant: <b className="text-slate-900">{latestMix.assistantName}</b>
                 </span>
               </div>
             </div>
@@ -337,28 +313,22 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
             <button
               type="button"
               onClick={handleSnoozeAll}
-              className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-4 py-2.5 text-xs font-bold text-slate-300 transition"
+              className="rounded-lg border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700 transition"
             >
-              Remind Me Later
+              Remind Later
             </button>
             <button
               type="button"
               onClick={handleNavigate}
-              className={`flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-xs font-black text-slate-950 shadow-lg transition ${
-                mode === 'RECYCLING'
-                  ? 'bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400'
-                  : mode === 'MIXER'
-                  ? 'bg-gradient-to-r from-sky-400 to-blue-500 hover:from-sky-300 hover:to-blue-400'
-                  : 'bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-300 hover:to-teal-400'
-              }`}
+              className="flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-5 py-2 text-xs font-bold text-white shadow-xs transition"
             >
               <CheckCircle2 className="h-4 w-4" />
               <span>
                 {mode === 'RECYCLING'
-                  ? 'Open Recycling Receive & Process'
+                  ? 'Open Recycling Confirmation'
                   : mode === 'MIXER'
-                  ? 'Receive Scrap & Log Mixing'
-                  : 'Open Production HOD Mixing Review'}
+                  ? 'Open Mixer Log'
+                  : 'Review Mixing Report'}
               </span>
               <ArrowRight className="h-4 w-4" />
             </button>
