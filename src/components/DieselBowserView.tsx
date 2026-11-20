@@ -22,6 +22,7 @@ import {
   approveFuelRequestAndUnlockPdf,
   dispenseFuelWithMeterReadings,
   exportDieselExcelWorkbook,
+  recomputeDieselTankFromLedger,
   recordFuelGrnAndTopUpTank,
   rejectFuelRequest,
   saveDieselTankConfig,
@@ -213,6 +214,12 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
   const canGrn = isAdmin || Boolean(permissions.dieselGRN);
   const canExportExcel = isAdmin;
 
+  // Live tank level is strictly (Total Positives ADDING) - (Total Negatives REMOVING)
+  const liveTank = useMemo(
+    () => recomputeDieselTankFromLedger(tank, requests, grns),
+    [tank, requests, grns]
+  );
+
   const allowedSubTabs = useMemo<DieselSubTab[]>(() => {
     const list: DieselSubTab[] = [];
     if (canRequestFuel) list.push('request');
@@ -239,9 +246,9 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
 
   // Tank calibration modal/card (Admin only)
   const [showCalibrate, setShowCalibrate] = useState(false);
-  const [calCap, setCalCap] = useState(String(tank.capacityLitres));
-  const [calLevel, setCalLevel] = useState(String(tank.currentLevelLitres));
-  const [calMeter, setCalMeter] = useState(String(tank.currentMeterReading));
+  const [calCap, setCalCap] = useState(String(liveTank.capacityLitres));
+  const [calLevel, setCalLevel] = useState(String(liveTank.currentLevelLitres));
+  const [calMeter, setCalMeter] = useState(String(liveTank.currentMeterReading));
   const [savingCal, setSavingCal] = useState(false);
 
   // Stage 1: Fuel Request Form State
@@ -387,8 +394,8 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
   }, [grns, ledgerFrom, ledgerTo, ledgerSearch]);
 
   const tankPct =
-    tank.capacityLitres > 0
-      ? Math.min(100, Math.max(0, r2((tank.currentLevelLitres / tank.capacityLitres) * 100)))
+    liveTank.capacityLitres > 0
+      ? Math.min(100, Math.max(0, r2((liveTank.currentLevelLitres / liveTank.capacityLitres) * 100)))
       : 0;
 
   // Handlers
@@ -652,13 +659,13 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
   };
 
   const handleExportDieselExcel = () => {
-    if (!canExportExcel) {
-      setLedgerBanner('Excel Export Restricted: Please contact Plant Admin for access.');
+    if (!isAdmin || !canExportExcel) {
+      setLedgerBanner('Admin Only: Only Plant Administrators can download Diesel Excel reports.');
       return;
     }
-    exportDieselExcelWorkbook(requests, grns, tank, ledgerFrom, ledgerTo);
+    exportDieselExcelWorkbook(requests, grns, liveTank, ledgerFrom, ledgerTo, isAdmin);
     setLedgerBanner(
-      `Downloaded LGPLAST Diesel Bowser Usage & GRN Excel (.xlsx) covering ${filteredRequests.length} fuel issues & ${filteredGrns.length} GRNs.`
+      `Downloaded LGPLAST Diesel Bowser Usage & GRN Excel (.xlsx) covering ${filteredRequests.length} fuel issues & ${filteredGrns.length} GRNs (Net Balance: ${liveTank.currentLevelLitres.toLocaleString()} L).`
     );
   };
 
@@ -724,13 +731,13 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
             </div>
             <div className="flex items-center justify-between text-xs tabular-nums">
               <span className="font-black text-white text-base">
-                {tank.currentLevelLitres.toLocaleString()} L{' '}
+                {liveTank.currentLevelLitres.toLocaleString()} L{' '}
                 <span className="text-[11px] font-semibold text-slate-400">
-                  / {tank.capacityLitres.toLocaleString()} L Capacity
+                  / {liveTank.capacityLitres.toLocaleString()} L Capacity
                 </span>
               </span>
-              <span className="text-[10px] text-slate-500 truncate max-w-[180px]">
-                {tank.lastUpdatedBy}
+              <span className="text-[10px] text-emerald-300 font-semibold truncate max-w-[220px]">
+                Net: Positives ({liveTank.totalReceivedLitres.toLocaleString()}) - Negatives ({liveTank.totalIssuedLitres.toLocaleString()})
               </span>
             </div>
           </div>
@@ -741,28 +748,28 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
               Current Bowser Meter Reading
             </div>
             <div className="text-2xl font-black text-white font-mono tabular-nums mt-1">
-              {tank.currentMeterReading.toLocaleString()}
+              {liveTank.currentMeterReading.toLocaleString()}
             </div>
             <div className="text-[10px] text-slate-500">Live cumulative flow meter</div>
           </div>
 
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-3.5 flex flex-col justify-between text-xs tabular-nums">
             <div className="flex justify-between">
-              <span className="text-slate-400 font-semibold">Total GRN Added:</span>
+              <span className="text-slate-400 font-semibold">Positives (GRN +):</span>
               <span className="font-black text-emerald-400">
-                +{tank.totalReceivedLitres.toLocaleString()} L
+                +{liveTank.totalReceivedLitres.toLocaleString()} L
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400 font-semibold">Total Issued Out:</span>
+              <span className="text-slate-400 font-semibold">Negatives (Issued -):</span>
               <span className="font-black text-amber-300">
-                -{tank.totalIssuedLitres.toLocaleString()} L
+                -{liveTank.totalIssuedLitres.toLocaleString()} L
               </span>
             </div>
             <div className="flex justify-between pt-1 border-t border-slate-800">
-              <span className="text-slate-400">Pending HOD / Meter:</span>
-              <span className="font-bold text-white">
-                {pendingHodList.length} / {unlockedDispenseList.length}
+              <span className="text-slate-400">Current Tank Balance:</span>
+              <span className="font-black text-white">
+                {liveTank.currentLevelLitres.toLocaleString()} L
               </span>
             </div>
           </div>

@@ -1041,6 +1041,8 @@ git push -u origin main`}
                       ['dieselHODApprove', 'Diesel Bowser: Production HOD Approve & Unlock PDF'],
                       ['dieselGRN', 'Diesel Bowser: Receive Tank GRN (Supplier Signed)'],
                       ['dieselExportExcel', 'Diesel Bowser: Export Fuel Excel (Admin Only)'],
+                      ['specialOrdersAccess', 'Special Orders: Gum Boots & Factory/WH Stock'],
+                      ['qualityTrialsAccess', 'Quality Trials: ISO/QMS/ASTM/SAZ Trials & PDF'],
                       ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                     ] as [keyof UserPermissions, string][]
                   ).map(([permKey, permLabel]) => (
@@ -1240,6 +1242,8 @@ git push -u origin main`}
                   ['dieselHODApprove', 'Diesel Bowser: Production HOD Approve & Unlock PDF'],
                   ['dieselGRN', 'Diesel Bowser: Receive Tank GRN (Supplier Signed)'],
                   ['dieselExportExcel', 'Diesel Bowser: Export Fuel Excel (Admin Only)'],
+                  ['specialOrdersAccess', 'Special Orders: Gum Boots & Factory/WH Stock'],
+                  ['qualityTrialsAccess', 'Quality Trials: ISO/QMS/ASTM/SAZ Trials & PDF'],
                   ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                 ] as [keyof UserPermissions, string][]
               ).map(([permKey, permLabel]) => (

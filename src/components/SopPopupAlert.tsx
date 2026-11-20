@@ -35,13 +35,10 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
   mixingReports,
   permissions,
   isAdmin,
-  hasActiveDispatchPopup = false,
   dismissedKeys,
   onDismissKey,
   onNavigateToSopTab,
 }) => {
-  if (hasActiveDispatchPopup) return null;
-
   // 1. Scrap Sent -> Alert Recycling Team
   const pendingForRecycling = permissions.sopRecyclingConfirm
     ? scrapRecords.filter(
@@ -126,8 +123,7 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
       : pendingForHOD.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
-      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden">
+    <div className="pointer-events-auto w-full max-w-lg rounded-xl border border-slate-300 bg-white text-slate-900 shadow-2xl ring-1 ring-slate-900/15 overflow-hidden">
         {/* Formal Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
           <div className="flex items-center gap-2.5">
@@ -334,7 +330,6 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
             </button>
           </div>
         </div>
-      </div>
     </div>
   );
 };

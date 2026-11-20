@@ -97,7 +97,7 @@ export const PeriodReportView: React.FC<PeriodReportViewProps> = ({
       return;
     }
     setExportNotice('Generating multi-sheet Excel (.xlsx) workbook...');
-    generateExcelWorkbook(fromDate, toDate, machines, entries, supervisorName);
+    generateExcelWorkbook(fromDate, toDate, machines, entries, supervisorName, isAdmin);
     setTimeout(() => {
       setExportNotice('Excel report downloaded to your device.');
     }, 800);
@@ -113,7 +113,7 @@ export const PeriodReportView: React.FC<PeriodReportViewProps> = ({
       setExportNotice('Please select a valid From and To date range.');
       return;
     }
-    generateCSVReport(fromDate, toDate, machines, entries);
+    generateCSVReport(fromDate, toDate, machines, entries, isAdmin);
     setExportNotice('LGPLAST CSV summary report downloaded.');
   };
 

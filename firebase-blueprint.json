@@ -298,6 +298,76 @@
         "upd": { "type": "number" }
       },
       "required": ["date", "shift", "startTime", "startFuelLitres", "status"]
+    },
+    "special_order": {
+      "title": "Special Production Order Header",
+      "description": "Special customer/factory order tracker (e.g. Gum Boots Sizes 39-46)",
+      "type": "object",
+      "properties": {
+        "orderNo": { "type": "string", "maxLength": 60 },
+        "title": { "type": "string", "maxLength": 200 },
+        "productPrefix": { "type": "string", "maxLength": 150 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "upd": { "type": "number" }
+      },
+      "required": ["orderNo", "title", "productPrefix", "machine", "status"]
+    },
+    "special_order_factory_production": {
+      "title": "Special Order Daily Factory Production",
+      "description": "Daily factory production for special orders entered by Shift In Charge and confirmed by Production HOD into factory stock",
+      "type": "object",
+      "properties": {
+        "batchNo": { "type": "string", "maxLength": 60 },
+        "orderId": { "type": "string", "maxLength": 100 },
+        "orderNo": { "type": "string", "maxLength": 60 },
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "totalQty": { "type": "number" },
+        "totalWeightKg": { "type": "number" },
+        "status": { "type": "string", "maxLength": 40 },
+        "upd": { "type": "number" }
+      },
+      "required": ["batchNo", "orderId", "date", "shift", "totalQty", "status"]
+    },
+    "special_order_wh_dispatch": {
+      "title": "Special Order WH Dispatch Movement",
+      "description": "3-stage ready-order movement from Shift In Charge to WH Personnel to Production HOD which syncs into regular dispatch_entries",
+      "type": "object",
+      "properties": {
+        "dispatchRef": { "type": "string", "maxLength": 60 },
+        "orderId": { "type": "string", "maxLength": 100 },
+        "orderNo": { "type": "string", "maxLength": 60 },
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "trolleyNo": { "type": "string", "maxLength": 60 },
+        "totalRecordedQty": { "type": "number" },
+        "totalWhReceivedQty": { "type": "number" },
+        "status": { "type": "string", "maxLength": 30 },
+        "upd": { "type": "number" }
+      },
+      "required": ["dispatchRef", "orderId", "date", "shift", "totalRecordedQty", "status"]
+    },
+    "quality_trial_report": {
+      "title": "Quality Trial & Qualification Report",
+      "description": "ISO/QMS/ASTM/SAZ standardized trial record for additive, formula, scrap ratio, and new material qualification with signature completion gate",
+      "type": "object",
+      "properties": {
+        "trialNo": { "type": "string", "maxLength": 60 },
+        "qmsDocCode": { "type": "string", "maxLength": 60 },
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "product": { "type": "string", "maxLength": 200 },
+        "productFamily": { "type": "string", "maxLength": 100 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "trialCategory": { "type": "string", "maxLength": 80 },
+        "overallVerdict": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "maxLength": 30 },
+        "upd": { "type": "number" }
+      },
+      "required": ["trialNo", "date", "product", "machine", "trialCategory", "status"]
     }
   },
   "firestore": {
@@ -364,6 +434,22 @@
     "/sop_shift_handovers/{id}": {
       "schema": "sop_shift_handover",
       "description": "Floor shift handover records"
+    },
+    "/special_orders/{id}": {
+      "schema": "special_order",
+      "description": "Special production orders including Gum Boots Sizes 39-46"
+    },
+    "/special_order_production/{id}": {
+      "schema": "special_order_factory_production",
+      "description": "Daily factory production for special orders (Shift In Charge -> HOD Factory Confirmation)"
+    },
+    "/special_order_wh_dispatches/{id}": {
+      "schema": "special_order_wh_dispatch",
+      "description": "Ready special order dispatches to WH (Shift -> WH -> HOD, synced to regular dispatch ledger)"
+    },
+    "/quality_trial_reports/{id}": {
+      "schema": "quality_trial_report",
+      "description": "ISO/QMS/ASTM/SAZ Quality Trial Reports for additive, scrap ratio, and new material qualification"
     }
   }
 }

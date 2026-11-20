@@ -6,6 +6,7 @@ import {
   setDoc,
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
+import { QC_CSV_SEED_VERSION, SEEDED_QC_RECORDS } from '../data/qcCsvSeed';
 import { db, ensureFirebaseAuth } from '../firebase';
 import {
   DispatchEntry,
@@ -277,17 +278,45 @@ const mixingStore = createCollectionStore<SopMixingReport>(MIXING_KEY, MIXING_PE
 }));
 const handoverStore = createCollectionStore<SopShiftHandoverRecord>(HANDOVER_KEY, HANDOVER_PENDING_KEY, HANDOVER_COLLECTION);
 
+let qcCsvSeedChecked = false;
+function ensureQcCsvSeeded() {
+  if (qcCsvSeedChecked) return;
+  qcCsvSeedChecked = true;
+  try {
+    const alreadySeeded = localStorage.getItem(QC_CSV_SEED_VERSION) === '1';
+    const existing = readLocalList<SopQcRecord>(QC_KEY);
+    if (!alreadySeeded || existing.length === 0) {
+      const merged = mergeRecords(
+        SEEDED_QC_RECORDS,
+        existing,
+        (q) => ({ ...q, machine: normalizeMachineName(q.machine) })
+      );
+      writeLocalList(QC_KEY, merged);
+      localStorage.setItem(QC_CSV_SEED_VERSION, '1');
+    }
+  } catch {}
+}
+
 export const getLocalSopProductionLogs = prodStore.getLocal;
 export const saveSopProductionToFirebase = prodStore.save;
 export const flushPendingSopProduction = prodStore.flush;
 export const pollSopProduction = prodStore.poll;
 export const subscribeSopProduction = prodStore.subscribe;
 
-export const getLocalSopQcChecks = qcStore.getLocal;
+export function getLocalSopQcChecks(): SopQcRecord[] {
+  ensureQcCsvSeeded();
+  return qcStore.getLocal();
+}
 export const saveSopQcToFirebase = qcStore.save;
 export const flushPendingSopQc = qcStore.flush;
-export const pollSopQc = qcStore.poll;
-export const subscribeSopQc = qcStore.subscribe;
+export const pollSopQc = async (): Promise<SopQcRecord[]> => {
+  ensureQcCsvSeeded();
+  return qcStore.poll();
+};
+export const subscribeSopQc = (onUpdate: (items: SopQcRecord[]) => void) => {
+  ensureQcCsvSeeded();
+  return qcStore.subscribe(onUpdate);
+};
 
 export const getLocalSopScrapRecords = scrapStore.getLocal;
 export const saveSopScrapToFirebase = scrapStore.save;
@@ -883,7 +912,8 @@ function writeSheetFile(wb: XLSX.WorkBook, filename: string) {
   saveFileBlob(filename, blob);
 }
 
-export function exportSopProductionExcel(rows: SopProductionRecord[]) {
+export function exportSopProductionExcel(rows: SopProductionRecord[], isAdmin: boolean = false) {
+  if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((r) => ({
     Date: r.date,
@@ -914,29 +944,30 @@ export function exportSopProductionExcel(rows: SopProductionRecord[]) {
   writeSheetFile(wb, `LGPLAST_SOP_Production_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopQcExcel(rows: SopQcRecord[]) {
+export function exportSopQcExcel(rows: SopQcRecord[], isAdmin: boolean = false) {
+  if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((q) => ({
     Date: q.date,
+    'QC Check #': q.qcNo || '',
     Shift: q.shift,
-    Time: q.time || '',
-    'QC Check No': q.qcNo || '',
     Machine: normalizeMachineName(q.machine),
-    Product: q.product,
+    'Product Name': q.product,
     PPH: q.pph ?? '',
     'PPH Unit': q.pphUnit || '',
-    'Kgs/Hr': q.kgsPerHr ?? '',
+    'KGS per HR': q.kgsPerHr ?? '',
+    Weight: q.weightKg ?? '',
     'Weight Type': q.weightType || '',
-    'Weight (kg)': q.weightKg ?? '',
     Printing: q.printing || '',
-    'Length (m)': q.lengthM ?? '',
+    Length: q.lengthM ?? '',
     'Socket Size': q.socketSize || '',
     'Drop/Bend Test': q.dropBend,
     'Fitting Test': q.fitting,
-    'Uniform Colour': q.color,
-    'O/D (mm)': q.od ?? '',
-    'I/D (mm)': q.idMm ?? '',
+    'Uniform Color': q.color,
+    'O/D 1': q.od ?? '',
+    'I/D': q.idMm ?? '',
     'Reported By': q.reporter || q.loggedBy,
+    Time: q.time || '',
     Source: q.source,
   }));
   const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ Notice: 'No QC checks recorded yet.' }]);
@@ -944,7 +975,8 @@ export function exportSopQcExcel(rows: SopQcRecord[]) {
   writeSheetFile(wb, `LGPLAST_SOP_QC_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopScrapExcel(rows: SopScrapRecord[]) {
+export function exportSopScrapExcel(rows: SopScrapRecord[], isAdmin: boolean = false) {
+  if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((s) => ({
     'Scrap ID': s.id,
@@ -977,7 +1009,8 @@ export function exportSopScrapExcel(rows: SopScrapRecord[]) {
   writeSheetFile(wb, `LGPLAST_SOP_Scrap_Recycling_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopMixingExcel(rows: SopMixingReport[]) {
+export function exportSopMixingExcel(rows: SopMixingReport[], isAdmin: boolean = false) {
+  if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((m) => ({
     'Mixing ID': m.id,
@@ -1013,7 +1046,8 @@ export function exportSopMixingExcel(rows: SopMixingReport[]) {
   writeSheetFile(wb, `LGPLAST_SOP_Mixing_Report_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopHandoverExcel(rows: SopShiftHandoverRecord[]) {
+export function exportSopHandoverExcel(rows: SopShiftHandoverRecord[], isAdmin: boolean = false) {
+  if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((h) => ({
     Date: h.date,
@@ -1036,13 +1070,17 @@ export function exportSopHandoverExcel(rows: SopShiftHandoverRecord[]) {
   writeSheetFile(wb, `LGPLAST_SOP_Shift_Handover_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopMasterWorkbook(args: {
-  production: SopProductionRecord[];
-  qcChecks: SopQcRecord[];
-  scrapPipeline: SopScrapRecord[];
-  mixingReports: SopMixingReport[];
-  handovers: SopShiftHandoverRecord[];
-}) {
+export function exportSopMasterWorkbook(
+  args: {
+    production: SopProductionRecord[];
+    qcChecks: SopQcRecord[];
+    scrapPipeline: SopScrapRecord[];
+    mixingReports: SopMixingReport[];
+    handovers: SopShiftHandoverRecord[];
+  },
+  isAdmin: boolean = false
+) {
+  if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
 
   const totalProdKg = args.production.reduce((a, b) => a + (Number(b.prodKg) || 0), 0);

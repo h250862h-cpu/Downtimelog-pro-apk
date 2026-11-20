@@ -66,6 +66,8 @@ export function getMachineDepartment(m: string): MachineDepartment {
 }
 
 const MACHINE_ALIAS_MAP: Record<string, string> = {
+  '01': 'Extrusion Machine 1',
+  '1': 'Extrusion Machine 1',
   'line one': 'Extrusion Machine 1',
   'line 1': 'Extrusion Machine 1',
   'line-1': 'Extrusion Machine 1',
@@ -74,6 +76,8 @@ const MACHINE_ALIAS_MAP: Record<string, string> = {
   'extrusion one': 'Extrusion Machine 1',
   'extrusion machine 1': 'Extrusion Machine 1',
   'extrusion machine one': 'Extrusion Machine 1',
+  '02': 'Extrusion Machine 2',
+  '2': 'Extrusion Machine 2',
   'line two': 'Extrusion Machine 2',
   'line 2': 'Extrusion Machine 2',
   'line-2': 'Extrusion Machine 2',
@@ -82,18 +86,29 @@ const MACHINE_ALIAS_MAP: Record<string, string> = {
   'extrusion two': 'Extrusion Machine 2',
   'extrusion machine 2': 'Extrusion Machine 2',
   'extrusion machine two': 'Extrusion Machine 2',
+  '03': 'Extrusion Machine 3',
+  '3': 'Extrusion Machine 3',
   'line three': 'Extrusion Machine 3',
   'line 3': 'Extrusion Machine 3',
   'line-3': 'Extrusion Machine 3',
   'line 03': 'Extrusion Machine 3',
   'extrusion 3': 'Extrusion Machine 3',
   'extrusion machine 3': 'Extrusion Machine 3',
+  '04': 'Extrusion Machine 4',
+  '4': 'Extrusion Machine 4',
   'line four': 'Extrusion Machine 4',
   'line 4': 'Extrusion Machine 4',
   'line-4': 'Extrusion Machine 4',
   'line 04': 'Extrusion Machine 4',
   'extrusion 4': 'Extrusion Machine 4',
   'extrusion machine 4': 'Extrusion Machine 4',
+  '05': 'Trunking Machine',
+  '5': 'Trunking Machine',
+  'line 5': 'Trunking Machine',
+  'line 05': 'Trunking Machine',
+  'line five': 'Trunking Machine',
+  '06': 'Extrusion Machine 6',
+  '6': 'Extrusion Machine 6',
   'line 6': 'Extrusion Machine 6',
   'line-6': 'Extrusion Machine 6',
   'line 06': 'Extrusion Machine 6',
@@ -102,12 +117,16 @@ const MACHINE_ALIAS_MAP: Record<string, string> = {
   'extrusion six': 'Extrusion Machine 6',
   'extrusion machine 6': 'Extrusion Machine 6',
   'extrusion machine six': 'Extrusion Machine 6',
+  '07': 'Hose Pipe Machine',
+  '7': 'Hose Pipe Machine',
   'line 7': 'Hose Pipe Machine',
   'line 07': 'Hose Pipe Machine',
   'line seven': 'Hose Pipe Machine',
   'hose pipe': 'Hose Pipe Machine',
   'hosepipe': 'Hose Pipe Machine',
   'hose pipe machine': 'Hose Pipe Machine',
+  '08': 'Polypipe Machine 1',
+  '8': 'Polypipe Machine 1',
   'line 8': 'Polypipe Machine 1',
   'line 08': 'Polypipe Machine 1',
   'line eight': 'Polypipe Machine 1',
@@ -222,6 +241,7 @@ export function normalizeMachineName(raw?: string): string {
   const extMatch = normalized.match(/^(?:extrusion\s*(?:machine|line)?|extruder|line)\s*0*(\d+)$/);
   if (extMatch) {
     const num = Number(extMatch[1]);
+    if (num === 5) return 'Trunking Machine';
     if (num === 7) return 'Hose Pipe Machine';
     if (num === 8) return 'Polypipe Machine 1';
     return `Extrusion Machine ${num}`;
@@ -470,6 +490,8 @@ export interface UserPermissions {
   dieselExportExcel?: boolean;
   productionPlanningAccess?: boolean;
   productionReportAccess?: boolean;
+  specialOrdersAccess?: boolean;
+  qualityTrialsAccess?: boolean;
 }
 
 export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
@@ -493,6 +515,8 @@ export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
   dieselExportExcel: true,
   productionPlanningAccess: true,
   productionReportAccess: true,
+  specialOrdersAccess: true,
+  qualityTrialsAccess: true,
 };
 
 export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
@@ -522,6 +546,8 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         dieselExportExcel: false,
         productionPlanningAccess: false,
         productionReportAccess: false,
+        specialOrdersAccess: false,
+        qualityTrialsAccess: false,
       };
     case 'WH Personnel':
       return {
@@ -545,6 +571,8 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         dieselExportExcel: false,
         productionPlanningAccess: false,
         productionReportAccess: false,
+        specialOrdersAccess: true,
+        qualityTrialsAccess: false,
       };
     case 'Shift In Charge':
       return {
@@ -568,6 +596,8 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         dieselExportExcel: false,
         productionPlanningAccess: true,
         productionReportAccess: false,
+        specialOrdersAccess: true,
+        qualityTrialsAccess: false,
       };
     case 'Recycling Team':
       return {
@@ -614,6 +644,8 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         dieselExportExcel: false,
         productionPlanningAccess: false,
         productionReportAccess: false,
+        specialOrdersAccess: false,
+        qualityTrialsAccess: true,
       };
     case 'Shift Supervisor':
       return {
@@ -637,11 +669,37 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         dieselExportExcel: false,
         productionPlanningAccess: true,
         productionReportAccess: false,
+        specialOrdersAccess: true,
+        qualityTrialsAccess: true,
+      };
+    case 'QC Inspector':
+      return {
+        viewMachineStatus: true,
+        logDowntime: true,
+        viewDailyHours: true,
+        exportDowntimeExcel: false,
+        dispatchShiftEntry: false,
+        dispatchWHConfirm: false,
+        dispatchHODConfirm: false,
+        exportDispatchExcel: false,
+        attendanceLogger: false,
+        manageMachinesAndSync: false,
+        sopFloorAccess: true,
+        sopScrapSend: true,
+        sopRecyclingConfirm: false,
+        sopMixingAccess: false,
+        dieselFuelRequest: false,
+        dieselHODApprove: false,
+        dieselGRN: false,
+        dieselExportExcel: false,
+        productionPlanningAccess: false,
+        productionReportAccess: false,
+        specialOrdersAccess: false,
+        qualityTrialsAccess: true,
       };
     case 'Machine Operator':
     case 'Operator Assistant':
     case 'Maintenance Technician':
-    case 'QC Inspector':
     default:
       return {
         viewMachineStatus: true,
@@ -664,6 +722,8 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         dieselExportExcel: false,
         productionPlanningAccess: false,
         productionReportAccess: false,
+        specialOrdersAccess: false,
+        qualityTrialsAccess: false,
       };
   }
 }
@@ -742,6 +802,11 @@ export interface DispatchEntry {
   sourceUploadBatch?: string;
   backgroundScrapKg?: number;
   backgroundWastageKg?: number;
+
+  // Special Order WH Dispatch Linkage
+  isSpecialOrderDispatch?: boolean;
+  specialOrderId?: string;
+  specialOrderDispatchId?: string;
 }
 
 // ======================================================
@@ -928,6 +993,13 @@ export interface ProductionPlanItem {
   notes?: string;
   sourceFile?: string;
   uploadedBy?: string;
+  batchId?: string;
+  adminSignature?: string;
+  signedBy?: string;
+  signedAt?: string;
+  superseded?: boolean;
+  supersededAt?: string;
+  supersededByBatchId?: string;
   updatedAt: string;
   upd: number;
   sy?: number;
@@ -969,6 +1041,12 @@ export interface DieselFuelRequest {
   purpose?: string;
   driverRequestSignature: string;
   requestedAt: string;
+
+  // CSV / Ledger structure metadata
+  tankEffect?: 'ADDING' | 'REMOVING';
+  dateReceived?: string;
+  qntySigned?: number;
+  isHistoricalCsv?: boolean;
 
   // Stage 2: Production HOD Approval + Single-Generation PDF Unlock
   status: DieselRequestStatus;
@@ -1014,6 +1092,14 @@ export interface DieselGrnRecord {
   hodVerifiedBy?: string;
   tankLevelBefore: number;
   tankLevelAfter: number;
+
+  // CSV / Ledger structure metadata
+  tankEffect?: 'ADDING';
+  dateRequested?: string;
+  requestedLitres?: number;
+  purpose?: string;
+  isHistoricalCsv?: boolean;
+
   createdAt: string;
   upd: number;
   sy?: number;
@@ -1069,4 +1155,221 @@ export interface GeneratorLog {
   upd: number;
   sy?: number;
 }
+
+// ======================================================
+// SPECIAL ORDERS (GUM BOOTS SIZES 39-46 & CUSTOM ORDERS)
+// FACTORY STOCK -> READY DISPATCH TO WH -> REGULAR DISPATCH
+// ======================================================
+
+export const GUM_BOOT_SIZES = [
+  'Size 39',
+  'Size 40',
+  'Size 41',
+  'Size 42',
+  'Size 43',
+  'Size 44',
+  'Size 45',
+  'Size 46',
+] as const;
+
+export interface SpecialOrder {
+  id: string;
+  orderNo: string;
+  title: string;
+  customerName?: string;
+  productPrefix: string; // e.g. 'GUM BOOT CAPTAIN BLACK'
+  machine: string; // e.g. 'Gumboot Machine'
+  sizes: string[]; // e.g. ['Size 39', ..., 'Size 46']
+  sizeTargets?: Record<string, number>;
+  unitWeightKgBySize?: Record<string, number>;
+  status: 'ACTIVE' | 'READY_FOR_WH' | 'COMPLETED';
+  notes?: string;
+  createdBy: string;
+  createdAt: string;
+  upd: number;
+  sy?: number;
+}
+
+export interface SpecialOrderSizeItem {
+  sizeLabel: string;
+  productName: string;
+  qty: number;
+  unitWeightKg?: number;
+  totalWeightKg?: number;
+}
+
+export interface SpecialOrderFactoryProduction {
+  id: string;
+  batchNo: string;
+  orderId: string;
+  orderNo: string;
+  orderTitle: string;
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  machine: string;
+  rackOrTrolleyNo: string;
+  items: SpecialOrderSizeItem[];
+  totalQty: number;
+  totalWeightKg: number;
+  operatorName: string;
+  assistantName: string;
+  isCasualAssistant?: boolean;
+  casualAssistantName?: string;
+
+  // Stage 1: Shift In Charge Daily Factory Recording
+  shiftInChargeName: string;
+  shiftInChargeSignature: string;
+  shiftNotes?: string;
+  shiftSubmittedAt: string;
+  shiftSubmittedByEmail: string;
+
+  // Stage 2: Production HOD Factory Stock Confirmation
+  hodConfirmedByName?: string;
+  hodConfirmedByEmail?: string;
+  hodSignature?: string;
+  hodNotes?: string;
+  hodConfirmedAt?: string;
+
+  status: 'PENDING_HOD_FACTORY' | 'CONFIRMED_IN_FACTORY';
+  upd: number;
+  sy?: number;
+}
+
+export interface SpecialOrderWhDispatch {
+  id: string;
+  dispatchRef: string;
+  orderId: string;
+  orderNo: string;
+  orderTitle: string;
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  machine: string;
+  trolleyNo: string;
+
+  // Stage 1: Shift In Charge Ready-Order Dispatch to WH
+  items: SpecialOrderSizeItem[];
+  totalRecordedQty: number;
+  totalRecordedWeightKg: number;
+  operatorName: string;
+  assistantName: string;
+  isCasualAssistant?: boolean;
+  casualAssistantName?: string;
+  shiftInChargeName: string;
+  shiftInChargeSignature: string;
+  shiftNotes?: string;
+  shiftSubmittedAt: string;
+  shiftSubmittedByEmail: string;
+
+  // Stage 2: WH Personnel Verification & Qty Confirmation
+  whReceivedItems?: SpecialOrderSizeItem[];
+  totalWhReceivedQty?: number;
+  totalWhWeightKg?: number;
+  whPersonnelName?: string;
+  whSignature?: string;
+  whNotes?: string;
+  whQtyEditReason?: string;
+  whConfirmedAt?: string;
+  whConfirmedByEmail?: string;
+
+  // Stage 3: Production HOD Final Confirmation -> Syncs to Regular Dispatch Ledger & Excel
+  hodConfirmedByName?: string;
+  hodConfirmedByEmail?: string;
+  hodSignature?: string;
+  hodNotes?: string;
+  hodConfirmedAt?: string;
+
+  linkedRegularDispatchIds?: string[];
+  syncedToRegularDispatchAt?: string;
+  status: DispatchStatus;
+  upd: number;
+  sy?: number;
+}
+
+// ======================================================
+// QUALITY TRIAL REPORTS (ISO / QMS / ASTM / SAZ STANDARDS)
+// ======================================================
+
+export type QualityTrialCategory =
+  | 'Additive / Formula Change'
+  | 'Scrap / Regrind Ratio'
+  | 'New Raw Material / Supplier'
+  | 'Masterbatch / Colourant'
+  | 'Process / Tooling Optimization'
+  | 'New Product Qualification';
+
+export interface QualityTrialFormulationRow {
+  ingredientName: string;
+  role:
+    | 'Base Resin'
+    | 'Recycled Scrap'
+    | 'Additive'
+    | 'Stabilizer'
+    | 'Filler / CaCO3'
+    | 'Pigment / Masterbatch'
+    | 'Other';
+  ratioOrPhr: string;
+  batchQtyKg?: string;
+  supplierOrLot?: string;
+}
+
+export interface QualityStandardTestItem {
+  id: string;
+  testName: string;
+  standardRef: string; // ISO / SAZ / ASTM / QMS clause
+  method: string;
+  unit: string;
+  specRequirement: string;
+  actualResult: string;
+  verdict: 'PASS' | 'FAIL' | '';
+  remarks?: string;
+}
+
+export type QualityTrialVerdict =
+  | 'APPROVED_FOR_PRODUCTION'
+  | 'CONDITIONAL_RELEASE'
+  | 'REJECTED_HOLD'
+  | '';
+
+export interface QualityTrialReport {
+  id: string;
+  trialNo: string;
+  qmsDocCode: string; // e.g. 'QMS-LG-TRL-04'
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  product: string;
+  productFamily: string;
+  machine: string;
+  trialCategory: QualityTrialCategory;
+  applicableStandards: string[];
+  objectiveSummary: string;
+  scrapRatioPct?: string;
+  additiveDetails?: string;
+  newMaterialSource?: string;
+  machineTempProfile?: string;
+  extrusionOrCycleRate?: string;
+  formulationRows: QualityTrialFormulationRow[];
+  qcTests: QualityStandardTestItem[];
+  overallVerdict: QualityTrialVerdict;
+  recommendations: string;
+  conductedByName: string;
+  conductedByEmail: string;
+  conductorSignature: string;
+  conductedAt: string;
+  reviewedByHodName?: string;
+  hodSignature?: string;
+  hodReviewedAt?: string;
+  trialApprovals?: {
+    factoryManager?: { name?: string; signature?: string; signedAt?: string };
+    productionHod?: { name?: string; signature?: string; signedAt?: string };
+    technicalHead?: { name?: string; signature?: string; signedAt?: string };
+    departmentHead?: { name?: string; signature?: string; signedAt?: string };
+    qc?: { name?: string; signature?: string; signedAt?: string };
+    electricalHead?: { name?: string; signature?: string; signedAt?: string };
+    operator?: { name?: string; signature?: string; signedAt?: string };
+  };
+  status: 'DRAFT' | 'COMPLETED';
+  upd: number;
+  sy?: number;
+}
+
 

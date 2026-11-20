@@ -922,7 +922,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
     }
     const effectiveFrom = fromDate || '2020-01-01';
     const effectiveTo = toDate || '2099-12-31';
-    exportDispatchExcelWorkbook(ledgerEntries, effectiveFrom, effectiveTo, sopProductionLogs);
+    exportDispatchExcelWorkbook(ledgerEntries, effectiveFrom, effectiveTo, sopProductionLogs, isAdmin);
     setExcelNotice(
       `Confidential Dispatch Excel (.xlsx) downloaded (${ledgerEntries.length} filtered records · ${fromDate || 'All Dates'} to ${toDate || 'Latest'}) with Qty (kg) & linked Production Scrap/Wastage.`
     );

@@ -48,6 +48,7 @@ import { PeriodReportView } from './components/PeriodReportView';
 import { PowerCutAndGeneratorView } from './components/PowerCutAndGeneratorView';
 import { ProductionPlanningView } from './components/ProductionPlanningView';
 import { PWAInstallModal } from './components/PWAInstallModal';
+import { QualityTrialView } from './components/QualityTrialView';
 import {
   ActiveScheduleSlot,
   getActiveWeightOutputSlot,
@@ -57,6 +58,8 @@ import {
 import { SignedCertificateModal } from './components/SignedCertificateModal';
 import { SopFloorApkView } from './components/SopFloorApkView';
 import { SopPopupAlert, SopSubTab } from './components/SopPopupAlert';
+import { SpecialOrderPopupAlert } from './components/SpecialOrderPopupAlert';
+import { SpecialOrderSubTab, SpecialOrdersView } from './components/SpecialOrdersView';
 import { SyncAndMachinesView } from './components/SyncAndMachinesView';
 import polymerWatermarkImg from './assets/images/polymer_3d_watermark_1795109115357.jpg';
 import {
@@ -149,6 +152,24 @@ import {
   subscribePowerCutLogs,
 } from './services/powerGenStore';
 import {
+  flushPendingQualityTrials,
+  getLocalQualityTrials,
+  pollQualityTrials,
+  subscribeQualityTrials,
+} from './services/qualityTrialStore';
+import {
+  flushPendingSpecialOrderData,
+  getLocalSpecialOrderProductions,
+  getLocalSpecialOrders,
+  getLocalSpecialOrderWhDispatches,
+  pollSpecialOrderProductions,
+  pollSpecialOrders,
+  pollSpecialOrderWhDispatches,
+  subscribeSpecialOrderProductions,
+  subscribeSpecialOrders,
+  subscribeSpecialOrderWhDispatches,
+} from './services/specialOrderStore';
+import {
   ensurePushServiceWorkerRegistration,
   evaluateAndDispatchPushNotifications,
   getPushPermissionStatus,
@@ -169,11 +190,15 @@ import {
   PlantUserAccount,
   PowerCutLog,
   ProductionPlanItem,
+  QualityTrialReport,
   SopMixingReport,
   SopProductionRecord,
   SopQcRecord,
   SopScrapRecord,
   SopShiftHandoverRecord,
+  SpecialOrder,
+  SpecialOrderFactoryProduction,
+  SpecialOrderWhDispatch,
 } from './types';
 import { ParsedAttendanceMessage } from './types/attendance';
 
@@ -182,12 +207,14 @@ export type DowntimeTab =
   | 'log'
   | 'daily'
   | 'dispatch'
+  | 'special_orders'
   | 'prod_planning'
   | 'diesel'
   | 'power_gen'
   | 'sop_overview'
   | 'sop_production'
   | 'sop_qc'
+  | 'quality_trials'
   | 'sop_scrap'
   | 'sop_recycling'
   | 'sop_mixing'
@@ -238,9 +265,11 @@ export default function App() {
   const [requestedPowerGenSubTab, setRequestedPowerGenSubTab] = useState<'power_cuts' | 'generator'>(
     'power_cuts'
   );
+  const [requestedSpecialOrderSubTab, setRequestedSpecialOrderSubTab] =
+    useState<SpecialOrderSubTab | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Core Data State - Machinery Downtime, Dispatch, Planning, Diesel, Power Cut & Generator, SOP Floor & Attendance
+  // Core Data State - Machinery Downtime, Dispatch, Special Orders, Quality Trials, Planning, Diesel, Power Cut & Generator, SOP Floor & Attendance
   const [machines, setMachines] = useState<string[]>(getActiveMachines());
   const [entries, setEntries] = useState<DowntimeEntry[]>(getStoredEntries());
   const [dispatchEntries, setDispatchEntries] = useState<DispatchEntry[]>([]);
@@ -249,6 +278,16 @@ export default function App() {
   );
   const [monthlyPlans, setMonthlyPlans] = useState<ProductionPlanItem[]>(() =>
     getLocalProductionPlans()
+  );
+  const [specialOrders, setSpecialOrders] = useState<SpecialOrder[]>(() => getLocalSpecialOrders());
+  const [specialOrderProductions, setSpecialOrderProductions] = useState<
+    SpecialOrderFactoryProduction[]
+  >(() => getLocalSpecialOrderProductions());
+  const [specialOrderWhDispatches, setSpecialOrderWhDispatches] = useState<
+    SpecialOrderWhDispatch[]
+  >(() => getLocalSpecialOrderWhDispatches());
+  const [qualityTrials, setQualityTrials] = useState<QualityTrialReport[]>(() =>
+    getLocalQualityTrials()
   );
   const [dieselTank, setDieselTank] = useState<DieselTankConfig>(() => getLocalDieselTank());
   const [dieselRequests, setDieselRequests] = useState<DieselFuelRequest[]>(() =>
@@ -273,7 +312,26 @@ export default function App() {
   const [attendanceBatch, setAttendanceBatch] = useState<ParsedAttendanceMessage[]>(() =>
     getLocalAttendanceBatch()
   );
-  const [dismissedPopupKeys, setDismissedPopupKeys] = useState<string[]>([]);
+  const [snoozedPopupMap, setSnoozedPopupMap] = useState<Record<string, number>>({});
+  const [popupClockNow, setPopupClockNow] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setPopupClockNow(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  const dismissedPopupKeys = useMemo(
+    () =>
+      Object.entries(snoozedPopupMap)
+        .filter(([, until]) => until > popupClockNow)
+        .map(([k]) => k),
+    [snoozedPopupMap, popupClockNow]
+  );
+
+  const snoozePopupKey = (key: string) => {
+    const until = Date.now() + 5 * 60 * 1000;
+    setSnoozedPopupMap((prev) => ({ ...prev, [key]: until }));
+  };
 
   const allDispatchesWithBackground = useMemo(
     () => mergeAllDispatchesWithBackground(dispatchEntries, uploadedBackgroundDispatches),
@@ -521,6 +579,18 @@ export default function App() {
     const unsubGenLogs = subscribeGeneratorLogs((rows) => {
       setGeneratorLogs(rows);
     });
+    const unsubSpecialOrders = subscribeSpecialOrders((rows) => {
+      setSpecialOrders(rows);
+    });
+    const unsubSpecialOrderProd = subscribeSpecialOrderProductions((rows) => {
+      setSpecialOrderProductions(rows);
+    });
+    const unsubSpecialOrderWh = subscribeSpecialOrderWhDispatches((rows) => {
+      setSpecialOrderWhDispatches(rows);
+    });
+    const unsubQualityTrials = subscribeQualityTrials((rows) => {
+      setQualityTrials(rows);
+    });
 
     const pendingTimer = setInterval(() => {
       setPendingSyncCount(getPendingSyncQueue().length);
@@ -545,6 +615,8 @@ export default function App() {
           flushPendingProductionPlans().catch(() => 0),
           flushPendingDieselData().catch(() => 0),
           flushPendingPowerGenData().catch(() => 0),
+          flushPendingSpecialOrderData().catch(() => 0),
+          flushPendingQualityTrials().catch(() => 0),
         ]);
         const [
           updated,
@@ -561,6 +633,10 @@ export default function App() {
           updatedDieselGrns,
           updatedPowerCuts,
           updatedGenLogs,
+          updatedSpecialOrders,
+          updatedSpecialOrderProd,
+          updatedSpecialOrderWh,
+          updatedQualityTrials,
         ] = await Promise.all([
           pollFirebaseEntries(),
           pollDispatchEntries().catch(() => null),
@@ -576,6 +652,10 @@ export default function App() {
           pollDieselGrns().catch(() => null),
           pollPowerCutLogs().catch(() => null),
           pollGeneratorLogs().catch(() => null),
+          pollSpecialOrders().catch(() => null),
+          pollSpecialOrderProductions().catch(() => null),
+          pollSpecialOrderWhDispatches().catch(() => null),
+          pollQualityTrials().catch(() => null),
         ]);
         setEntries(updated);
         if (updatedDispatches) setDispatchEntries(updatedDispatches);
@@ -591,6 +671,10 @@ export default function App() {
         if (updatedDieselGrns) setDieselGrns(updatedDieselGrns);
         if (updatedPowerCuts) setPowerCutLogs(updatedPowerCuts);
         if (updatedGenLogs) setGeneratorLogs(updatedGenLogs);
+        if (updatedSpecialOrders) setSpecialOrders(updatedSpecialOrders);
+        if (updatedSpecialOrderProd) setSpecialOrderProductions(updatedSpecialOrderProd);
+        if (updatedSpecialOrderWh) setSpecialOrderWhDispatches(updatedSpecialOrderWh);
+        if (updatedQualityTrials) setQualityTrials(updatedQualityTrials);
         setPendingSyncCount(getPendingSyncQueue().length);
         setLastLiveHeartbeat(
           new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -632,6 +716,10 @@ export default function App() {
       unsubDieselGrns();
       unsubPowerCuts();
       unsubGenLogs();
+      unsubSpecialOrders();
+      unsubSpecialOrderProd();
+      unsubSpecialOrderWh();
+      unsubQualityTrials();
       clearInterval(pendingTimer);
       clearInterval(keepAliveTimer);
       document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
@@ -741,22 +829,6 @@ export default function App() {
     return count;
   }, [dispatchEntries, effectivePermissions]);
 
-  const hasActiveDispatchPopup = useMemo(() => {
-    const whPending = effectivePermissions.dispatchWHConfirm
-      ? dispatchEntries.some(
-          (e) =>
-            e.status === 'PENDING_WH' && !dismissedPopupKeys.includes(`${e.id}_PENDING_WH`)
-        )
-      : false;
-    const hodPending = effectivePermissions.dispatchHODConfirm
-      ? dispatchEntries.some(
-          (e) =>
-            e.status === 'PENDING_HOD' && !dismissedPopupKeys.includes(`${e.id}_PENDING_HOD`)
-        )
-      : false;
-    return whPending || hodPending;
-  }, [dispatchEntries, effectivePermissions, dismissedPopupKeys]);
-
   // Pending counts for spread SOP APKs
   const sopRecyclingBadgeCount = useMemo(() => {
     if (!isAdmin && !effectivePermissions.sopRecyclingConfirm) return 0;
@@ -779,32 +851,6 @@ export default function App() {
     matchedUserRecord?.role === 'Shift In Charge' ||
     user?.role === 'Shift In Charge' ||
     (effectivePermissions.dispatchShiftEntry && effectivePermissions.logDowntime);
-
-  const hasActiveSopPopup = useMemo(() => {
-    const recycleAlert = effectivePermissions.sopRecyclingConfirm
-      ? sopScrapPipeline.some(
-          (s) =>
-            s.status === 'SENT_TO_RECYCLING' &&
-            !dismissedPopupKeys.includes(`SOP_${s.id}_SENT_TO_RECYCLING`)
-        )
-      : false;
-    const mixerAlert = effectivePermissions.sopMixingAccess
-      ? sopScrapPipeline.some(
-          (s) =>
-            s.status === 'PROCESSED_FOR_MIXER' &&
-            !dismissedPopupKeys.includes(`SOP_${s.id}_PROCESSED_FOR_MIXER`)
-        )
-      : false;
-    const hodMixAlert =
-      isAdmin || effectivePermissions.dispatchHODConfirm
-        ? sopMixingReports.some(
-            (m) =>
-              m.status === 'PENDING_HOD' &&
-              !dismissedPopupKeys.includes(`SOP_MIX_${m.id}_PENDING_HOD`)
-          )
-        : false;
-    return recycleAlert || mixerAlert || hodMixAlert;
-  }, [sopScrapPipeline, sopMixingReports, effectivePermissions, dismissedPopupKeys, isAdmin]);
 
   const hasDispatchAccess =
     effectivePermissions.dispatchShiftEntry ||
@@ -832,27 +878,6 @@ export default function App() {
     return count;
   }, [dieselRequests, effectivePermissions, isAdmin]);
 
-  const hasActiveDieselPopup = useMemo(() => {
-    const hodAlert =
-      isAdmin || effectivePermissions.dieselHODApprove
-        ? dieselRequests.some(
-            (r) =>
-              r.status === 'PENDING_HOD' &&
-              !dismissedPopupKeys.includes(`DIESEL_${r.id}_PENDING_HOD`)
-          )
-        : false;
-    const driverAlert =
-      isAdmin || effectivePermissions.dieselFuelRequest
-        ? dieselRequests.some(
-            (r) =>
-              r.status === 'APPROVED_FOR_DISPENSE' &&
-              r.pdfUnlockedDispense &&
-              !dismissedPopupKeys.includes(`DIESEL_${r.id}_APPROVED_FOR_DISPENSE`)
-          )
-        : false;
-    return hodAlert || driverAlert;
-  }, [dieselRequests, effectivePermissions, dismissedPopupKeys, isAdmin]);
-
   // 4. Phone OS Push Notification Engine + Deep-Link Tap Handling
   useEffect(() => {
     if (!user) return;
@@ -864,12 +889,14 @@ export default function App() {
         'log',
         'daily',
         'dispatch',
+        'special_orders',
         'prod_planning',
         'diesel',
         'power_gen',
         'sop_overview',
         'sop_production',
         'sop_qc',
+        'quality_trials',
         'sop_scrap',
         'sop_recycling',
         'sop_mixing',
@@ -887,6 +914,9 @@ export default function App() {
       }
       if (payload.dieselSubTab) {
         setRequestedDieselSubTab(payload.dieselSubTab);
+      }
+      if (payload.specialOrderSubTab) {
+        setRequestedSpecialOrderSubTab(payload.specialOrderSubTab);
       }
       if (payload.openWeightCheck) {
         const now = new Date();
@@ -963,6 +993,8 @@ export default function App() {
       sopScrapPipeline,
       sopMixingReports,
       dieselRequests,
+      specialOrderProductions,
+      specialOrderWhDispatches,
       entries,
       now: new Date(pushClockTick),
     }).catch(() => {});
@@ -976,6 +1008,8 @@ export default function App() {
     sopScrapPipeline,
     sopMixingReports,
     dieselRequests,
+    specialOrderProductions,
+    specialOrderWhDispatches,
     entries,
     pushClockTick,
     pushPermission,
@@ -1010,6 +1044,30 @@ export default function App() {
     setTimeout(() => setPushTestStatus(null), 3000);
   };
 
+  const specialOrderBadgeCount = useMemo(() => {
+    let count = 0;
+    if (isAdmin || effectivePermissions.dispatchHODConfirm) {
+      count += specialOrderProductions.filter((p) => p.status === 'PENDING_HOD_FACTORY').length;
+      count += specialOrderWhDispatches.filter((w) => w.status === 'PENDING_HOD').length;
+    }
+    if (isAdmin || effectivePermissions.dispatchWHConfirm) {
+      count += specialOrderWhDispatches.filter((w) => w.status === 'PENDING_WH').length;
+    }
+    return count;
+  }, [specialOrderProductions, specialOrderWhDispatches, effectivePermissions, isAdmin]);
+
+  const hasSpecialOrderAccess =
+    isAdmin ||
+    Boolean(effectivePermissions.specialOrdersAccess) ||
+    effectivePermissions.dispatchShiftEntry ||
+    effectivePermissions.dispatchWHConfirm ||
+    effectivePermissions.dispatchHODConfirm;
+
+  const hasQualityTrialAccess =
+    isAdmin ||
+    Boolean(effectivePermissions.qualityTrialsAccess) ||
+    Boolean(effectivePermissions.sopFloorAccess);
+
   // Compute allowed sidebar navigation tabs strictly from effectivePermissions & Admin-only report policy
   const allowedTabs = useMemo<DowntimeTab[]>(() => {
     const tabs: DowntimeTab[] = [];
@@ -1017,6 +1075,7 @@ export default function App() {
     if (effectivePermissions.logDowntime) tabs.push('log');
     if (effectivePermissions.viewDailyHours) tabs.push('daily');
     if (hasDispatchAccess) tabs.push('dispatch');
+    if (hasSpecialOrderAccess) tabs.push('special_orders');
     if (
       isAdmin ||
       effectivePermissions.productionPlanningAccess ||
@@ -1031,6 +1090,7 @@ export default function App() {
     if (isAdmin || effectivePermissions.sopFloorAccess) {
       tabs.push('sop_overview', 'sop_production', 'sop_qc');
     }
+    if (hasQualityTrialAccess) tabs.push('quality_trials');
     if (isAdmin || effectivePermissions.sopScrapSend || effectivePermissions.sopFloorAccess) {
       tabs.push('sop_scrap');
     }
@@ -1047,7 +1107,14 @@ export default function App() {
     if (isAdmin) tabs.push('prod_report', 'rep');
     if (isAdmin || effectivePermissions.manageMachinesAndSync) tabs.push('data');
     return tabs;
-  }, [effectivePermissions, hasDispatchAccess, hasDieselAccess, isAdmin]);
+  }, [
+    effectivePermissions,
+    hasDispatchAccess,
+    hasSpecialOrderAccess,
+    hasQualityTrialAccess,
+    hasDieselAccess,
+    isAdmin,
+  ]);
 
   // Automatically switch active view to the first permitted tab whenever permissions change
   useEffect(() => {
@@ -1152,6 +1219,8 @@ export default function App() {
         flushPendingProductionPlans().catch(() => 0),
         flushPendingDieselData().catch(() => 0),
         flushPendingPowerGenData().catch(() => 0),
+        flushPendingSpecialOrderData().catch(() => 0),
+        flushPendingQualityTrials().catch(() => 0),
       ]);
       const [
         updated,
@@ -1168,6 +1237,10 @@ export default function App() {
         updatedDieselGrns,
         updatedPowerCuts,
         updatedGenLogs,
+        updatedSpecialOrders,
+        updatedSpecialOrderProd,
+        updatedSpecialOrderWh,
+        updatedQualityTrials,
       ] = await Promise.all([
         pollFirebaseEntries(),
         pollDispatchEntries().catch(() => dispatchEntries),
@@ -1183,6 +1256,10 @@ export default function App() {
         pollDieselGrns().catch(() => dieselGrns),
         pollPowerCutLogs().catch(() => powerCutLogs),
         pollGeneratorLogs().catch(() => generatorLogs),
+        pollSpecialOrders().catch(() => specialOrders),
+        pollSpecialOrderProductions().catch(() => specialOrderProductions),
+        pollSpecialOrderWhDispatches().catch(() => specialOrderWhDispatches),
+        pollQualityTrials().catch(() => qualityTrials),
       ]);
       setEntries(updated);
       setDispatchEntries(updatedDispatches);
@@ -1198,6 +1275,10 @@ export default function App() {
       setDieselGrns(updatedDieselGrns);
       setPowerCutLogs(updatedPowerCuts);
       setGeneratorLogs(updatedGenLogs);
+      setSpecialOrders(updatedSpecialOrders);
+      setSpecialOrderProductions(updatedSpecialOrderProd);
+      setSpecialOrderWhDispatches(updatedSpecialOrderWh);
+      setQualityTrials(updatedQualityTrials);
       setPendingSyncCount(getPendingSyncQueue().length);
       const err = getLastSyncError();
       setSyncErrorMsg(err);
@@ -1283,6 +1364,14 @@ export default function App() {
       badge: actionableDispatchCount,
     },
     {
+      id: 'special_orders',
+      group: '1. Live Floor Operations',
+      label: 'Special Orders (39–46)',
+      subtitle: 'Factory Stock · WH Dispatch',
+      icon: <Layers className="h-4 w-4" />,
+      badge: specialOrderBadgeCount,
+    },
+    {
       id: 'prod_planning',
       group: '1. Live Floor Operations',
       label: 'Production Planning',
@@ -1319,6 +1408,13 @@ export default function App() {
       label: 'QC Check APK',
       subtitle: 'Inspections & WA Parser',
       icon: <Sparkles className="h-4 w-4" />,
+    },
+    {
+      id: 'quality_trials',
+      group: '2. Daily SOP Floor APKs',
+      label: 'Quality Trial Reports',
+      subtitle: 'ISO · QMS · ASTM · SAZ PDF',
+      icon: <FlaskConical className="h-4 w-4" />,
     },
     {
       id: 'sop_scrap',
@@ -1935,6 +2031,21 @@ export default function App() {
                   />
                 )}
 
+                {activeDowntimeTab === 'special_orders' && hasSpecialOrderAccess && (
+                  <SpecialOrdersView
+                    machines={machines}
+                    orders={specialOrders}
+                    prodEntries={specialOrderProductions}
+                    whDispatches={specialOrderWhDispatches}
+                    permissions={effectivePermissions}
+                    isAdmin={isAdmin}
+                    currentUserName={user.displayName || currentReporter}
+                    currentUserEmail={user.email || ''}
+                    requestedSubTab={requestedSpecialOrderSubTab}
+                    onSubTabHandled={() => setRequestedSpecialOrderSubTab(null)}
+                  />
+                )}
+
                 {activeDowntimeTab === 'prod_planning' &&
                   (isAdmin ||
                     effectivePermissions.productionPlanningAccess ||
@@ -1982,6 +2093,16 @@ export default function App() {
                       }}
                     />
                   )}
+
+                {activeDowntimeTab === 'quality_trials' && hasQualityTrialAccess && (
+                  <QualityTrialView
+                    machines={machines}
+                    trials={qualityTrials}
+                    isAdmin={isAdmin}
+                    currentUserName={user.displayName || currentReporter}
+                    currentUserEmail={user.email || ''}
+                  />
+                )}
 
                 {SOP_TAB_TO_SUBTAB[activeDowntimeTab] && (
                   <SopFloorApkView
@@ -2053,66 +2174,69 @@ export default function App() {
         </main>
       </div>
 
-      {/* Real-Time Dispatch Pop-Up Notification Messages */}
-      <DispatchPopupAlert
-        entries={dispatchEntries}
-        permissions={effectivePermissions}
-        dismissedKeys={dismissedPopupKeys}
-        onDismissKey={(key) =>
-          setDismissedPopupKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))
-        }
-        onNavigateToStage={(stage) => {
-          setActiveDowntimeTab('dispatch');
-          setRequestedDispatchStage(stage);
-        }}
-      />
+      {/* Non-Blocking Live Alert Stack (All Active Pop-Up Messages Continue Unblocked) */}
+      <div className="fixed inset-0 z-50 pointer-events-none flex flex-col items-center justify-start gap-3 overflow-y-auto px-3 pt-4 pb-8 sm:px-5 sm:pt-8">
+        <DispatchPopupAlert
+          entries={dispatchEntries}
+          permissions={effectivePermissions}
+          dismissedKeys={dismissedPopupKeys}
+          onDismissKey={snoozePopupKey}
+          onNavigateToStage={(stage) => {
+            setActiveDowntimeTab('dispatch');
+            setRequestedDispatchStage(stage);
+          }}
+        />
 
-      {/* Real-Time SOP Closed-Loop Pop-Up Notifications (Operator -> Recycling -> Mixer -> HOD) */}
-      <SopPopupAlert
-        scrapRecords={sopScrapPipeline}
-        mixingReports={sopMixingReports}
-        permissions={effectivePermissions}
-        isAdmin={isAdmin}
-        hasActiveDispatchPopup={hasActiveDispatchPopup}
-        dismissedKeys={dismissedPopupKeys}
-        onDismissKey={(key) =>
-          setDismissedPopupKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))
-        }
-        onNavigateToSopTab={(subTab) => {
-          setActiveDowntimeTab(SUBTAB_TO_SOP_TAB[subTab]);
-        }}
-      />
+        <SopPopupAlert
+          scrapRecords={sopScrapPipeline}
+          mixingReports={sopMixingReports}
+          permissions={effectivePermissions}
+          isAdmin={isAdmin}
+          dismissedKeys={dismissedPopupKeys}
+          onDismissKey={snoozePopupKey}
+          onNavigateToSopTab={(subTab) => {
+            setActiveDowntimeTab(SUBTAB_TO_SOP_TAB[subTab]);
+          }}
+        />
 
-      {/* Real-Time Diesel Bowser Request & Approval PDF Unlock Pop-Up Notifications */}
-      <DieselPopupAlert
-        requests={dieselRequests}
-        permissions={effectivePermissions}
-        isAdmin={isAdmin}
-        currentUserEmail={user.email || ''}
-        hasBlockingPopup={hasActiveDispatchPopup || hasActiveSopPopup}
-        dismissedKeys={dismissedPopupKeys}
-        onDismissKey={(key) =>
-          setDismissedPopupKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))
-        }
-        onNavigateToDieselTab={(subTab) => {
-          setActiveDowntimeTab('diesel');
-          setRequestedDieselSubTab(subTab);
-        }}
-      />
+        <DieselPopupAlert
+          requests={dieselRequests}
+          permissions={effectivePermissions}
+          isAdmin={isAdmin}
+          currentUserEmail={user.email || ''}
+          dismissedKeys={dismissedPopupKeys}
+          onDismissKey={snoozePopupKey}
+          onNavigateToDieselTab={(subTab) => {
+            setActiveDowntimeTab('diesel');
+            setRequestedDieselSubTab(subTab);
+          }}
+        />
 
-      {/* Scheduled Shift In Charge Pop-Up: Running Weight & Output Check (09:45, 12:45, 18:00, 23:45, 03:45, 06:45) */}
-      <ShiftWeightOutputPopupAlert
-        machines={machines}
-        entries={entries}
-        isEligibleUser={isShiftInChargeWeightCheckUser}
-        hasBlockingPopup={hasActiveDispatchPopup || hasActiveSopPopup || hasActiveDieselPopup}
-        manualOpenSlot={manualWeightCheckSlot}
-        onCloseManual={() => setManualWeightCheckSlot(null)}
-        onSaveEntry={handleSaveEntry}
-        onOpenMachinesBoard={() => setActiveDowntimeTab('status')}
-        currentUserName={user.displayName || currentReporter}
-        currentUserEmail={user.email || ''}
-      />
+        <SpecialOrderPopupAlert
+          prodEntries={specialOrderProductions}
+          whDispatches={specialOrderWhDispatches}
+          permissions={effectivePermissions}
+          isAdmin={isAdmin}
+          dismissedKeys={dismissedPopupKeys}
+          onDismissKey={snoozePopupKey}
+          onNavigateToSpecialOrders={(subTab) => {
+            setActiveDowntimeTab('special_orders');
+            setRequestedSpecialOrderSubTab(subTab);
+          }}
+        />
+
+        <ShiftWeightOutputPopupAlert
+          machines={machines}
+          entries={entries}
+          isEligibleUser={isShiftInChargeWeightCheckUser}
+          manualOpenSlot={manualWeightCheckSlot}
+          onCloseManual={() => setManualWeightCheckSlot(null)}
+          onSaveEntry={handleSaveEntry}
+          onOpenMachinesBoard={() => setActiveDowntimeTab('status')}
+          currentUserName={user.displayName || currentReporter}
+          currentUserEmail={user.email || ''}
+        />
+      </div>
 
       {/* Modals */}
       <PWAInstallModal

@@ -1,5 +1,10 @@
 import { collection, doc, getDoc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
+import {
+  DIESEL_CSV_SEED_VERSION,
+  SEEDED_DIESEL_GRNS,
+  SEEDED_DIESEL_REQUESTS,
+} from '../data/dieselCsvSeed';
 import { db, ensureFirebaseAuth } from '../firebase';
 import {
   DieselFuelRequest,
@@ -21,18 +26,104 @@ const GRN_KEY = 'lgplast_diesel_grns_v1';
 const GRN_PENDING_KEY = 'lgplast_diesel_grns_pending_v1';
 const GRN_COLLECTION = 'diesel_grn_records';
 
+export function recomputeDieselTankFromLedger(
+  baseTank: DieselTankConfig,
+  requests: DieselFuelRequest[],
+  grns: DieselGrnRecord[],
+  updatedByLabel?: string
+): DieselTankConfig {
+  const totalReceivedLitres = r2(
+    grns.reduce((s, g) => s + (Number(g.litresAdded) || 0), 0)
+  );
+  const totalIssuedLitres = r2(
+    requests
+      .filter((r) => r.status === 'DISPENSED')
+      .reduce((s, r) => s + (Number(r.actualLitresTaken) || 0), 0)
+  );
+  const currentLevelLitres = r2(totalReceivedLitres - totalIssuedLitres);
+
+  let highestMeter = Number(baseTank.currentMeterReading) || 0;
+  requests.forEach((r) => {
+    if (typeof r.secondMeterReading === 'number' && r.secondMeterReading > highestMeter) {
+      highestMeter = r.secondMeterReading;
+    }
+  });
+  grns.forEach((g) => {
+    if (
+      !g.isHistoricalCsv &&
+      typeof g.secondMeterReading === 'number' &&
+      g.secondMeterReading > highestMeter
+    ) {
+      highestMeter = g.secondMeterReading;
+    }
+  });
+
+  return {
+    ...baseTank,
+    id: 'main_bowser',
+    totalReceivedLitres,
+    totalIssuedLitres,
+    currentLevelLitres,
+    currentMeterReading: highestMeter,
+    lastUpdatedBy: updatedByLabel || baseTank.lastUpdatedBy || 'Ledger Sync',
+  };
+}
+
 export const DEFAULT_TANK_CONFIG: DieselTankConfig = {
   id: 'main_bowser',
   tankName: 'Main Factory Diesel Bowser Tank',
   capacityLitres: 10000,
-  currentLevelLitres: 5000,
-  currentMeterReading: 12000,
-  totalReceivedLitres: 0,
-  totalIssuedLitres: 0,
+  currentLevelLitres: 26,
+  currentMeterReading: 170215,
+  totalReceivedLitres: 4813,
+  totalIssuedLitres: 4787,
   lastUpdatedAt: new Date().toISOString(),
-  lastUpdatedBy: 'Initial Setup',
+  lastUpdatedBy: 'DESEAL REPORTS CSV (+4,813 L - 4,787 L = 26 L)',
   upd: 1,
 };
+
+let dieselCsvSeedChecked = false;
+function ensureDieselCsvSeeded() {
+  if (dieselCsvSeedChecked) return;
+  dieselCsvSeedChecked = true;
+  try {
+    const alreadySeeded = localStorage.getItem(DIESEL_CSV_SEED_VERSION) === '1';
+    const existingReqs = readLocalList<DieselFuelRequest>(REQ_KEY);
+    const existingGrns = readLocalList<DieselGrnRecord>(GRN_KEY);
+
+    if (!alreadySeeded || existingReqs.length === 0 || existingGrns.length === 0) {
+      const mergedReqs = mergeById(SEEDED_DIESEL_REQUESTS, existingReqs);
+      const mergedGrns = mergeById(SEEDED_DIESEL_GRNS, existingGrns);
+      writeLocalList(REQ_KEY, mergedReqs);
+      writeLocalList(GRN_KEY, mergedGrns);
+
+      let baseTank = DEFAULT_TANK_CONFIG;
+      try {
+        const rawTank = localStorage.getItem(TANK_KEY);
+        if (rawTank) {
+          const parsed = JSON.parse(rawTank) as DieselTankConfig;
+          if (parsed && parsed.id === 'main_bowser') {
+            baseTank = parsed;
+          }
+        }
+      } catch {}
+
+      const recomputed = recomputeDieselTankFromLedger(
+        {
+          ...baseTank,
+          currentMeterReading: Math.max(170215, baseTank.currentMeterReading || 0),
+          upd: Math.max(baseTank.upd || 1, Date.now()),
+          lastUpdatedAt: new Date().toISOString(),
+        },
+        mergedReqs,
+        mergedGrns,
+        'DESEAL REPORTS CSV Sync (Positives - Negatives)'
+      );
+      localStorage.setItem(TANK_KEY, JSON.stringify(recomputed));
+      localStorage.setItem(DIESEL_CSV_SEED_VERSION, '1');
+    }
+  } catch {}
+}
 
 function readLocalList<T>(key: string): T[] {
   try {
@@ -110,11 +201,17 @@ function mergeById<T extends { id: string; upd?: number }>(local: T[], remote: T
 // 1. DIESEL BOWSER TANK CONFIG STORE
 // ======================================================
 export function getLocalDieselTank(): DieselTankConfig {
+  ensureDieselCsvSeeded();
   try {
     const raw = localStorage.getItem(TANK_KEY);
     if (!raw) return DEFAULT_TANK_CONFIG;
     const parsed = JSON.parse(raw) as DieselTankConfig;
     if (!parsed || parsed.id !== 'main_bowser') return DEFAULT_TANK_CONFIG;
+    const reqs = readLocalList<DieselFuelRequest>(REQ_KEY);
+    const grns = readLocalList<DieselGrnRecord>(GRN_KEY);
+    if (reqs.length > 0 || grns.length > 0) {
+      return recomputeDieselTankFromLedger(parsed, reqs, grns);
+    }
     return parsed;
   } catch {
     return DEFAULT_TANK_CONFIG;
@@ -208,6 +305,7 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
 // 2. DIESEL FUEL REQUESTS STORE
 // ======================================================
 export function getLocalDieselRequests(): DieselFuelRequest[] {
+  ensureDieselCsvSeeded();
   return readLocalList<DieselFuelRequest>(REQ_KEY);
 }
 
@@ -279,6 +377,7 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
 // 3. DIESEL FUEL GRN STORE
 // ======================================================
 export function getLocalDieselGrns(): DieselGrnRecord[] {
+  ensureDieselCsvSeeded();
   return readLocalList<DieselGrnRecord>(GRN_KEY);
 }
 
@@ -541,31 +640,46 @@ export async function dispenseFuelWithMeterReadings(params: {
   }
 
   const actualLitresTaken = r2(secondMeterReading - firstMeterReading);
-  const tankLevelBefore = r2(tank.currentLevelLitres);
-  const tankLevelAfter = Math.max(0, r2(tankLevelBefore - actualLitresTaken));
+  const currentTank = recomputeDieselTankFromLedger(
+    tank,
+    getLocalDieselRequests(),
+    getLocalDieselGrns()
+  );
+  const tankLevelBefore = r2(currentTank.currentLevelLitres);
   const nowIso = new Date().toISOString();
 
-  const updatedRequest: DieselFuelRequest = {
+  const updatedRequestDraft: DieselFuelRequest = {
     ...request,
     status: 'DISPENSED',
+    tankEffect: 'REMOVING',
+    dateReceived: request.date,
+    qntySigned: -Math.abs(actualLitresTaken),
     firstMeterReading: r2(firstMeterReading),
     secondMeterReading: r2(secondMeterReading),
     actualLitresTaken,
     driverDispenseSignature,
     dispensedAt: nowIso,
     tankLevelBefore,
-    tankLevelAfter,
+    tankLevelAfter: r2(tankLevelBefore - actualLitresTaken),
     upd: Date.now(),
   };
 
-  const updatedTank: DieselTankConfig = {
-    ...tank,
-    currentLevelLitres: tankLevelAfter,
-    currentMeterReading: r2(secondMeterReading),
-    totalIssuedLitres: r2((tank.totalIssuedLitres || 0) + actualLitresTaken),
-    lastUpdatedAt: nowIso,
-    lastUpdatedBy: `${request.driverName} (${request.requestNo})`,
-    upd: Date.now(),
+  const nextReqs = mergeById(getLocalDieselRequests(), [updatedRequestDraft]);
+  const updatedTank = recomputeDieselTankFromLedger(
+    {
+      ...currentTank,
+      currentMeterReading: Math.max(currentTank.currentMeterReading || 0, r2(secondMeterReading)),
+      lastUpdatedAt: nowIso,
+      upd: Date.now(),
+    },
+    nextReqs,
+    getLocalDieselGrns(),
+    `${request.driverName} (${request.requestNo})`
+  );
+
+  const updatedRequest: DieselFuelRequest = {
+    ...updatedRequestDraft,
+    tankLevelAfter: updatedTank.currentLevelLitres,
   };
 
   const reqSave = await saveDieselRequest(updatedRequest);
@@ -625,17 +739,25 @@ export async function recordFuelGrnAndTopUpTank(params: {
 
   const now = new Date();
   const litresAdded = r2(params.secondMeterReading - params.firstMeterReading);
-  const tankLevelBefore = r2(params.tank.currentLevelLitres);
-  const tankLevelAfter = r2(tankLevelBefore + litresAdded);
+  const baseTank = recomputeDieselTankFromLedger(
+    params.tank,
+    getLocalDieselRequests(),
+    getLocalDieselGrns()
+  );
+  const tankLevelBefore = r2(baseTank.currentLevelLitres);
   const unitPriceNum =
     typeof params.unitPrice === 'number' && params.unitPrice > 0 ? r2(params.unitPrice) : undefined;
   const totalCost = unitPriceNum ? r2(unitPriceNum * litresAdded) : undefined;
   const grnNo = `GRN-${params.date.replace(/-/g, '').slice(2)}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
 
-  const grn: DieselGrnRecord = {
+  const grnDraft: DieselGrnRecord = {
     id: `DGRN-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`,
     grnNo,
     date: params.date,
+    dateRequested: params.date,
+    requestedLitres: litresAdded,
+    purpose: 'BOWZER TANK TOP UP',
+    tankEffect: 'ADDING',
     shift: params.shift,
     supplierName: params.supplierName.trim(),
     deliveryNoteNo: params.deliveryNoteNo.trim() || undefined,
@@ -651,19 +773,27 @@ export async function recordFuelGrnAndTopUpTank(params: {
     receiverSignature: params.receiverSignature,
     hodVerifiedBy: params.hodVerifiedBy || params.receiverName.trim(),
     tankLevelBefore,
-    tankLevelAfter,
+    tankLevelAfter: r2(tankLevelBefore + litresAdded),
     createdAt: now.toISOString(),
     upd: Date.now(),
   };
 
-  const updatedTank: DieselTankConfig = {
-    ...params.tank,
-    currentLevelLitres: tankLevelAfter,
-    currentMeterReading: r2(params.secondMeterReading),
-    totalReceivedLitres: r2((params.tank.totalReceivedLitres || 0) + litresAdded),
-    lastUpdatedAt: now.toISOString(),
-    lastUpdatedBy: `GRN ${grnNo} (${params.supplierName.trim()})`,
-    upd: Date.now(),
+  const nextGrns = mergeById(getLocalDieselGrns(), [grnDraft]);
+  const updatedTank = recomputeDieselTankFromLedger(
+    {
+      ...baseTank,
+      currentMeterReading: Math.max(baseTank.currentMeterReading || 0, r2(params.secondMeterReading)),
+      lastUpdatedAt: now.toISOString(),
+      upd: Date.now(),
+    },
+    getLocalDieselRequests(),
+    nextGrns,
+    `GRN ${grnNo} (${params.supplierName.trim()})`
+  );
+
+  const grn: DieselGrnRecord = {
+    ...grnDraft,
+    tankLevelAfter: updatedTank.currentLevelLitres,
   };
 
   const grnSave = await saveDieselGrn(grn);
@@ -679,70 +809,223 @@ export async function recordFuelGrnAndTopUpTank(params: {
 }
 
 // ======================================================
-// 5. DIESEL BOWSER USAGE & GRN EXCEL EXPORT
+// 5. ADMIN-ONLY DIESEL BOWSER USAGE & GRN EXCEL EXPORT
+//    Maintains exact CSV Request Ledger Structure + Positives - Negatives Tank Balance
 // ======================================================
 export function exportDieselExcelWorkbook(
   requests: DieselFuelRequest[],
   grns: DieselGrnRecord[],
   tank: DieselTankConfig,
   fromDate: string,
-  toDate: string
+  toDate: string,
+  isAdmin: boolean = false
 ) {
+  if (!isAdmin) return;
+
+  const liveTank = recomputeDieselTankFromLedger(tank, requests, grns);
   const wb = XLSX.utils.book_new();
 
   const filteredIssues = requests
-    .filter((r) => (!fromDate || r.date >= fromDate) && (!toDate || r.date <= toDate))
-    .sort((a, b) => (b.date + b.requestedAt).localeCompare(a.date + a.requestedAt));
+    .filter((r) => (!fromDate || (r.date || '') >= fromDate) && (!toDate || (r.date || '') <= toDate))
+    .sort((a, b) => (a.date + a.requestedAt).localeCompare(b.date + b.requestedAt));
 
   const filteredGrns = grns
-    .filter((g) => (!fromDate || g.date >= fromDate) && (!toDate || g.date <= toDate))
-    .sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+    .filter((g) => (!fromDate || (g.date || '') >= fromDate) && (!toDate || (g.date || '') <= toDate))
+    .sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt));
 
-  const issuedInRange = r2(
+  // Sheet 1: Exact CSV Request Structure (Combined Adding + Removing chronologically)
+  type UnifiedDieselRow = {
+    sortKey: string;
+    dateRequested: string;
+    requestedQty: number;
+    requestedBy: string;
+    purpose: string;
+    tankEffect: 'ADDING' | 'REMOVING';
+    firstReading: number | '';
+    secondReading: number | '';
+    dateReceived: string;
+    qntyReceived: number | '';
+    referenceNo: string;
+    status: string;
+  };
+
+  const ledgerEntries: UnifiedDieselRow[] = [];
+
+  filteredGrns.forEach((g) => {
+    ledgerEntries.push({
+      sortKey: `${g.dateRequested || g.date}_${g.createdAt}_${g.id}`,
+      dateRequested: g.dateRequested || g.date,
+      requestedQty: g.requestedLitres ?? g.litresAdded,
+      requestedBy: g.supplierName || g.receiverName,
+      purpose: g.purpose || 'BOWZER TANK TOP UP',
+      tankEffect: 'ADDING',
+      firstReading: g.firstMeterReading ? g.firstMeterReading : '',
+      secondReading: g.secondMeterReading ? g.secondMeterReading : '',
+      dateReceived: g.date,
+      qntyReceived: r2(Math.abs(g.litresAdded)),
+      referenceNo: g.grnNo,
+      status: 'GRN ADDED (+)',
+    });
+  });
+
+  filteredIssues.forEach((r) => {
+    const signed =
+      typeof r.qntySigned === 'number'
+        ? r.qntySigned
+        : r.status === 'DISPENSED' && typeof r.actualLitresTaken === 'number'
+        ? -r2(Math.abs(r.actualLitresTaken))
+        : '';
+    ledgerEntries.push({
+      sortKey: `${r.date}_${r.requestedAt}_${r.id}`,
+      dateRequested: r.date,
+      requestedQty: r.requestedLitres,
+      requestedBy: r.driverName,
+      purpose: r.purpose || r.vehicleOrForklift,
+      tankEffect: r.tankEffect || 'REMOVING',
+      firstReading: typeof r.firstMeterReading === 'number' ? r.firstMeterReading : '',
+      secondReading: typeof r.secondMeterReading === 'number' ? r.secondMeterReading : '',
+      dateReceived: r.dateReceived || (r.dispensedAt ? r.dispensedAt.slice(0, 10) : r.date),
+      qntyReceived: signed,
+      referenceNo: r.requestNo,
+      status: r.status,
+    });
+  });
+
+  ledgerEntries.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+  const positivesInRange = r2(filteredGrns.reduce((s, g) => s + (Number(g.litresAdded) || 0), 0));
+  const negativesInRange = r2(
     filteredIssues
       .filter((r) => r.status === 'DISPENSED')
-      .reduce((s, r) => s + (r.actualLitresTaken || 0), 0)
+      .reduce((s, r) => s + (Number(r.actualLitresTaken) || 0), 0)
   );
-  const receivedInRange = r2(filteredGrns.reduce((s, g) => s + (g.litresAdded || 0), 0));
+  const netPeriodDiff = r2(positivesInRange - negativesInRange);
 
+  const ledgerAoa: (string | number)[][] = [
+    ['LG PLAST — DESEAL REQUEST & BOWSER TANK LEDGER (REQUEST STRUCTURE)'],
+    [`Period: ${fromDate || 'All'} to ${toDate || 'Latest'}`, `Generated: ${new Date().toLocaleString()}`],
+    [
+      'Total Positives (+L):',
+      positivesInRange,
+      'Total Negatives (-L):',
+      -negativesInRange,
+      'Period Net (Positives - Negatives):',
+      netPeriodDiff,
+      'Current Tank Level (All-Time Net L):',
+      liveTank.currentLevelLitres,
+    ],
+    [],
+    [
+      'DATE REQUESTED',
+      'REQUESTED QNTY',
+      'REQUESTED BY',
+      'PURPOSE',
+      'TANK EFFECT',
+      '1ST READING',
+      '2ND READING',
+      'DATE RECIVED',
+      'QNTY RECEIVED',
+      'VOUCHER / GRN NO',
+      'STATUS',
+    ],
+  ];
+
+  ledgerEntries.forEach((row) => {
+    ledgerAoa.push([
+      row.dateRequested,
+      row.requestedQty,
+      row.requestedBy,
+      row.purpose,
+      row.tankEffect,
+      row.firstReading,
+      row.secondReading,
+      row.dateReceived,
+      row.qntyReceived,
+      row.referenceNo,
+      row.status,
+    ]);
+  });
+
+  ledgerAoa.push([]);
+  ledgerAoa.push(['TOTAL POSITIVES (ADDING +L)', '', '', '', 'ADDING', '', '', '', positivesInRange, '', '']);
+  ledgerAoa.push(['TOTAL NEGATIVES (REMOVING -L)', '', '', '', 'REMOVING', '', '', '', -negativesInRange, '', '']);
+  ledgerAoa.push([
+    'CURRENT TANK QUANTITY (POSITIVES - NEGATIVES)',
+    '',
+    '',
+    '',
+    'NET BALANCE',
+    '',
+    '',
+    '',
+    liveTank.currentLevelLitres,
+    '',
+    '',
+  ]);
+
+  const wsLedger = XLSX.utils.aoa_to_sheet(ledgerAoa);
+  wsLedger['!cols'] = [
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 18 },
+    { wch: 24 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 15 },
+    { wch: 16 },
+    { wch: 18 },
+    { wch: 20 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsLedger, 'Diesel Request Ledger');
+
+  // Sheet 2: Bowser Tank Summary
   const summaryRows = [
-    { Metric: 'Bowser Tank Name', Value: tank.tankName },
+    { Metric: 'Bowser Tank Name', Value: liveTank.tankName },
     { Metric: 'Report Filter Period', Value: `${fromDate || 'All'} to ${toDate || 'Latest'}` },
-    { Metric: 'Tank Capacity (Litres)', Value: tank.capacityLitres },
-    { Metric: 'Current Live Tank Level (Litres)', Value: tank.currentLevelLitres },
+    { Metric: 'Tank Capacity (Litres)', Value: liveTank.capacityLitres },
+    { Metric: 'All-Time Total Positives / GRN Added (+L)', Value: liveTank.totalReceivedLitres },
+    { Metric: 'All-Time Total Negatives / Fuel Issued (-L)', Value: -liveTank.totalIssuedLitres },
+    {
+      Metric: 'Current Diesel in Tank (Positives - Negatives) (L)',
+      Value: liveTank.currentLevelLitres,
+    },
     {
       Metric: 'Tank Fill Percentage (%)',
-      Value: tank.capacityLitres > 0 ? r2((tank.currentLevelLitres / tank.capacityLitres) * 100) : 0,
+      Value:
+        liveTank.capacityLitres > 0
+          ? Math.max(0, r2((liveTank.currentLevelLitres / liveTank.capacityLitres) * 100))
+          : 0,
     },
-    { Metric: 'Current Bowser Flow Meter Reading', Value: tank.currentMeterReading },
-    { Metric: 'Period Fuel Issued / Dispensed (Litres)', Value: issuedInRange },
-    { Metric: 'Period Fuel Received via GRN (Litres)', Value: receivedInRange },
-    { Metric: 'All-Time Total Issued (Litres)', Value: tank.totalIssuedLitres },
-    { Metric: 'All-Time Total Received (Litres)', Value: tank.totalReceivedLitres },
-    { Metric: 'Last Tank Activity', Value: `${tank.lastUpdatedBy} @ ${tank.lastUpdatedAt}` },
+    { Metric: 'Current Bowser Flow Meter Reading', Value: liveTank.currentMeterReading },
+    { Metric: 'Period Fuel Received (+L)', Value: positivesInRange },
+    { Metric: 'Period Fuel Issued (-L)', Value: -negativesInRange },
+    { Metric: 'Period Net Change (L)', Value: netPeriodDiff },
+    { Metric: 'Last Tank Activity', Value: `${liveTank.lastUpdatedBy} @ ${liveTank.lastUpdatedAt}` },
   ];
   const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
-  wsSummary['!cols'] = [{ wch: 36 }, { wch: 42 }];
+  wsSummary['!cols'] = [{ wch: 44 }, { wch: 42 }];
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Bowser Tank Summary');
 
+  // Sheet 3: Fuel Issues
   const issueSheetRows =
     filteredIssues.length > 0
       ? filteredIssues.map((r) => ({
           'Voucher No': r.requestNo,
-          Date: r.date,
+          'Date Requested': r.date,
+          'Date Received': r.dateReceived || r.date,
           Shift: r.shift,
-          'Vehicle / Forklift': r.vehicleOrForklift,
-          'Driver Name': r.driverName,
+          'Vehicle / Purpose': r.vehicleOrForklift,
+          'Requested By': r.driverName,
           'Requested (L)': r.requestedLitres,
+          'Tank Effect': r.tankEffect || 'REMOVING',
           'HOD Approved (L)': r.hodApprovedLitres ?? '',
           'Approved By (HOD)': r.hodApprovedBy || 'Pending',
           'PDF Unlocked': r.pdfGeneratedOnce ? 'Yes' : 'No',
           '1st Meter Reading': r.firstMeterReading ?? '',
           '2nd Meter Reading': r.secondMeterReading ?? '',
+          'Qnty Signed (-L)': r.qntySigned ?? (r.actualLitresTaken ? -r.actualLitresTaken : ''),
           'Net Taken (L)': r.actualLitresTaken ?? '',
-          'Tank Before (L)': r.tankLevelBefore ?? '',
-          'Tank After (L)': r.tankLevelAfter ?? '',
-          Purpose: r.purpose || '',
           Status: r.status,
           'Driver Request Signed': r.driverRequestSignature ? 'Signed' : 'No',
           'HOD Signed': r.hodSignature ? 'Signed' : 'No',
@@ -752,20 +1035,23 @@ export function exportDieselExcelWorkbook(
   const wsIssues = XLSX.utils.json_to_sheet(issueSheetRows);
   XLSX.utils.book_append_sheet(wb, wsIssues, 'Diesel Issue Usage');
 
+  // Sheet 4: Fuel GRN Receipts
   const grnSheetRows =
     filteredGrns.length > 0
       ? filteredGrns.map((g) => ({
           'GRN No': g.grnNo,
-          Date: g.date,
+          'Date Requested': g.dateRequested || g.date,
+          'Date Received': g.date,
           Shift: g.shift,
-          Supplier: g.supplierName,
+          'Requested / Supplier': g.supplierName,
+          Purpose: g.purpose || 'BOWZER TANK TOP UP',
+          'Tank Effect': 'ADDING',
+          'Requested (L)': g.requestedLitres ?? g.litresAdded,
           'Delivery Note No': g.deliveryNoteNo || '',
           'Receiver (LG PLAST)': g.receiverName,
           '1st Meter Reading': g.firstMeterReading,
           '2nd Meter Reading': g.secondMeterReading,
           'Litres Added (+L)': g.litresAdded,
-          'Tank Before (L)': g.tankLevelBefore,
-          'Tank After (L)': g.tankLevelAfter,
           'Unit Price': g.unitPrice ?? '',
           'Total Cost': g.totalCost ?? '',
           'Supplier Signed': g.supplierSignature ? 'Signed' : 'No',

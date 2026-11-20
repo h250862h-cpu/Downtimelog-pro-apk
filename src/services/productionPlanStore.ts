@@ -197,6 +197,7 @@ function normalizePlanItem(item: ProductionPlanItem): ProductionPlanItem {
   return {
     ...item,
     machine: item.machine ? normalizeMachineName(item.machine) : undefined,
+    superseded: Boolean(item.superseded),
   };
 }
 
@@ -356,18 +357,29 @@ export function mergeAllDispatchesWithBackground(
 // MONTHLY PRODUCTION PLANNING STORE
 // ======================================================
 export function getLocalProductionPlans(): ProductionPlanItem[] {
+  return readList<ProductionPlanItem>(PLAN_STORAGE_KEY)
+    .map(normalizePlanItem)
+    .filter((p) => !p.superseded);
+}
+
+function getAllRawLocalProductionPlans(): ProductionPlanItem[] {
   return readList<ProductionPlanItem>(PLAN_STORAGE_KEY).map(normalizePlanItem);
 }
 
 export async function saveProductionPlanItem(
-  item: ProductionPlanItem
+  item: ProductionPlanItem,
+  isAdmin: boolean = true
 ): Promise<{ ok: boolean; error?: string }> {
+  if (!isAdmin) {
+    return { ok: false, error: 'Admin Only: Only Plant Administrators can attach production plans.' };
+  }
   const updated: ProductionPlanItem = normalizePlanItem({
     ...item,
+    superseded: false,
     upd: Date.now(),
     updatedAt: new Date().toISOString(),
   });
-  const merged = mergeById(getLocalProductionPlans(), [updated]);
+  const merged = mergeById(getAllRawLocalProductionPlans(), [updated]);
   writeList(PLAN_STORAGE_KEY, merged);
 
   try {
@@ -383,11 +395,12 @@ export async function saveProductionPlanItem(
 }
 
 export async function saveProductionPlanBatch(
-  rawItems: ProductionPlanItem[]
+  rawItems: ProductionPlanItem[],
+  isAdmin: boolean = true
 ): Promise<{ saved: number; cloudSynced: number }> {
-  if (!rawItems.length) return { saved: 0, cloudSynced: 0 };
-  const items = rawItems.map(normalizePlanItem);
-  const merged = mergeById(getLocalProductionPlans(), items);
+  if (!isAdmin || !rawItems.length) return { saved: 0, cloudSynced: 0 };
+  const items = rawItems.map((i) => normalizePlanItem({ ...i, superseded: false }));
+  const merged = mergeById(getAllRawLocalProductionPlans(), items);
   writeList(PLAN_STORAGE_KEY, merged);
 
   let cloudSynced = 0;
@@ -410,10 +423,123 @@ export async function saveProductionPlanBatch(
   return { saved: items.length, cloudSynced };
 }
 
+/**
+ * Replaces any currently attached active plan for `selectedMonth` ONLY when Admin
+ * attaches the next Production Plan accompanied by a valid Admin Digital Signature.
+ * Uses soft `superseded: true` flags (preserving Firestore `allow delete: if false` audit safety).
+ */
+export async function replaceProductionPlanWithSignature(params: {
+  selectedMonth: string;
+  newPlanItems: ProductionPlanItem[];
+  adminName: string;
+  adminSignature: string;
+  isAdmin: boolean;
+}): Promise<{
+  ok: boolean;
+  saved: number;
+  replacedCount: number;
+  cloudSynced: number;
+  error?: string;
+}> {
+  if (!params.isAdmin) {
+    return {
+      ok: false,
+      saved: 0,
+      replacedCount: 0,
+      cloudSynced: 0,
+      error: 'Restricted: Only Plant Administrators can attach or replace Production Planning.',
+    };
+  }
+  if (!params.adminSignature || !params.adminSignature.trim()) {
+    return {
+      ok: false,
+      saved: 0,
+      replacedCount: 0,
+      cloudSynced: 0,
+      error: 'Admin Digital Signature is required to attach or replace Monthly Production Planning.',
+    };
+  }
+  if (!params.newPlanItems.length) {
+    return {
+      ok: false,
+      saved: 0,
+      replacedCount: 0,
+      cloudSynced: 0,
+      error: 'No production planning items found in attached sheet.',
+    };
+  }
+
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const batchId = `PLANBATCH-${params.selectedMonth}-${nowMs}`;
+  const rawExisting = getAllRawLocalProductionPlans();
+
+  // Supersede previous active plans for this month (cannot delete due to audit rule, so mark superseded)
+  const supersededOldItems: ProductionPlanItem[] = rawExisting
+    .filter((p) => p.month === params.selectedMonth && !p.superseded)
+    .map((p, idx) =>
+      normalizePlanItem({
+        ...p,
+        superseded: true,
+        supersededAt: nowIso,
+        supersededByBatchId: batchId,
+        upd: nowMs + idx,
+      })
+    );
+
+  // Stamp newly attached plan items with unique batch IDs + Admin Digital Signature
+  const signedNewItems: ProductionPlanItem[] = params.newPlanItems.map((item, idx) => {
+    const prodKey = item.product.toUpperCase().replace(/[^A-Z0-9]+/g, '_').slice(0, 42);
+    const machKey = item.machine ? `-${item.machine.replace(/[^A-Z0-9]+/gi, '_')}` : '';
+    return normalizePlanItem({
+      ...item,
+      id: `PLAN-${params.selectedMonth}-${nowMs}-${idx + 1}-${prodKey}${machKey}`,
+      month: params.selectedMonth,
+      batchId,
+      adminSignature: params.adminSignature,
+      signedBy: params.adminName || 'Plant Admin',
+      signedAt: nowIso,
+      uploadedBy: params.adminName || item.uploadedBy || 'Plant Admin',
+      superseded: false,
+      updatedAt: nowIso,
+      upd: nowMs + 1000 + idx,
+    });
+  });
+
+  const allUpdated = [...supersededOldItems, ...signedNewItems];
+  const merged = mergeById(rawExisting, allUpdated);
+  writeList(PLAN_STORAGE_KEY, merged);
+
+  let cloudSynced = 0;
+  try {
+    await ensureFirebaseAuth();
+    for (const item of allUpdated) {
+      try {
+        await setDoc(doc(db, PLAN_COLLECTION, item.id), sanitizeObj({ ...item, sy: Date.now() }), {
+          merge: true,
+        });
+        removeFromQueue(PLAN_PENDING_KEY, item.id);
+        cloudSynced++;
+      } catch {
+        addToQueue(PLAN_PENDING_KEY, item.id);
+      }
+    }
+  } catch {
+    allUpdated.forEach((i) => addToQueue(PLAN_PENDING_KEY, i.id));
+  }
+
+  return {
+    ok: true,
+    saved: signedNewItems.length,
+    replacedCount: supersededOldItems.length,
+    cloudSynced,
+  };
+}
+
 export async function flushPendingProductionPlans(): Promise<number> {
   const queue = readQueue(PLAN_PENDING_KEY);
   if (!queue.length) return 0;
-  const all = getLocalProductionPlans();
+  const all = getAllRawLocalProductionPlans();
   let flushed = 0;
   try {
     await ensureFirebaseAuth();
@@ -441,9 +567,9 @@ export async function pollProductionPlans(): Promise<ProductionPlanItem[]> {
     const snap = await getDocs(collection(db, PLAN_COLLECTION));
     const remote: ProductionPlanItem[] = [];
     snap.forEach((d) => remote.push(normalizePlanItem(d.data() as ProductionPlanItem)));
-    const merged = mergeById(getLocalProductionPlans(), remote);
+    const merged = mergeById(getAllRawLocalProductionPlans(), remote);
     writeList(PLAN_STORAGE_KEY, merged);
-    return merged;
+    return merged.filter((p) => !p.superseded);
   } catch {
     return getLocalProductionPlans();
   }
@@ -463,9 +589,9 @@ export function subscribeProductionPlans(onUpdate: (items: ProductionPlanItem[])
         (snap) => {
           const remote: ProductionPlanItem[] = [];
           snap.forEach((d) => remote.push(normalizePlanItem(d.data() as ProductionPlanItem)));
-          const merged = mergeById(getLocalProductionPlans(), remote);
+          const merged = mergeById(getAllRawLocalProductionPlans(), remote);
           writeList(PLAN_STORAGE_KEY, merged);
-          onUpdate(merged);
+          onUpdate(merged.filter((p) => !p.superseded));
         },
         () => {}
       );
@@ -496,7 +622,7 @@ export function computeMonthlyPlanProgress(
   allDispatches: DispatchEntry[],
   month: string
 ): PlanProgressRow[] {
-  const monthPlans = plans.filter((p) => p.month === month);
+  const monthPlans = plans.filter((p) => p.month === month && !p.superseded);
   // STRICT RULE: Only count dispatches whose date falls within this selected planning month (YYYY-MM)
   const monthDispatches = allDispatches.filter((e) => (e.date || '').startsWith(month));
 

@@ -282,7 +282,8 @@ Joseph Sakunyepa 94`;
       batch,
       filterFromDate,
       filterToDate,
-      filterShift
+      filterShift,
+      isAdmin
     );
     showToast(`Downloaded Excel report (${filteredBatch.length} shifts): ${fileName}`);
   };

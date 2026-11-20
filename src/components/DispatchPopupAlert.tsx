@@ -96,7 +96,7 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
   const [completedSched, setCompletedSched] = useState<string[]>(() =>
     getCompletedDispatchSchedSlots()
   );
-  const [snoozedSched, setSnoozedSched] = useState<string[]>([]);
+  const [snoozedSchedUntil, setSnoozedSchedUntil] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const tick = () => setNow(new Date());
@@ -141,18 +141,19 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
     if (!canReceiveDispatchReminder) return null;
     const slot = getActiveDispatchScheduleSlot(now);
     if (!slot) return null;
-    if (completedSched.includes(slot.slotKey) || snoozedSched.includes(slot.slotKey)) {
+    const snoozeExp = snoozedSchedUntil[slot.slotKey] || 0;
+    if (completedSched.includes(slot.slotKey) || now.getTime() < snoozeExp) {
       return null;
     }
     return slot;
-  }, [canReceiveDispatchReminder, now, completedSched, snoozedSched]);
+  }, [canReceiveDispatchReminder, now, completedSched, snoozedSchedUntil]);
 
   if (pendingWH.length === 0 && pendingHOD.length === 0 && !activeSchedule) {
     return null;
   }
 
-  // If no pending trolley alerts, show the Scheduled 06:30 AM / 15:45 Dispatch Update Pop-Up
-  if (pendingWH.length === 0 && pendingHOD.length === 0 && activeSchedule) {
+  const renderScheduledCard = () => {
+    if (!activeSchedule) return null;
     const targetStage: DispatchSubStage = permissions.dispatchShiftEntry
       ? 'shift'
       : permissions.dispatchWHConfirm
@@ -175,103 +176,107 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
     };
 
     const handleSnoozeSchedule = () => {
-      setSnoozedSched((prev) =>
-        prev.includes(activeSchedule.slotKey) ? prev : [...prev, activeSchedule.slotKey]
-      );
+      const fiveMinsMs = Date.now() + 5 * 60 * 1000;
+      setSnoozedSchedUntil((prev) => ({
+        ...prev,
+        [activeSchedule.slotKey]: fiveMinsMs,
+      }));
     };
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
-        <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white border border-white/15">
-                <AlarmClock className="h-5 w-5" />
+      <div className="pointer-events-auto w-full max-w-lg rounded-xl border border-slate-300 bg-white text-slate-900 shadow-2xl ring-1 ring-slate-900/15 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white border border-white/15">
+              <AlarmClock className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold tracking-tight text-white">
+                {activeSchedule.slot === '06:30'
+                  ? 'Morning Dispatch Update Required'
+                  : 'Afternoon Dispatch Update Required'}
+              </h3>
+              <p className="text-[11px] text-slate-300">
+                {activeSchedule.shiftLabel}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleSnoozeSchedule}
+            className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10 hover:text-white transition"
+            title="Remind again in 5 minutes"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4 text-xs">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+            <p className="text-slate-700 leading-relaxed font-medium">
+              Please record ready dispatch trollies, unit weights, and confirm pending floor movements before shift close.
+            </p>
+
+            <div className="grid grid-cols-3 gap-2 text-center tabular-nums">
+              <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                <span className="text-[11px] text-slate-500 block font-medium">
+                  Logged Today
+                </span>
+                <span className="text-base font-bold text-slate-900">
+                  {todayEntries.length}
+                </span>
               </div>
-              <div>
-                <h3 className="text-sm font-bold tracking-tight text-white">
-                  {activeSchedule.slot === '06:30'
-                    ? 'Morning Dispatch Update Required'
-                    : 'Afternoon Dispatch Update Required'}
-                </h3>
-                <p className="text-[11px] text-slate-300">
-                  {activeSchedule.shiftLabel}
-                </p>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+                <span className="text-[11px] text-amber-800 block font-medium">
+                  Awaiting WH
+                </span>
+                <span className="text-base font-bold text-amber-800">
+                  {pendingWhCount}
+                </span>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-2.5">
+                <span className="text-[11px] text-slate-500 block font-medium">
+                  Awaiting HOD
+                </span>
+                <span className="text-base font-bold text-[#0F1E36]">
+                  {pendingHodCount}
+                </span>
               </div>
             </div>
+          </div>
+
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-end gap-2">
             <button
               type="button"
               onClick={handleSnoozeSchedule}
-              className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10 hover:text-white transition"
-              title="Dismiss for now"
+              className="rounded-lg border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700 transition"
             >
-              <X className="h-4 w-4" />
+              Remind in 5 min
             </button>
-          </div>
-
-          <div className="p-5 space-y-4 text-xs">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
-              <p className="text-slate-700 leading-relaxed font-medium">
-                Please record ready dispatch trollies, unit weights, and confirm pending floor movements before shift close.
-              </p>
-
-              <div className="grid grid-cols-3 gap-2 text-center tabular-nums">
-                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
-                  <span className="text-[11px] text-slate-500 block font-medium">
-                    Logged Today
-                  </span>
-                  <span className="text-base font-bold text-slate-900">
-                    {todayEntries.length}
-                  </span>
-                </div>
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5">
-                  <span className="text-[11px] text-amber-800 block font-medium">
-                    Awaiting WH
-                  </span>
-                  <span className="text-base font-bold text-amber-800">
-                    {pendingWhCount}
-                  </span>
-                </div>
-                <div className="rounded-lg border border-slate-200 bg-white p-2.5">
-                  <span className="text-[11px] text-slate-500 block font-medium">
-                    Awaiting HOD
-                  </span>
-                  <span className="text-base font-bold text-[#0F1E36]">
-                    {pendingHodCount}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={handleSnoozeSchedule}
-                className="rounded-lg border border-slate-300 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700 transition"
-              >
-                Remind Later
-              </button>
-              <button
-                type="button"
-                onClick={() => handleAckSchedule(false)}
-                className="rounded-lg border border-emerald-600/30 bg-emerald-50 hover:bg-emerald-100 px-4 py-2 text-xs font-semibold text-emerald-800 transition"
-              >
-                Mark Reviewed
-              </button>
-              <button
-                type="button"
-                onClick={() => handleAckSchedule(true)}
-                className="flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-5 py-2 text-xs font-bold text-white shadow-xs transition"
-              >
-                <Truck className="h-4 w-4" />
-                <span>Open Dispatch</span>
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => handleAckSchedule(false)}
+              className="rounded-lg border border-emerald-600/30 bg-emerald-50 hover:bg-emerald-100 px-4 py-2 text-xs font-semibold text-emerald-800 transition"
+            >
+              Mark Reviewed
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAckSchedule(true)}
+              className="flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-5 py-2 text-xs font-bold text-white shadow-xs transition"
+            >
+              <Truck className="h-4 w-4" />
+              <span>Open Dispatch</span>
+              <ArrowRight className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </div>
     );
+  };
+
+  if (pendingWH.length === 0 && pendingHOD.length === 0) {
+    return renderScheduledCard();
   }
 
   // Prioritize WH pending first if user has WH role, or HOD pending if HOD
@@ -291,8 +296,9 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
-      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden">
+    <>
+      {renderScheduledCard()}
+      <div className="pointer-events-auto w-full max-w-lg rounded-xl border border-slate-300 bg-white text-slate-900 shadow-2xl ring-1 ring-slate-900/15 overflow-hidden">
         {/* Formal Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
           <div className="flex items-center gap-2.5">
@@ -422,6 +428,6 @@ export const DispatchPopupAlert: React.FC<DispatchPopupAlertProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };

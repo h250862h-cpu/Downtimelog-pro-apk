@@ -675,8 +675,10 @@ export function generateAttendanceExcelWorkbook(
   batch: ParsedAttendanceMessage[],
   filterFromDate?: string,
   filterToDate?: string,
-  shiftFilter: 'All' | 'Day' | 'Night' = 'All'
+  shiftFilter: 'All' | 'Day' | 'Night' = 'All',
+  isAdmin: boolean = false
 ) {
+  if (!isAdmin) return '';
   // Apply date range and shift filter, sorted chronologically
   const filteredBatch = batch
     .filter((b) => {

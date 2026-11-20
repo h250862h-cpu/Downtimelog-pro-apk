@@ -169,7 +169,7 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
   const [completedSlots, setCompletedSlots] = useState<string[]>(() =>
     getCompletedWeightSlots()
   );
-  const [snoozedSlots, setSnoozedSlots] = useState<string[]>([]);
+  const [snoozedSlotsUntil, setSnoozedSlotsUntil] = useState<Record<string, number>>({});
   const [drafts, setDrafts] = useState<Record<string, MachineRowDraft>>({});
   const [deptFilter, setDeptFilter] = useState<'ALL' | 'Extrusion' | 'Injection' | 'Mixer' | 'Recycling'>('ALL');
   const [saving, setSaving] = useState(false);
@@ -195,13 +195,14 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
     if (!isEligibleUser) return null;
     const slot = getActiveWeightOutputSlot(now);
     if (!slot) return null;
-    if (completedSlots.includes(slot.slotKey) || snoozedSlots.includes(slot.slotKey)) {
+    const snoozeExp = snoozedSlotsUntil[slot.slotKey] || 0;
+    if (completedSlots.includes(slot.slotKey) || now.getTime() < snoozeExp) {
       return null;
     }
     return slot;
-  }, [isEligibleUser, now, completedSlots, snoozedSlots]);
+  }, [isEligibleUser, now, completedSlots, snoozedSlotsUntil]);
 
-  const activeSlot = manualOpenSlot || (!hasBlockingPopup ? scheduledActive : null);
+  const activeSlot = manualOpenSlot || scheduledActive;
 
   // Build baseline machine list (exclude utility like Chiller/Generator unless needed)
   const productionMachines = useMemo(
@@ -262,9 +263,11 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
       onCloseManual();
       return;
     }
-    setSnoozedSlots((prev) =>
-      prev.includes(activeSlot.slotKey) ? prev : [...prev, activeSlot.slotKey]
-    );
+    const fiveMinsMs = Date.now() + 5 * 60 * 1000;
+    setSnoozedSlotsUntil((prev) => ({
+      ...prev,
+      [activeSlot.slotKey]: fiveMinsMs,
+    }));
   };
 
   const handleConfirmNoChanges = () => {
@@ -356,8 +359,7 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 sm:p-4 backdrop-blur-xs">
-      <div className="w-full max-w-4xl rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="pointer-events-auto w-full max-w-4xl rounded-xl border border-slate-300 bg-white text-slate-900 shadow-2xl ring-1 ring-slate-900/15 overflow-hidden flex flex-col max-h-[85vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
           <div className="flex items-center gap-3">
@@ -536,7 +538,6 @@ export const ShiftWeightOutputPopupAlert: React.FC<ShiftWeightOutputPopupAlertPr
             </button>
           </div>
         </div>
-      </div>
     </div>
   );
 };

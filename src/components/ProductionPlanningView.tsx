@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertOctagon,
@@ -6,9 +6,13 @@ import {
   CheckCircle2,
   ClipboardList,
   Database,
+  Eraser,
   FileSpreadsheet,
+  Lock,
+  PenTool,
   Plus,
   Search,
+  ShieldCheck,
   Upload,
 } from 'lucide-react';
 import { r2, ymd } from '../services/downtimeCalc';
@@ -16,13 +20,133 @@ import {
   computeMonthlyPlanProgress,
   getBuiltInHistoricalDispatches,
   parseDispatchAndPlanningWorkbook,
-  saveProductionPlanBatch,
+  replaceProductionPlanWithSignature,
   saveProductionPlanItem,
   saveUploadedBackgroundDispatchesBatch,
 } from '../services/productionPlanStore';
 import { DispatchEntry, ProductionPlanItem } from '../types';
 import { MASTER_JOB_CARDS } from '../types/jobCards';
 import { LgplastLogo } from './LgplastLogo';
+
+const AdminPlanSignaturePad: React.FC<{
+  label: string;
+  value: string;
+  onChange: (dataUrl: string) => void;
+}> = ({ label, value, onChange }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    if (!value) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }, [value]);
+
+  const getCoords = (
+    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
+  ) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    if ('touches' in e && e.touches.length > 0) {
+      return {
+        x: (e.touches[0].clientX - rect.left) * scaleX,
+        y: (e.touches[0].clientY - rect.top) * scaleY,
+      };
+    }
+    const me = e as React.MouseEvent<HTMLCanvasElement>;
+    return {
+      x: (me.clientX - rect.left) * scaleX,
+      y: (me.clientY - rect.top) * scaleY,
+    };
+  };
+
+  const startDraw = (
+    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
+  ) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    drawingRef.current = true;
+    const { x, y } = getCoords(e);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2.4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  };
+
+  const moveDraw = (
+    e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>
+  ) => {
+    if (!drawingRef.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const { x, y } = getCoords(e);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+
+  const endDraw = () => {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    onChange(canvas.toDataURL('image/png'));
+  };
+
+  const handleClear = () => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    onChange('');
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <label className="text-[11px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+          <PenTool className="h-3.5 w-3.5 text-amber-400" />
+          {label} *
+        </label>
+        <button
+          type="button"
+          onClick={handleClear}
+          className="flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-slate-800"
+        >
+          <Eraser className="h-3 w-3" /> Clear
+        </button>
+      </div>
+      <div className="rounded-xl border border-amber-500/40 bg-slate-50 overflow-hidden touch-none">
+        <canvas
+          ref={canvasRef}
+          width={420}
+          height={105}
+          onMouseDown={startDraw}
+          onMouseMove={moveDraw}
+          onMouseUp={endDraw}
+          onMouseLeave={endDraw}
+          onTouchStart={startDraw}
+          onTouchMove={moveDraw}
+          onTouchEnd={endDraw}
+          className="w-full h-[88px] cursor-crosshair block"
+        />
+      </div>
+    </div>
+  );
+};
 
 function getPlanProgressWidthClass(pct: number): string {
   if (pct <= 0) return 'w-0';
@@ -68,7 +192,17 @@ export const ProductionPlanningView: React.FC<ProductionPlanningViewProps> = ({
   const [uploadBanner, setUploadBanner] = useState<{ text: string; isError?: boolean } | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  // Manual Plan Item form state
+  // Admin Signed Plan Replacement staging state
+  const [stagedUpload, setStagedUpload] = useState<{
+    fileName: string;
+    historyEntries: DispatchEntry[];
+    planItems: ProductionPlanItem[];
+    sheetSummary: string[];
+  } | null>(null);
+  const [adminPlanSig, setAdminPlanSig] = useState('');
+  const [committingPlan, setCommittingPlan] = useState(false);
+
+  // Manual Plan Item form state (Admin Only)
   const [showAddForm, setShowAddForm] = useState(false);
   const [newProduct, setNewProduct] = useState<string>(MASTER_JOB_CARDS[0] || '');
   const [newProductCustom, setNewProductCustom] = useState<string>('');
@@ -92,6 +226,18 @@ export const ProductionPlanningView: React.FC<ProductionPlanningViewProps> = ({
     () => computeMonthlyPlanProgress(monthlyPlans, allDispatches, selectedMonth),
     [monthlyPlans, allDispatches, selectedMonth]
   );
+
+  const activePlanLockInfo = useMemo(() => {
+    if (planRows.length === 0) return null;
+    const signedRow = planRows.find((r) => r.signedBy || r.adminSignature) || planRows[0];
+    return {
+      signedBy: signedRow.signedBy || signedRow.uploadedBy || 'Plant Admin',
+      signedAt: signedRow.signedAt || signedRow.updatedAt,
+      batchId: signedRow.batchId || 'LOCKED',
+      sourceFile: signedRow.sourceFile,
+      hasSignature: Boolean(signedRow.adminSignature),
+    };
+  }, [planRows]);
 
   const filteredPlanRows = useMemo(() => {
     return planRows.filter((row) => {
@@ -129,6 +275,14 @@ export const ProductionPlanningView: React.FC<ProductionPlanningViewProps> = ({
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    if (!isAdmin) {
+      setUploadBanner({
+        text: 'Restricted: Only Plant Administrators can attach or replace Production Planning.',
+        isError: true,
+      });
+      return;
+    }
+
     setUploadBanner(null);
     setUploading(true);
 
@@ -147,21 +301,26 @@ export const ProductionPlanningView: React.FC<ProductionPlanningViewProps> = ({
         return;
       }
 
-      const msgs: string[] = [...sheetSummary];
-      if (historyEntries.length > 0) {
-        const histRes = await saveUploadedBackgroundDispatchesBatch(historyEntries);
-        msgs.push(
-          `Background Dispatch History saved (${histRes.saved} rows, ${histRes.cloudSynced} synced).`
-        );
-      }
       if (planItems.length > 0) {
-        const planRes = await saveProductionPlanBatch(planItems);
-        msgs.push(
-          `Monthly Production Planning saved for ${selectedMonth} (${planRes.saved} products, ${planRes.cloudSynced} synced).`
-        );
+        // Stage parsed Production Plan so Admin must draw Digital Signature to attach & replace prior plan
+        setStagedUpload({
+          fileName: file.name,
+          historyEntries,
+          planItems,
+          sheetSummary,
+        });
+        setAdminPlanSig('');
+        setUploadBanner({
+          text: `File "${file.name}" parsed (${planItems.length} plan item(s) for ${selectedMonth}). Admin Digital Signature is required below to attach this plan${planRows.length > 0 ? ' and replace the currently locked plan' : ''}.`,
+          isError: false,
+        });
+      } else if (historyEntries.length > 0) {
+        const histRes = await saveUploadedBackgroundDispatchesBatch(historyEntries);
+        setUploadBanner({
+          text: `${sheetSummary.join(' ')} Background Dispatch History saved (${histRes.saved} rows, ${histRes.cloudSynced} synced).`,
+          isError: false,
+        });
       }
-
-      setUploadBanner({ text: msgs.join(' '), isError: false });
     } catch (err: any) {
       setUploadBanner({
         text: `Failed reading workbook "${file.name}": ${err?.message || 'Unknown error'}`,
@@ -172,8 +331,68 @@ export const ProductionPlanningView: React.FC<ProductionPlanningViewProps> = ({
     }
   };
 
+  const handleCommitSignedPlan = async () => {
+    if (!isAdmin) {
+      setUploadBanner({
+        text: 'Restricted: Only Plant Administrators can attach or replace Production Planning.',
+        isError: true,
+      });
+      return;
+    }
+    if (!stagedUpload) return;
+    if (!adminPlanSig) {
+      setUploadBanner({
+        text: 'Please draw the Admin Digital Signature before attaching the next Production Plan.',
+        isError: true,
+      });
+      return;
+    }
+
+    setCommittingPlan(true);
+    try {
+      const msgs: string[] = [...stagedUpload.sheetSummary];
+      if (stagedUpload.historyEntries.length > 0) {
+        const histRes = await saveUploadedBackgroundDispatchesBatch(stagedUpload.historyEntries);
+        msgs.push(
+          `Background Dispatch History saved (${histRes.saved} rows, ${histRes.cloudSynced} synced).`
+        );
+      }
+      const res = await replaceProductionPlanWithSignature({
+        selectedMonth,
+        newPlanItems: stagedUpload.planItems,
+        adminName: currentUserName,
+        adminSignature: adminPlanSig,
+        isAdmin,
+      });
+
+      if (!res.ok) {
+        setUploadBanner({
+          text: res.error || 'Failed to attach signed Production Plan.',
+          isError: true,
+        });
+        return;
+      }
+
+      msgs.push(
+        `Signed & Attached ${res.saved} Production Plan item(s) for ${selectedMonth}${res.replacedCount > 0 ? ` (superseded ${res.replacedCount} previous plan item(s))` : ''}.`
+      );
+      setStagedUpload(null);
+      setAdminPlanSig('');
+      setUploadBanner({ text: msgs.join(' '), isError: false });
+    } finally {
+      setCommittingPlan(false);
+    }
+  };
+
   const handleAddManualPlan = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAdmin) {
+      setUploadBanner({
+        text: 'Restricted: Only Plant Administrators can add Production Plan items.',
+        isError: true,
+      });
+      return;
+    }
     const finalProd = (newProduct === '__CUSTOM__' ? newProductCustom : newProduct).trim();
     const qtyNum = Number(newPlannedQty);
     if (!finalProd || !qtyNum || Number.isNaN(qtyNum) || qtyNum <= 0) {
@@ -196,10 +415,13 @@ export const ProductionPlanningView: React.FC<ProductionPlanningViewProps> = ({
         plannedQty: r2(qtyNum),
         jobCardNo: newJobCardNo.trim() || `JC-${selectedMonth}`,
         uploadedBy: currentUserName,
+        signedBy: currentUserName,
+        signedAt: new Date().toISOString(),
+        superseded: false,
         updatedAt: new Date().toISOString(),
         upd: Date.now(),
       };
-      await saveProductionPlanItem(item);
+      await saveProductionPlanItem(item, isAdmin);
       setNewPlannedQty('');
       setNewJobCardNo('');
       setNewProductCustom('');
@@ -290,30 +512,130 @@ export const ProductionPlanningView: React.FC<ProductionPlanningViewProps> = ({
           </div>
         </div>
 
-        {/* Upload Workbook Box */}
-        <div className="rounded-xl border border-dashed border-sky-500/45 bg-slate-950/90 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="text-xs font-black text-white flex items-center gap-2">
-              <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
-              <span>Upload Workbook (.xlsx / .xls / .csv): Previous Records + Monthly Planning</span>
+        {/* Attached Plan Immutable Lock Status Banner */}
+        {activePlanLockInfo && (
+          <div className="rounded-xl border border-emerald-500/35 bg-emerald-950/20 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-emerald-200">
+              <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
+              <span>
+                <b>Active Plan Locked ({selectedMonth}):</b> Attached by{' '}
+                <b>{activePlanLockInfo.signedBy}</b>
+                {activePlanLockInfo.signedAt
+                  ? ` on ${new Date(activePlanLockInfo.signedAt).toLocaleString()}`
+                  : ''}
+                {activePlanLockInfo.sourceFile ? ` (${activePlanLockInfo.sourceFile})` : ''}.
+              </span>
             </div>
-            <p className="text-[11px] text-slate-400">
-              • <b>Sheet 1</b> attaches previous months&apos; trolley/dispatch movements seamlessly in background. • <b>Sheet 2</b> uploads the target month&apos;s Production Plan (<b className="text-sky-300">{selectedMonth}</b>) to track live dispatch progress &amp; close finished job cards in Red.
-            </p>
+            <span className="text-[11px] font-bold text-amber-300">
+              Cannot be deleted manually — replaced only by attaching next plan with Admin signature
+            </span>
           </div>
+        )}
 
-          <label className="shrink-0 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 px-4 py-2.5 text-xs font-black text-white shadow-lg cursor-pointer transition">
-            <Upload className="h-4 w-4" />
-            <span>{uploading ? 'Importing Sheets...' : 'Upload Excel / CSV'}</span>
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              disabled={uploading}
-              onChange={handleWorkbookUpload}
-              className="hidden"
-            />
-          </label>
-        </div>
+        {/* Admin-Only Upload Workbook Box */}
+        {isAdmin ? (
+          <div className="space-y-3">
+            <div className="rounded-xl border border-dashed border-sky-500/45 bg-slate-950/90 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="text-xs font-black text-white flex items-center gap-2">
+                  <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
+                  <span>
+                    Admin Only: Attach {planRows.length > 0 ? 'Next' : 'Monthly'} Production Planning (.xlsx / .xls / .csv)
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  • <b>Sheet 1</b> attaches previous months&apos; trolley/dispatch movements seamlessly in background. • <b>Sheet 2</b> attaches the target month&apos;s Production Plan (<b className="text-sky-300">{selectedMonth}</b>) via <b>Admin Digital Signature</b> (replacing any previously locked plan for {selectedMonth}).
+                </p>
+              </div>
+
+              <label className="shrink-0 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 px-4 py-2.5 text-xs font-black text-white shadow-lg cursor-pointer transition">
+                <Upload className="h-4 w-4" />
+                <span>
+                  {uploading
+                    ? 'Reading Workbook...'
+                    : planRows.length > 0
+                    ? 'Select Next Plan File'
+                    : 'Upload Excel / CSV'}
+                </span>
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  disabled={uploading}
+                  onChange={handleWorkbookUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            {/* Staged Plan Replacement Verification + Mandatory Admin Signature Pad */}
+            {stagedUpload && (
+              <div className="rounded-xl border border-amber-500/50 bg-slate-950 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+                  <div>
+                    <div className="text-xs font-black text-amber-300">
+                      Confirm &amp; Sign Production Plan Attachment: {stagedUpload.fileName}
+                    </div>
+                    <div className="text-[11px] text-slate-300">
+                      {stagedUpload.planItems.length} planned product(s) for <b>{selectedMonth}</b>
+                      {planRows.length > 0 && (
+                        <span className="text-rose-300 font-bold">
+                          {' '}
+                          · Supersedes {planRows.length} existing locked plan item(s)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStagedUpload(null);
+                      setAdminPlanSig('');
+                    }}
+                    className="rounded-lg border border-slate-700 px-2.5 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-800"
+                  >
+                    Cancel Attachment
+                  </button>
+                </div>
+
+                <AdminPlanSignaturePad
+                  label={`Admin Digital Signature (${currentUserName})`}
+                  value={adminPlanSig}
+                  onChange={setAdminPlanSig}
+                />
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={committingPlan || !adminPlanSig}
+                    onClick={handleCommitSignedPlan}
+                    className="flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-2.5 text-xs font-black text-white shadow transition"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    <span>
+                      {committingPlan
+                        ? 'Signing & Attaching...'
+                        : planRows.length > 0
+                        ? `Sign & Replace Active ${selectedMonth} Plan`
+                        : `Sign & Attach ${selectedMonth} Plan`}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-rose-500/40 bg-rose-950/20 p-4 flex items-center gap-3 text-xs text-rose-200">
+            <Lock className="h-5 w-5 text-rose-400 shrink-0" />
+            <div>
+              <div className="font-black text-white">
+                Production Plan Attachment Restricted (Admin Only)
+              </div>
+              <p className="text-[11px] text-rose-200/90">
+                Only Plant Administrators can attach or replace monthly Production Planning via Admin Digital Signature. You may track live dispatch completion below.
+              </p>
+            </div>
+          </div>
+        )}
 
         {uploadBanner && (
           <div

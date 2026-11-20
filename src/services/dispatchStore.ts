@@ -368,8 +368,10 @@ export function exportDispatchExcelWorkbook(
   entries: DispatchEntry[],
   fromDate: string,
   toDate: string,
-  productionLogs: SopProductionRecord[] = []
+  productionLogs: SopProductionRecord[] = [],
+  isAdmin: boolean = false
 ) {
+  if (!isAdmin) return;
   const filtered = entries
     .filter((e) => e.date >= fromDate && e.date <= toDate)
     .sort((a, b) => (b.date + b.shiftSubmittedAt).localeCompare(a.date + a.shiftSubmittedAt));

@@ -5,10 +5,12 @@ import {
   DieselFuelRequest,
   DispatchEntry,
   DowntimeEntry,
-  normalizeMachineName,
   SopMixingReport,
   SopScrapRecord,
+  SpecialOrderFactoryProduction,
+  SpecialOrderWhDispatch,
   UserPermissions,
+  normalizeMachineName,
 } from '../types';
 
 export interface OsPushNavigationPayload {
@@ -18,6 +20,7 @@ export interface OsPushNavigationPayload {
   targetTab: string;
   dispatchStage?: 'shift' | 'wh' | 'hod' | 'ledger';
   dieselSubTab?: 'request' | 'hod_approve' | 'dispense' | 'grn' | 'ledger';
+  specialOrderSubTab?: 'stock' | 'factory_prod' | 'wh_dispatch' | 'reports';
   openWeightCheck?: boolean;
   urgent?: boolean;
 }
@@ -282,6 +285,8 @@ export interface EvaluatePushInputs {
   sopScrapPipeline: SopScrapRecord[];
   sopMixingReports: SopMixingReport[];
   dieselRequests: DieselFuelRequest[];
+  specialOrderProductions?: SpecialOrderFactoryProduction[];
+  specialOrderWhDispatches?: SpecialOrderWhDispatch[];
   entries: DowntimeEntry[];
   now?: Date;
 }
@@ -304,6 +309,8 @@ export async function evaluateAndDispatchPushNotifications(
     sopScrapPipeline,
     sopMixingReports,
     dieselRequests,
+    specialOrderProductions = [],
+    specialOrderWhDispatches = [],
     entries,
     now = new Date(),
   } = input;
@@ -499,6 +506,50 @@ export async function evaluateAndDispatchPushNotifications(
             e.rep || 'Floor'
           }.`,
           targetTab: 'status',
+          urgent: true,
+        });
+      });
+  }
+
+  // 11. Special Orders Pending HOD Factory Confirm, WH Confirm, or Final HOD Dispatch
+  if (isAdmin || permissions.dispatchHODConfirm) {
+    specialOrderProductions
+      .filter((p) => p.status === 'PENDING_HOD_FACTORY')
+      .forEach((p) => {
+        candidates.push({
+          tag: `PUSH_SO_FAC_${p.id}`,
+          title: `Special Order Factory Stock (${p.orderNo})`,
+          body: `${p.totalQty} units logged by ${p.shiftInChargeName} (${p.date} ${p.shift}) awaiting HOD confirmation.`,
+          targetTab: 'special_orders',
+          specialOrderSubTab: 'factory_prod',
+          urgent: true,
+        });
+      });
+
+    specialOrderWhDispatches
+      .filter((w) => w.status === 'PENDING_HOD')
+      .forEach((w) => {
+        candidates.push({
+          tag: `PUSH_SO_HOD_${w.id}`,
+          title: `Special Order WH Dispatch HOD Approval (${w.dispatchRef})`,
+          body: `${w.totalWhReceivedQty ?? w.totalRecordedQty} units verified by WH — confirm to post to Regular Dispatch.`,
+          targetTab: 'special_orders',
+          specialOrderSubTab: 'wh_dispatch',
+          urgent: true,
+        });
+      });
+  }
+
+  if (isAdmin || permissions.dispatchWHConfirm) {
+    specialOrderWhDispatches
+      .filter((w) => w.status === 'PENDING_WH')
+      .forEach((w) => {
+        candidates.push({
+          tag: `PUSH_SO_WH_${w.id}`,
+          title: `Special Order Ready for WH (${w.orderNo})`,
+          body: `${w.totalRecordedQty} units dispatched from Factory (Trolley #${w.trolleyNo}) awaiting WH verification.`,
+          targetTab: 'special_orders',
+          specialOrderSubTab: 'wh_dispatch',
           urgent: true,
         });
       });

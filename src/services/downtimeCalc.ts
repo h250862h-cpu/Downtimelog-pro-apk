@@ -286,8 +286,10 @@ export function generateExcelWorkbook(
   to: string,
   machines: string[],
   entries: DowntimeEntry[],
-  supervisorName?: string
+  supervisorName?: string,
+  isAdmin: boolean = false
 ) {
+  if (!isAdmin) return;
   const data = getSummaryRows(from, to, machines, entries);
   const wb = XLSX.utils.book_new();
 
@@ -413,8 +415,10 @@ export function generateCSVReport(
   from: string,
   to: string,
   machines: string[],
-  entries: DowntimeEntry[]
+  entries: DowntimeEntry[],
+  isAdmin: boolean = false
 ) {
+  if (!isAdmin) return;
   const data = getSummaryRows(from, to, machines, entries);
   const allRows: (string | number)[][] = [
     ['LG PLAST — Affordable / Durable / Complete'],

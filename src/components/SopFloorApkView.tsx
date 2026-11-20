@@ -1407,13 +1407,16 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
               </div>
               {renderAdminExcelBtn(
                 () =>
-                  exportSopMasterWorkbook({
-                    production: filteredProductionLogs,
-                    qcChecks: filteredQcChecks,
-                    scrapPipeline: filteredScrapPipeline,
-                    mixingReports: filteredMixingReports,
-                    handovers: filteredHandovers,
-                  }),
+                  exportSopMasterWorkbook(
+                    {
+                      production: filteredProductionLogs,
+                      qcChecks: filteredQcChecks,
+                      scrapPipeline: filteredScrapPipeline,
+                      mixingReports: filteredMixingReports,
+                      handovers: filteredHandovers,
+                    },
+                    isAdmin
+                  ),
                 `Download Filtered Master SOP Excel (.xlsx)`
               )}
             </div>
@@ -1962,7 +1965,7 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {renderAdminExcelBtn(
-                    () => exportSopProductionExcel(filteredProductionLogs),
+                    () => exportSopProductionExcel(filteredProductionLogs, isAdmin),
                     `Download Production Excel (${filteredProductionLogs.length})`
                   )}
                   <button
@@ -2355,7 +2358,7 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {renderAdminExcelBtn(
-                    () => exportSopQcExcel(filteredQcChecks),
+                    () => exportSopQcExcel(filteredQcChecks, isAdmin),
                     `Download QC Excel (${filteredQcChecks.length})`
                   )}
                   <button
@@ -2387,20 +2390,23 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                   <table className="w-full text-left text-xs tabular-nums">
                     <thead className="bg-slate-950 text-[10px] font-black uppercase text-slate-400 sticky top-0">
                       <tr>
-                        <th className="p-2.5">Date / Shift</th>
+                        <th className="p-2.5">Date / QC#</th>
                         <th className="p-2.5">Machine</th>
                         <th className="p-2.5">Product</th>
                         <th className="p-2.5">PPH / Kgs</th>
+                        <th className="p-2.5">Weight / Length</th>
+                        <th className="p-2.5">Print / Socket</th>
                         <th className="p-2.5">O/D · I/D</th>
                         <th className="p-2.5">Drop/Bend</th>
                         <th className="p-2.5">Fitting</th>
                         <th className="p-2.5">Colour</th>
+                        <th className="p-2.5">Reported By</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
                       {filteredQcChecks.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="p-6 text-center text-slate-500">
+                          <td colSpan={11} className="p-6 text-center text-slate-500">
                             No QC checks matching filter.
                           </td>
                         </tr>
@@ -2410,13 +2416,20 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                             <td className="p-2.5 whitespace-nowrap">
                               <div className="font-bold text-slate-200">{q.date}</div>
                               <div className="text-[10px] text-slate-400">
-                                {q.shift} {q.time ? `• ${q.time}` : ''}
+                                {q.shift} {q.qcNo ? `• #${q.qcNo}` : ''} {q.time ? `• ${q.time}` : ''}
                               </div>
                             </td>
                             <td className="p-2.5 whitespace-nowrap text-slate-200">{q.machine}</td>
                             <td className="p-2.5 font-semibold text-white">{q.product}</td>
                             <td className="p-2.5 text-slate-300">
                               {q.pph || '-'} / {q.kgsPerHr || '-'}
+                            </td>
+                            <td className="p-2.5 text-slate-300 whitespace-nowrap">
+                              {q.weightKg || '-'} kg {q.weightType ? `(${q.weightType})` : ''}
+                              {q.lengthM ? ` · ${q.lengthM}m` : ''}
+                            </td>
+                            <td className="p-2.5 text-slate-300 whitespace-nowrap">
+                              {q.printing || '-'} / {q.socketSize || '-'}
                             </td>
                             <td className="p-2.5 text-slate-300">
                               {q.od || '-'} / {q.idMm || '-'}
@@ -2446,7 +2459,10 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                                   : 'text-emerald-400'
                               }`}
                             >
-                              {q.color}
+                              {q.color || '-'}
+                            </td>
+                            <td className="p-2.5 text-slate-300 whitespace-nowrap">
+                              {q.reporter || q.loggedBy}
                             </td>
                           </tr>
                         ))
@@ -2683,7 +2699,7 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                 Scrap Handover &amp; Closed-Loop Pipeline ({filteredScrapPipeline.length} matching · {scrapPipeline.length} total)
               </span>
               {renderAdminExcelBtn(
-                () => exportSopScrapExcel(filteredScrapPipeline),
+                () => exportSopScrapExcel(filteredScrapPipeline, isAdmin),
                 `Download Scrap Excel (${filteredScrapPipeline.length})`
               )}
             </div>
@@ -2953,7 +2969,7 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                 Recycling Verification &amp; Usable Output Ledger ({filteredScrapPipeline.length} matching · {scrapPipeline.length} total)
               </span>
               {renderAdminExcelBtn(
-                () => exportSopScrapExcel(filteredScrapPipeline),
+                () => exportSopScrapExcel(filteredScrapPipeline, isAdmin),
                 `Download Recycling Excel (${filteredScrapPipeline.length})`
               )}
             </div>
@@ -3414,7 +3430,7 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                   Mixing Batches &amp; WH Material Balance ({filteredMixingReports.length} matching · {mixingReports.length} total)
                 </span>
                 {renderAdminExcelBtn(
-                  () => exportSopMixingExcel(filteredMixingReports),
+                  () => exportSopMixingExcel(filteredMixingReports, isAdmin),
                   `Download Mixing Excel (${filteredMixingReports.length})`
                 )}
               </div>
@@ -3648,7 +3664,7 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
                 Shift Handover Records ({filteredHandovers.length} matching · {handovers.length} total)
               </span>
               {renderAdminExcelBtn(
-                () => exportSopHandoverExcel(filteredHandovers),
+                () => exportSopHandoverExcel(filteredHandovers, isAdmin),
                 `Download Handover Excel (${filteredHandovers.length})`
               )}
             </div>

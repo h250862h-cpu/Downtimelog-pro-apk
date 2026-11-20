@@ -17,7 +17,7 @@ interface DieselPopupAlertProps {
   permissions: UserPermissions;
   isAdmin: boolean;
   currentUserEmail: string;
-  hasBlockingPopup: boolean;
+  hasBlockingPopup?: boolean;
   dismissedKeys: string[];
   onDismissKey: (key: string) => void;
   onNavigateToDieselTab: (subTab: DieselSubTab) => void;
@@ -28,13 +28,10 @@ export const DieselPopupAlert: React.FC<DieselPopupAlertProps> = ({
   permissions,
   isAdmin,
   currentUserEmail,
-  hasBlockingPopup,
   dismissedKeys,
   onDismissKey,
   onNavigateToDieselTab,
 }) => {
-  if (hasBlockingPopup) return null;
-
   const canApproveHod = isAdmin || Boolean(permissions.dieselHODApprove);
   const canRequestOrDispense = isAdmin || Boolean(permissions.dieselFuelRequest);
 
@@ -80,8 +77,7 @@ export const DieselPopupAlert: React.FC<DieselPopupAlertProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
-      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden">
+    <div className="pointer-events-auto w-full max-w-lg rounded-xl border border-slate-300 bg-white text-slate-900 shadow-2xl ring-1 ring-slate-900/15 overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 bg-[#0F1E36] text-white">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white border border-white/15">
@@ -188,7 +184,6 @@ export const DieselPopupAlert: React.FC<DieselPopupAlertProps> = ({
             </button>
           </div>
         </div>
-      </div>
     </div>
   );
 };
