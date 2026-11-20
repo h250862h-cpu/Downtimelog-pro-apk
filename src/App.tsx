@@ -76,37 +76,25 @@ import {
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import {
-  flushPendingAttendanceBatches,
   getLocalAttendanceBatch,
   subscribeAttendanceBatches,
 } from './services/attendanceStore';
 import {
-  flushPendingDieselData,
   getLocalDieselGrns,
   getLocalDieselRequests,
   getLocalDieselTank,
-  pollDieselGrns,
-  pollDieselRequests,
-  pollDieselTank,
   subscribeDieselGrns,
   subscribeDieselRequests,
   subscribeDieselTank,
 } from './services/dieselStore';
-import {
-  flushPendingDispatches,
-  pollDispatchEntries,
-  subscribeDispatchEntries,
-} from './services/dispatchStore';
+import { subscribeDispatchEntries } from './services/dispatchStore';
 import { dtl, ymd } from './services/downtimeCalc';
 import {
-  flushPendingSyncQueue,
   getActiveMachines,
   getCurrentReporterName,
   getLastSyncError,
-  getPendingSyncQueue,
   getStoredEntries,
   isUserAdmin,
-  pollFirebaseEntries,
   saveStoredEntries,
   setCurrentReporterName,
   subscribeFirebaseEntries,
@@ -114,28 +102,18 @@ import {
   syncEntryToFirebase,
 } from './services/downtimeStore';
 import {
-  flushPendingProductionPlans,
-  flushPendingUploadedBackgroundDispatches,
   getLocalProductionPlans,
   getLocalUploadedBackgroundDispatches,
   mergeAllDispatchesWithBackground,
-  pollProductionPlans,
-  pollUploadedBackgroundDispatches,
   subscribeProductionPlans,
   subscribeUploadedBackgroundDispatches,
 } from './services/productionPlanStore';
 import {
-  flushAllPendingSopData,
   getLocalSopHandovers,
   getLocalSopMixingReports,
   getLocalSopProductionLogs,
   getLocalSopQcChecks,
   getLocalSopScrapRecords,
-  pollSopHandovers,
-  pollSopMixing,
-  pollSopProduction,
-  pollSopQc,
-  pollSopScrap,
   subscribeSopHandovers,
   subscribeSopMixing,
   subscribeSopProduction,
@@ -143,32 +121,27 @@ import {
   subscribeSopScrap,
 } from './services/sopStore';
 import {
-  flushPendingPowerGenData,
   getLocalGeneratorLogs,
   getLocalPowerCutLogs,
-  pollGeneratorLogs,
-  pollPowerCutLogs,
   subscribeGeneratorLogs,
   subscribePowerCutLogs,
 } from './services/powerGenStore';
 import {
-  flushPendingQualityTrials,
   getLocalQualityTrials,
-  pollQualityTrials,
   subscribeQualityTrials,
 } from './services/qualityTrialStore';
 import {
-  flushPendingSpecialOrderData,
   getLocalSpecialOrderProductions,
   getLocalSpecialOrders,
   getLocalSpecialOrderWhDispatches,
-  pollSpecialOrderProductions,
-  pollSpecialOrders,
-  pollSpecialOrderWhDispatches,
   subscribeSpecialOrderProductions,
   subscribeSpecialOrders,
   subscribeSpecialOrderWhDispatches,
 } from './services/specialOrderStore';
+import {
+  getUnifiedPendingQueueBreakdown,
+  runFullCloudSyncNow,
+} from './services/cloudSyncService';
 import {
   ensurePushServiceWorkerRegistration,
   evaluateAndDispatchPushNotifications,
@@ -344,10 +317,12 @@ export default function App() {
   });
   const [prefilledMachine, setPrefilledMachine] = useState<string>('');
 
-  // Firebase Sync Status & Pending Queue
+  // Firebase Sync Status & Pending Queue (Across ALL App Modules)
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('synced');
   const [syncStatusMsg, setSyncStatusMsg] = useState<string>('Sync initialized');
-  const [pendingSyncCount, setPendingSyncCount] = useState<number>(() => getPendingSyncQueue().length);
+  const [pendingSyncCount, setPendingSyncCount] = useState<number>(
+    () => getUnifiedPendingQueueBreakdown().totalPending
+  );
   const [isManualSyncing, setIsManualSyncing] = useState(false);
 
   // Modals
@@ -458,7 +433,7 @@ export default function App() {
   const refreshLocalState = () => {
     setMachines(getActiveMachines());
     setEntries(getStoredEntries());
-    setPendingSyncCount(getPendingSyncQueue().length);
+    setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
     setSyncErrorMsg(getLastSyncError());
   };
 
@@ -510,19 +485,20 @@ export default function App() {
   }, []);
 
   // 2. Real-time Firestore Subscriptions (Entries, Machinery, Plant Users RBAC, Dispatch)
+  const isUserSignedIn = Boolean(user);
   useEffect(() => {
-    if (!user) return;
+    if (!isUserSignedIn) return;
 
     const unsubEntries = subscribeFirebaseEntries(
       (newEntries) => {
         setEntries(newEntries);
-        setPendingSyncCount(getPendingSyncQueue().length);
+        setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
         setSyncErrorMsg(getLastSyncError());
       },
       (status, msg) => {
         setSyncStatus(status);
         if (msg) setSyncStatusMsg(msg);
-        setPendingSyncCount(getPendingSyncQueue().length);
+        setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
         setSyncErrorMsg(status === 'error' ? msg || getLastSyncError() : getLastSyncError());
       }
     );
@@ -593,7 +569,7 @@ export default function App() {
     });
 
     const pendingTimer = setInterval(() => {
-      setPendingSyncCount(getPendingSyncQueue().length);
+      setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
       const err = getLastSyncError();
       setSyncErrorMsg(err);
       if (!err) {
@@ -601,81 +577,40 @@ export default function App() {
       }
     }, 2500);
 
-    // 24/7 Always-Live Keep-Alive Heartbeat & Auto-Recovery (Visibility, Online, Periodic)
+    // 24/7 Always-Live Keep-Alive Heartbeat & Server-First Cross-Device Reconciliation
     const runLiveKeepAlive = async () => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) return;
       try {
-        await ensureFirebaseAuth();
-        await Promise.all([
-          flushPendingSyncQueue().catch(() => 0),
-          flushPendingDispatches().catch(() => 0),
-          flushPendingAttendanceBatches().catch(() => 0),
-          flushAllPendingSopData().catch(() => 0),
-          flushPendingUploadedBackgroundDispatches().catch(() => 0),
-          flushPendingProductionPlans().catch(() => 0),
-          flushPendingDieselData().catch(() => 0),
-          flushPendingPowerGenData().catch(() => 0),
-          flushPendingSpecialOrderData().catch(() => 0),
-          flushPendingQualityTrials().catch(() => 0),
-        ]);
-        const [
-          updated,
-          updatedDispatches,
-          updatedSopProd,
-          updatedSopQc,
-          updatedSopScrap,
-          updatedSopMixing,
-          updatedSopHandovers,
-          updatedHistBg,
-          updatedPlans,
-          updatedTank,
-          updatedDieselReqs,
-          updatedDieselGrns,
-          updatedPowerCuts,
-          updatedGenLogs,
-          updatedSpecialOrders,
-          updatedSpecialOrderProd,
-          updatedSpecialOrderWh,
-          updatedQualityTrials,
-        ] = await Promise.all([
-          pollFirebaseEntries(),
-          pollDispatchEntries().catch(() => null),
-          pollSopProduction().catch(() => null),
-          pollSopQc().catch(() => null),
-          pollSopScrap().catch(() => null),
-          pollSopMixing().catch(() => null),
-          pollSopHandovers().catch(() => null),
-          pollUploadedBackgroundDispatches().catch(() => null),
-          pollProductionPlans().catch(() => null),
-          pollDieselTank().catch(() => null),
-          pollDieselRequests().catch(() => null),
-          pollDieselGrns().catch(() => null),
-          pollPowerCutLogs().catch(() => null),
-          pollGeneratorLogs().catch(() => null),
-          pollSpecialOrders().catch(() => null),
-          pollSpecialOrderProductions().catch(() => null),
-          pollSpecialOrderWhDispatches().catch(() => null),
-          pollQualityTrials().catch(() => null),
-        ]);
-        setEntries(updated);
-        if (updatedDispatches) setDispatchEntries(updatedDispatches);
-        if (updatedSopProd) setSopProductionLogs(updatedSopProd);
-        if (updatedSopQc) setSopQcChecks(updatedSopQc);
-        if (updatedSopScrap) setSopScrapPipeline(updatedSopScrap);
-        if (updatedSopMixing) setSopMixingReports(updatedSopMixing);
-        if (updatedSopHandovers) setSopHandovers(updatedSopHandovers);
-        if (updatedHistBg) setUploadedBackgroundDispatches(updatedHistBg);
-        if (updatedPlans) setMonthlyPlans(updatedPlans);
-        if (updatedTank) setDieselTank(updatedTank);
-        if (updatedDieselReqs) setDieselRequests(updatedDieselReqs);
-        if (updatedDieselGrns) setDieselGrns(updatedDieselGrns);
-        if (updatedPowerCuts) setPowerCutLogs(updatedPowerCuts);
-        if (updatedGenLogs) setGeneratorLogs(updatedGenLogs);
-        if (updatedSpecialOrders) setSpecialOrders(updatedSpecialOrders);
-        if (updatedSpecialOrderProd) setSpecialOrderProductions(updatedSpecialOrderProd);
-        if (updatedSpecialOrderWh) setSpecialOrderWhDispatches(updatedSpecialOrderWh);
-        if (updatedQualityTrials) setQualityTrials(updatedQualityTrials);
-        setPendingSyncCount(getPendingSyncQueue().length);
+        const res = await runFullCloudSyncNow();
+        setEntries(res.data.entries);
+        setMachines(res.data.machines);
+        setDispatchEntries(res.data.dispatches);
+        setSopProductionLogs(res.data.sopProduction);
+        setSopQcChecks(res.data.sopQc);
+        setSopScrapPipeline(res.data.sopScrap);
+        setSopMixingReports(res.data.sopMixing);
+        setSopHandovers(res.data.sopHandovers);
+        setUploadedBackgroundDispatches(res.data.histDispatches);
+        setMonthlyPlans(res.data.plans);
+        setDieselTank(res.data.dieselTank);
+        setDieselRequests(res.data.dieselRequests);
+        setDieselGrns(res.data.dieselGrns);
+        setPowerCutLogs(res.data.powerCutLogs);
+        setGeneratorLogs(res.data.generatorLogs);
+        setSpecialOrders(res.data.specialOrders);
+        setSpecialOrderProductions(res.data.specialOrderProductions);
+        setSpecialOrderWhDispatches(res.data.specialOrderWhDispatches);
+        setQualityTrials(res.data.qualityTrials);
+        setAttendanceBatch(res.data.attendanceBatches);
+        setPlantUsers(res.data.plantUsers);
+        setPendingSyncCount(res.pendingAfter.totalPending);
+        if (res.ok) {
+          setSyncErrorMsg(null);
+          setSyncStatus('synced');
+          setSyncStatusMsg(`Live synced (${res.latencyMs} ms)`);
+        } else if (res.error) {
+          setSyncErrorMsg(res.error);
+        }
         setLastLiveHeartbeat(
           new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         );
@@ -687,13 +622,18 @@ export default function App() {
       } catch {}
     };
 
+    // Immediately pull fresh server updates on login / opening a shared link
+    const initialPullTimer = setTimeout(() => {
+      runLiveKeepAlive();
+    }, 1000);
+
     const handleVisibilityOrOnline = () => {
       if (document.visibilityState === 'visible' || navigator.onLine) {
         runLiveKeepAlive();
       }
     };
 
-    const keepAliveTimer = setInterval(runLiveKeepAlive, 45000);
+    const keepAliveTimer = setInterval(runLiveKeepAlive, 25000);
     document.addEventListener('visibilitychange', handleVisibilityOrOnline);
     window.addEventListener('online', handleVisibilityOrOnline);
     window.addEventListener('focus', handleVisibilityOrOnline);
@@ -720,13 +660,14 @@ export default function App() {
       unsubSpecialOrderProd();
       unsubSpecialOrderWh();
       unsubQualityTrials();
+      clearTimeout(initialPullTimer);
       clearInterval(pendingTimer);
       clearInterval(keepAliveTimer);
       document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
       window.removeEventListener('online', handleVisibilityOrOnline);
       window.removeEventListener('focus', handleVisibilityOrOnline);
     };
-  }, [user?.uid, user?.email]);
+  }, [isUserSignedIn]);
 
   // Screen Wake Lock Manager (Keeps shop-floor tablets/phones awake & live when toggled)
   useEffect(() => {
@@ -1136,11 +1077,11 @@ export default function App() {
     }
     saveStoredEntries(updated);
     setEntries(updated);
-    setPendingSyncCount(getPendingSyncQueue().length);
+    setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
 
     const res = await syncEntryToFirebase(entry);
     setEntries(getStoredEntries());
-    setPendingSyncCount(getPendingSyncQueue().length);
+    setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
     setSyncErrorMsg(res.ok ? null : res.error || getLastSyncError());
   };
 
@@ -1152,11 +1093,11 @@ export default function App() {
     const updated = [...newEntries, ...filtered];
     saveStoredEntries(updated);
     setEntries(updated);
-    setPendingSyncCount(getPendingSyncQueue().length);
+    setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
 
     const results = await Promise.all(newEntries.map((entry) => syncEntryToFirebase(entry)));
     setEntries(getStoredEntries());
-    setPendingSyncCount(getPendingSyncQueue().length);
+    setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
     const failed = results.find((r) => !r.ok);
     setSyncErrorMsg(failed ? failed.error || getLastSyncError() : null);
   };
@@ -1176,11 +1117,11 @@ export default function App() {
     existing.upd = Date.now();
     saveStoredEntries(current);
     setEntries([...current]);
-    setPendingSyncCount(getPendingSyncQueue().length);
+    setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
 
     const res = await syncEntryToFirebase(existing);
     setEntries(getStoredEntries());
-    setPendingSyncCount(getPendingSyncQueue().length);
+    setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
     setSyncErrorMsg(res.ok ? null : res.error || getLastSyncError());
   };
 
@@ -1210,82 +1151,46 @@ export default function App() {
   const handleManualSyncNow = async () => {
     setIsManualSyncing(true);
     try {
-      await Promise.all([
-        flushPendingSyncQueue(),
-        flushPendingDispatches().catch(() => 0),
-        flushPendingAttendanceBatches().catch(() => 0),
-        flushAllPendingSopData().catch(() => 0),
-        flushPendingUploadedBackgroundDispatches().catch(() => 0),
-        flushPendingProductionPlans().catch(() => 0),
-        flushPendingDieselData().catch(() => 0),
-        flushPendingPowerGenData().catch(() => 0),
-        flushPendingSpecialOrderData().catch(() => 0),
-        flushPendingQualityTrials().catch(() => 0),
-      ]);
-      const [
-        updated,
-        updatedDispatches,
-        updatedSopProd,
-        updatedSopQc,
-        updatedSopScrap,
-        updatedSopMixing,
-        updatedSopHandovers,
-        updatedHistBg,
-        updatedPlans,
-        updatedTank,
-        updatedDieselReqs,
-        updatedDieselGrns,
-        updatedPowerCuts,
-        updatedGenLogs,
-        updatedSpecialOrders,
-        updatedSpecialOrderProd,
-        updatedSpecialOrderWh,
-        updatedQualityTrials,
-      ] = await Promise.all([
-        pollFirebaseEntries(),
-        pollDispatchEntries().catch(() => dispatchEntries),
-        pollSopProduction().catch(() => sopProductionLogs),
-        pollSopQc().catch(() => sopQcChecks),
-        pollSopScrap().catch(() => sopScrapPipeline),
-        pollSopMixing().catch(() => sopMixingReports),
-        pollSopHandovers().catch(() => sopHandovers),
-        pollUploadedBackgroundDispatches().catch(() => uploadedBackgroundDispatches),
-        pollProductionPlans().catch(() => monthlyPlans),
-        pollDieselTank().catch(() => dieselTank),
-        pollDieselRequests().catch(() => dieselRequests),
-        pollDieselGrns().catch(() => dieselGrns),
-        pollPowerCutLogs().catch(() => powerCutLogs),
-        pollGeneratorLogs().catch(() => generatorLogs),
-        pollSpecialOrders().catch(() => specialOrders),
-        pollSpecialOrderProductions().catch(() => specialOrderProductions),
-        pollSpecialOrderWhDispatches().catch(() => specialOrderWhDispatches),
-        pollQualityTrials().catch(() => qualityTrials),
-      ]);
-      setEntries(updated);
-      setDispatchEntries(updatedDispatches);
-      setSopProductionLogs(updatedSopProd);
-      setSopQcChecks(updatedSopQc);
-      setSopScrapPipeline(updatedSopScrap);
-      setSopMixingReports(updatedSopMixing);
-      setSopHandovers(updatedSopHandovers);
-      setUploadedBackgroundDispatches(updatedHistBg);
-      setMonthlyPlans(updatedPlans);
-      setDieselTank(updatedTank);
-      setDieselRequests(updatedDieselReqs);
-      setDieselGrns(updatedDieselGrns);
-      setPowerCutLogs(updatedPowerCuts);
-      setGeneratorLogs(updatedGenLogs);
-      setSpecialOrders(updatedSpecialOrders);
-      setSpecialOrderProductions(updatedSpecialOrderProd);
-      setSpecialOrderWhDispatches(updatedSpecialOrderWh);
-      setQualityTrials(updatedQualityTrials);
-      setPendingSyncCount(getPendingSyncQueue().length);
-      const err = getLastSyncError();
-      setSyncErrorMsg(err);
-      if (!err) {
+      const res = await runFullCloudSyncNow();
+      setEntries(res.data.entries);
+      setMachines(res.data.machines);
+      setDispatchEntries(res.data.dispatches);
+      setSopProductionLogs(res.data.sopProduction);
+      setSopQcChecks(res.data.sopQc);
+      setSopScrapPipeline(res.data.sopScrap);
+      setSopMixingReports(res.data.sopMixing);
+      setSopHandovers(res.data.sopHandovers);
+      setUploadedBackgroundDispatches(res.data.histDispatches);
+      setMonthlyPlans(res.data.plans);
+      setDieselTank(res.data.dieselTank);
+      setDieselRequests(res.data.dieselRequests);
+      setDieselGrns(res.data.dieselGrns);
+      setPowerCutLogs(res.data.powerCutLogs);
+      setGeneratorLogs(res.data.generatorLogs);
+      setSpecialOrders(res.data.specialOrders);
+      setSpecialOrderProductions(res.data.specialOrderProductions);
+      setSpecialOrderWhDispatches(res.data.specialOrderWhDispatches);
+      setQualityTrials(res.data.qualityTrials);
+      setAttendanceBatch(res.data.attendanceBatches);
+      setPlantUsers(res.data.plantUsers);
+      setPendingSyncCount(res.pendingAfter.totalPending);
+      setLastLiveHeartbeat(
+        new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      );
+      if (res.ok) {
+        setSyncErrorMsg(null);
         setSyncStatus('synced');
-        setSyncStatusMsg(`Live synced with Firebase (${updated.length} records)`);
+        setSyncStatusMsg(
+          `Cloud server verified (${res.latencyMs} ms · ${res.counts.downtime} downtime, ${res.counts.dispatch} dispatch, ${res.counts.specialOrderProd + res.counts.specialOrderWh} special order)`
+        );
+      } else {
+        setSyncErrorMsg(res.error || 'Sync verification warning');
+        setSyncStatus('error');
+        setSyncStatusMsg(res.error || 'Cloud server verification failed');
       }
+    } catch (e: any) {
+      setSyncErrorMsg(e?.message || 'Sync error');
+      setSyncStatus('error');
     } finally {
       setIsManualSyncing(false);
     }
@@ -2162,8 +2067,10 @@ export default function App() {
                       isOnline={isOnline}
                       syncStatus={syncStatus}
                       syncStatusMessage={syncStatusMsg}
+                      totalPendingCount={pendingSyncCount}
                       onReporterChange={handleReporterChange}
                       onRefreshData={refreshLocalState}
+                      onFullCloudSync={handleManualSyncNow}
                       onOpenAuthModal={() => setIsAuthModalOpen(true)}
                       onOpenInstallModal={() => setIsInstallModalOpen(true)}
                     />

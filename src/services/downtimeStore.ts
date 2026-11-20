@@ -1,18 +1,21 @@
 import {
   collection,
   doc,
-  getDocs,
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
 import {
   auth,
   db,
+  deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getActiveSessionUser,
+  getCollectionDocsServerFirst,
+  getDocServerFirst,
   handleFirestoreError,
   isRestrictedShiftInChargeAccount,
   OperationType,
+  reconnectFirestoreNetwork,
 } from '../firebase';
 import {
   DEFAULT_MACHINES,
@@ -306,6 +309,26 @@ export async function syncMachineryConfigToFirebase() {
   }
 }
 
+export async function pollMachineryConfig(): Promise<string[]> {
+  try {
+    await ensureFirebaseAuth().catch(() => false);
+    const configDoc = doc(db, 'app_config', 'machinery');
+    const snapshot = await getDocServerFirst(configDoc);
+    if (snapshot.exists()) {
+      const data = snapshot.data();
+      if (Array.isArray(data.customMachines)) {
+        setStoredCustomMachines(data.customMachines);
+      }
+      if (Array.isArray(data.goneMachines)) {
+        setStoredGoneMachines(data.goneMachines);
+      }
+    }
+  } catch (err: any) {
+    console.warn('Machinery poll note:', err?.message || err);
+  }
+  return getActiveMachines();
+}
+
 /**
  * Listen for real-time machinery config updates from Firestore
  */
@@ -313,6 +336,7 @@ export function subscribeMachineryConfig(onUpdate: (machines: string[]) => void)
   const configDoc = doc(db, 'app_config', 'machinery');
   return onSnapshot(
     configDoc,
+    { includeMetadataChanges: true },
     (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
@@ -528,14 +552,7 @@ export function getLastSyncError(): string | null {
 }
 
 export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): Record<string, any> {
-  const clean: Record<string, any> = {};
-  Object.keys(obj).forEach((key) => {
-    const val = obj[key];
-    if (val === undefined) return;
-    if (typeof val === 'number' && Number.isNaN(val)) return;
-    clean[key] = val;
-  });
-  return clean;
+  return deepSanitizeForFirestore(obj);
 }
 
 export function getPendingSyncQueue(): string[] {
@@ -653,7 +670,7 @@ export async function pollFirebaseEntries(
     await ensureFirebaseAuth().catch(() => false);
 
     const colRef = collection(db, 'downtime_entries');
-    const snapshot = await getDocs(colRef);
+    const snapshot = await getCollectionDocsServerFirst(colRef);
     lastSyncError = null;
     if (!snapshot.empty) {
       const remoteMap: Record<string, DowntimeEntry> = {};
@@ -671,8 +688,10 @@ export async function pollFirebaseEntries(
         }
         if (!mergedMap[e.id]) {
           mergedMap[e.id] = e;
+          addToPendingSyncQueue(e.id);
         } else if ((e.upd || 0) > (mergedMap[e.id].upd || 0)) {
           mergedMap[e.id] = e;
+          addToPendingSyncQueue(e.id);
         }
       });
 
@@ -714,18 +733,19 @@ export function subscribeFirebaseEntries(
   const startLiveSync = async () => {
     if (cancelled || listenerActive) return;
     listenerActive = true;
-    onSyncStatus('syncing', 'Connecting to Firebase Firestore real-time sync...');
-    await ensureFirebaseAuth().catch(() => false);
-    if (cancelled) {
-      listenerActive = false;
-      return;
-    }
-
-    flushPendingSyncQueue().catch(() => {});
-
+    onSyncStatus('syncing', 'Connecting to Firebase Firestore server...');
     try {
+      await ensureFirebaseAuth().catch(() => false);
+      if (cancelled) {
+        listenerActive = false;
+        return;
+      }
+
+      flushPendingSyncQueue().catch(() => {});
+
       unsubscribe = onSnapshot(
         colRef,
+        { includeMetadataChanges: true },
         (snapshot) => {
           lastSyncError = null;
           const remoteMap: Record<string, DowntimeEntry> = {};
@@ -760,7 +780,11 @@ export function subscribeFirebaseEntries(
           const mergedList = Object.values(mergedMap).sort((a, b) => (b.upd || 0) - (a.upd || 0));
           saveStoredEntries(mergedList);
           onUpdate(mergedList);
-          onSyncStatus('synced', `Live synced with Firebase (${snapshot.size} records across plant)`);
+          if (snapshot.metadata.fromCache) {
+            onSyncStatus('syncing', `Loaded local cache (${snapshot.size}); reaching Firestore server...`);
+          } else {
+            onSyncStatus('synced', `Live synced with Firestore server (${snapshot.size} records)`);
+          }
         },
         (error) => {
           listenerActive = false;
@@ -770,7 +794,7 @@ export function subscribeFirebaseEntries(
           onSyncStatus(
             error.code === 'permission-denied' ? 'error' : 'offline',
             error.code === 'permission-denied'
-              ? 'Firestore Rules in downtime-log-d484f are blocking access — Publish open rules in Firebase Console.'
+              ? 'Firestore Rules in downtime-log-d484f are blocking access — Publish rules in Firebase Console.'
               : 'Working locally / offline. Updates queued for auto-sync.'
           );
         }
@@ -788,7 +812,7 @@ export function subscribeFirebaseEntries(
 
   const flushInterval = setInterval(() => {
     flushPendingSyncQueue().catch(() => {});
-  }, 4000);
+  }, 5000);
 
   const pollInterval = setInterval(() => {
     pollFirebaseEntries(onUpdate)
@@ -801,7 +825,8 @@ export function subscribeFirebaseEntries(
   }, 12000);
 
   const handleOnline = () => {
-    onSyncStatus('syncing', 'Network reconnected. Auto-flushing entries to Firebase...');
+    onSyncStatus('syncing', 'Network reconnected. Reconnecting to Firestore server...');
+    reconnectFirestoreNetwork().catch(() => {});
     flushPendingSyncQueue().catch(() => {});
     pollFirebaseEntries(onUpdate).catch(() => {});
     if (!listenerActive) {

@@ -1,6 +1,11 @@
-import { collection, doc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
-import { db, ensureFirebaseAuth } from '../firebase';
+import {
+  db,
+  deepSanitizeForFirestore,
+  ensureFirebaseAuth,
+  getCollectionDocsServerFirst,
+} from '../firebase';
 import { DowntimeEntry, GeneratorLog, PowerCutLog } from '../types';
 import { dtl, fmtT, r2, saveFileBlob, toTimestamp } from './downtimeCalc';
 import { getStoredEntries, saveStoredEntries, syncEntryToFirebase } from './downtimeStore';
@@ -91,14 +96,7 @@ function removeFromQueue(key: string, id: string) {
 }
 
 function sanitizeObj<T extends Record<string, any>>(obj: T): Record<string, any> {
-  const clean: Record<string, any> = {};
-  Object.keys(obj).forEach((k) => {
-    const v = obj[k];
-    if (v !== undefined && !(typeof v === 'number' && Number.isNaN(v))) {
-      clean[k] = v;
-    }
-  });
-  return clean;
+  return deepSanitizeForFirestore(obj);
 }
 
 function mergeById<T extends { id: string; upd?: number }>(local: T[], remote: T[]): T[] {
@@ -124,7 +122,8 @@ export function getLocalPowerCutLogs(): PowerCutLog[] {
 }
 
 export async function savePowerCutLog(
-  log: PowerCutLog
+  log: PowerCutLog,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; saved: PowerCutLog; error?: string }> {
   const nowIso = new Date().toISOString();
   const durationMinutes = log.timeBack
@@ -134,8 +133,8 @@ export async function savePowerCutLog(
     ...log,
     durationMinutes,
     status: log.timeBack ? 'RESTORED' : 'ONGOING',
-    updatedAt: nowIso,
-    upd: Date.now(),
+    updatedAt: options?.preserveUpd && log.updatedAt ? log.updatedAt : nowIso,
+    upd: options?.preserveUpd && log.upd ? log.upd : Date.now(),
   };
 
   const merged = mergeById(getLocalPowerCutLogs(), [saved]);
@@ -187,7 +186,7 @@ export async function closePowerCutLog(params: {
 export async function pollPowerCutLogs(): Promise<PowerCutLog[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, POWER_CUT_COLLECTION));
+    const snap = await getCollectionDocsServerFirst(collection(db, POWER_CUT_COLLECTION));
     const remote: PowerCutLog[] = [];
     snap.forEach((d) => remote.push(d.data() as PowerCutLog));
     const merged = mergeById(getLocalPowerCutLogs(), remote);
@@ -209,12 +208,16 @@ export function subscribePowerCutLogs(onUpdate: (logs: PowerCutLog[]) => void) {
     try {
       unsub = onSnapshot(
         collection(db, POWER_CUT_COLLECTION),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: PowerCutLog[] = [];
           snap.forEach((d) => remote.push(d.data() as PowerCutLog));
           const merged = mergeById(getLocalPowerCutLogs(), remote);
           writeList(POWER_CUT_KEY, merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingPowerGenData().catch(() => {});
+          }
         },
         () => {}
       );
@@ -236,7 +239,8 @@ export function getLocalGeneratorLogs(): GeneratorLog[] {
 }
 
 export async function saveGeneratorLog(
-  log: GeneratorLog
+  log: GeneratorLog,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; saved: GeneratorLog; error?: string }> {
   const stopLitresValid =
     typeof log.stopFuelLitres === 'number' && !Number.isNaN(log.stopFuelLitres);
@@ -253,8 +257,8 @@ export async function saveGeneratorLog(
     fuelUsedLitres,
     durationMinutes,
     status: log.stopTime ? 'STOPPED' : 'RUNNING',
-    updatedAt: new Date().toISOString(),
-    upd: Date.now(),
+    updatedAt: options?.preserveUpd && log.updatedAt ? log.updatedAt : new Date().toISOString(),
+    upd: options?.preserveUpd && log.upd ? log.upd : Date.now(),
   };
 
   const merged = mergeById(getLocalGeneratorLogs(), [saved]);
@@ -492,7 +496,7 @@ export async function syncMachineFormToGeneratorLog(entry: DowntimeEntry): Promi
 export async function pollGeneratorLogs(): Promise<GeneratorLog[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, GENERATOR_LOG_COLLECTION));
+    const snap = await getCollectionDocsServerFirst(collection(db, GENERATOR_LOG_COLLECTION));
     const remote: GeneratorLog[] = [];
     snap.forEach((d) => remote.push(d.data() as GeneratorLog));
     const merged = mergeById(getLocalGeneratorLogs(), remote);
@@ -514,12 +518,16 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
     try {
       unsub = onSnapshot(
         collection(db, GENERATOR_LOG_COLLECTION),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: GeneratorLog[] = [];
           snap.forEach((d) => remote.push(d.data() as GeneratorLog));
           const merged = mergeById(getLocalGeneratorLogs(), remote);
           writeList(GENERATOR_LOG_KEY, merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingPowerGenData().catch(() => {});
+          }
         },
         () => {}
       );
@@ -531,6 +539,10 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
     cancelled = true;
     unsub();
   };
+}
+
+export function getPendingPowerGenCount(): number {
+  return readQueue(POWER_CUT_PENDING_KEY).length + readQueue(GENERATOR_LOG_PENDING_KEY).length;
 }
 
 export async function flushPendingPowerGenData(): Promise<number> {

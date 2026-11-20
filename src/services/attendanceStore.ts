@@ -5,7 +5,12 @@ import {
   setDoc,
 } from 'firebase/firestore';
 import historicalAttendanceRaw from '../data/historicalAttendance.json';
-import { db, ensureFirebaseAuth } from '../firebase';
+import {
+  db,
+  deepSanitizeForFirestore,
+  ensureFirebaseAuth,
+  getCollectionDocsServerFirst,
+} from '../firebase';
 import { normalizeMachineName } from '../types';
 import { AttendancePerson, ParsedAttendanceMessage, QCInspectionRecord } from '../types/attendance';
 
@@ -124,7 +129,7 @@ function sanitizeAttendanceForFirestore(item: ParsedAttendanceMessage): Record<s
   if (item.loggedByEmail) payload.loggedByEmail = item.loggedByEmail;
   if (item.claimed) payload.claimed = item.claimed;
   if (item.rawText) payload.rawText = item.rawText;
-  return payload;
+  return deepSanitizeForFirestore(payload);
 }
 
 function getPendingAttendanceQueue(): ParsedAttendanceMessage[] {
@@ -255,6 +260,27 @@ export function saveLocalAttendanceBatch(batch: ParsedAttendanceMessage[]) {
   }
 }
 
+export async function pollAttendanceBatches(): Promise<ParsedAttendanceMessage[]> {
+  try {
+    await ensureFirebaseAuth().catch(() => false);
+    const snapshot = await getCollectionDocsServerFirst(collection(db, 'attendance_batches'));
+    const remoteList: ParsedAttendanceMessage[] = [];
+    snapshot.forEach((snap) => {
+      const data = snap.data() as ParsedAttendanceMessage;
+      if (snap.id !== 'ATT-SAMPLE-01' && data?.date) {
+        remoteList.push({ ...data, id: snap.id, isHistorical: false });
+      }
+    });
+    const localCustom = getCustomLocalAttendanceBatches();
+    const pending = getPendingAttendanceQueue();
+    const merged = mergeAttendanceBatches([...localCustom, ...remoteList, ...pending]);
+    saveLocalAttendanceBatch(merged);
+    return merged;
+  } catch {
+    return getLocalAttendanceBatch();
+  }
+}
+
 export function subscribeAttendanceBatches(
   onUpdate: (batch: ParsedAttendanceMessage[]) => void
 ) {
@@ -270,6 +296,7 @@ export function subscribeAttendanceBatches(
     const colRef = collection(db, 'attendance_batches');
     unsub = onSnapshot(
       colRef,
+      { includeMetadataChanges: true },
       (snapshot) => {
         const remoteList: ParsedAttendanceMessage[] = [];
         snapshot.forEach((snap) => {
@@ -286,6 +313,10 @@ export function subscribeAttendanceBatches(
         const merged = mergeAttendanceBatches([...localCustom, ...remoteList, ...pending]);
         saveLocalAttendanceBatch(merged);
         onUpdate(merged);
+
+        if (!snapshot.metadata.fromCache) {
+          flushPendingAttendanceBatches().catch(() => {});
+        }
       },
       (err) => {
         console.warn('Attendance firestore listener notice:', err.message);
@@ -330,6 +361,10 @@ export async function flushPendingAttendanceBatches(): Promise<number> {
   return flushed;
 }
 
+export function getPendingAttendanceCount(): number {
+  return getPendingAttendanceQueue().length + getPendingQCLogsCount();
+}
+
 export async function deleteAttendanceBatchFromFirebase(_id: string) {
   console.warn('Protected record: deleting posted attendance batches is disabled.');
 }
@@ -371,7 +406,7 @@ export function getAttendanceHistorySummary(batch: ParsedAttendanceMessage[]) {
 export const INITIAL_QC_LOGS: QCInspectionRecord[] = [
   {
     id: 'QC-001',
-    date: new Date().toISOString().slice(0, 10),
+    date: '2026-11-01',
     shift: 'Day',
     machineOrLine: 'Extrusion Machine 2',
     product: '50mm Conduit Pipe PVC',
@@ -382,11 +417,11 @@ export const INITIAL_QC_LOGS: QCInspectionRecord[] = [
     status: 'Passed',
     inspector: 'INNOCENT MAVIYANI',
     notes: 'Sample cut taken every 30 mins. Temperature adjusted on Zone 4.',
-    createdAt: Date.now() - 3600000,
+    createdAt: 1730446200000,
   },
   {
     id: 'QC-002',
-    date: new Date().toISOString().slice(0, 10),
+    date: '2026-11-01',
     shift: 'Day',
     machineOrLine: 'IM 3',
     product: 'Electrical Junction Box 4x4',
@@ -397,11 +432,11 @@ export const INITIAL_QC_LOGS: QCInspectionRecord[] = [
     status: 'Passed',
     inspector: 'TRUST GWEME',
     notes: 'Clean mould release, correct weight 145g.',
-    createdAt: Date.now() - 1800000,
+    createdAt: 1730448000000,
   },
   {
     id: 'QC-003',
-    date: new Date().toISOString().slice(0, 10),
+    date: '2026-11-01',
     shift: 'Night',
     machineOrLine: 'Gumboot Machine',
     product: 'Size 8 Safety Gumboot',
@@ -412,7 +447,7 @@ export const INITIAL_QC_LOGS: QCInspectionRecord[] = [
     status: 'Hold',
     inspector: 'SIMBARASHE CHAUNOITA',
     notes: 'Notified shift in charge. Raw material batch dried before resuming.',
-    createdAt: Date.now() - 7200000,
+    createdAt: 1730442600000,
   },
 ];
 
@@ -457,11 +492,16 @@ export async function flushPendingQCLogs(): Promise<{ success: number; failed: n
   const pending = logs.filter((l) => l.synced === false);
   let success = 0;
   let failed = 0;
+  if (!pending.length) return { success, failed };
+
+  try {
+    await ensureFirebaseAuth();
+  } catch {}
 
   for (const item of pending) {
     try {
       const docRef = doc(db, 'qc_inspections', item.id);
-      await setDoc(docRef, { ...item, synced: true }, { merge: true });
+      await setDoc(docRef, deepSanitizeForFirestore({ ...item, synced: true }), { merge: true });
       item.synced = true;
       success++;
     } catch {
@@ -473,53 +513,101 @@ export async function flushPendingQCLogs(): Promise<{ success: number; failed: n
   return { success, failed };
 }
 
+export async function pollQCLogs(): Promise<QCInspectionRecord[]> {
+  try {
+    await ensureFirebaseAuth().catch(() => false);
+    const snapshot = await getCollectionDocsServerFirst(collection(db, 'qc_inspections'));
+    if (!snapshot.empty) {
+      const remoteMap: Record<string, QCInspectionRecord> = {};
+      snapshot.forEach((snap) => {
+        remoteMap[snap.id] = normalizeQcInspectionRecord({
+          ...(snap.data() as QCInspectionRecord),
+          id: snap.id,
+          synced: true,
+        });
+      });
+
+      const currentLocal = getLocalQCLogs();
+      const merged: QCInspectionRecord[] = [];
+      currentLocal.forEach((l) => {
+        if (l.synced === false && !remoteMap[l.id]) {
+          merged.push(l);
+        }
+      });
+      Object.values(remoteMap).forEach((rem) => merged.push(rem));
+      merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      saveLocalQCLogs(merged);
+      return merged;
+    }
+  } catch {}
+  return getLocalQCLogs();
+}
+
 export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) {
   onUpdate(getLocalQCLogs());
+  let unsub: (() => void) | null = null;
+  let cancelled = false;
 
-  const colRef = collection(db, 'qc_inspections');
-  return onSnapshot(
-    colRef,
-    (snapshot) => {
-      if (!snapshot.empty) {
-        const remoteMap: Record<string, QCInspectionRecord> = {};
-        snapshot.forEach((snap) => {
-          remoteMap[snap.id] = normalizeQcInspectionRecord({
-            ...(snap.data() as QCInspectionRecord),
-            id: snap.id,
-            synced: true,
+  const start = async () => {
+    await ensureFirebaseAuth().catch(() => false);
+    if (cancelled) return;
+    const colRef = collection(db, 'qc_inspections');
+    unsub = onSnapshot(
+      colRef,
+      { includeMetadataChanges: true },
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const remoteMap: Record<string, QCInspectionRecord> = {};
+          snapshot.forEach((snap) => {
+            remoteMap[snap.id] = normalizeQcInspectionRecord({
+              ...(snap.data() as QCInspectionRecord),
+              id: snap.id,
+              synced: true,
+            });
           });
-        });
 
-        const currentLocal = getLocalQCLogs();
-        const merged: QCInspectionRecord[] = [];
+          const currentLocal = getLocalQCLogs();
+          const merged: QCInspectionRecord[] = [];
 
-        // Keep local pending items that haven't reached remote yet
-        currentLocal.forEach((l) => {
-          if (l.synced === false && !remoteMap[l.id]) {
-            merged.push(l);
-          }
-        });
+          // Keep local pending items that haven't reached remote yet
+          currentLocal.forEach((l) => {
+            if (l.synced === false && !remoteMap[l.id]) {
+              merged.push(l);
+            }
+          });
 
-        Object.values(remoteMap).forEach((rem) => {
-          merged.push(rem);
-        });
+          Object.values(remoteMap).forEach((rem) => {
+            merged.push(rem);
+          });
 
-        merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-        saveLocalQCLogs(merged);
-        onUpdate(merged);
+          merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          saveLocalQCLogs(merged);
+          onUpdate(merged);
+        }
+        if (!snapshot.metadata.fromCache) {
+          flushPendingQCLogs().catch(() => {});
+        }
+      },
+      (err) => {
+        console.warn('QC firestore listener notice:', err.message);
       }
-    },
-    (err) => {
-      console.warn('QC firestore listener notice:', err.message);
-    }
-  );
+    );
+  };
+
+  start();
+
+  return () => {
+    cancelled = true;
+    if (unsub) unsub();
+  };
 }
 
 export async function syncQCLogToFirebase(rawItem: QCInspectionRecord): Promise<boolean> {
   const item = normalizeQcInspectionRecord(rawItem);
   const docRef = doc(db, 'qc_inspections', item.id);
   try {
-    await setDoc(docRef, { ...item, synced: true }, { merge: true });
+    await ensureFirebaseAuth();
+    await setDoc(docRef, deepSanitizeForFirestore({ ...item, synced: true }), { merge: true });
     item.synced = true;
     const current = getLocalQCLogs();
     const idx = current.findIndex((l) => l.id === item.id);

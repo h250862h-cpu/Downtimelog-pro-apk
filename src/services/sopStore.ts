@@ -1,13 +1,12 @@
 import {
   collection,
   doc,
-  getDocs,
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { QC_CSV_SEED_VERSION, SEEDED_QC_RECORDS } from '../data/qcCsvSeed';
-import { db, ensureFirebaseAuth } from '../firebase';
+import { db, deepSanitizeForFirestore, ensureFirebaseAuth, getCollectionDocsServerFirst } from '../firebase';
 import {
   DispatchEntry,
   normalizeMachineName,
@@ -93,14 +92,7 @@ function removePendingId(key: string, id: string) {
 }
 
 function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
-  const clean: Record<string, any> = {};
-  Object.keys(obj).forEach((k) => {
-    const val = obj[k];
-    if (val !== undefined && !(typeof val === 'number' && Number.isNaN(val))) {
-      clean[k] = val;
-    }
-  });
-  return clean as T;
+  return deepSanitizeForFirestore(obj);
 }
 
 function mergeRecords<T extends { id: string; upd?: number }>(
@@ -133,10 +125,13 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
   const norm = (item: T): T => (normalizeFn ? normalizeFn(item) : item);
   const getLocal = () => readLocalList<T>(storageKey).map(norm);
 
-  const save = async (item: T): Promise<{ ok: boolean; error?: string }> => {
+  const save = async (
+    item: T,
+    options?: { preserveUpd?: boolean }
+  ): Promise<{ ok: boolean; error?: string }> => {
     const updatedItem: T = norm({
       ...item,
-      upd: Date.now(),
+      upd: options?.preserveUpd && item.upd ? item.upd : Date.now(),
     });
 
     const local = getLocal();
@@ -177,7 +172,7 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
     for (const id of pendingIds) {
       const found = local.find((x) => x.id === id);
       if (found) {
-        const res = await save(found);
+        const res = await save(found, { preserveUpd: true });
         if (res.ok) count++;
       } else {
         removePendingId(pendingKey, id);
@@ -189,7 +184,7 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
   const poll = async (): Promise<T[]> => {
     try {
       await ensureFirebaseAuth();
-      const snap = await getDocs(collection(db, collectionName));
+      const snap = await getCollectionDocsServerFirst(collection(db, collectionName));
       const remote: T[] = [];
       snap.forEach((d) => {
         remote.push(norm(d.data() as T));
@@ -214,6 +209,7 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
       try {
         unsub = onSnapshot(
           collection(db, collectionName),
+          { includeMetadataChanges: true },
           (snapshot) => {
             const remote: T[] = [];
             snapshot.forEach((d) => {
@@ -222,7 +218,9 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
             const merged = mergeRecords(getLocal(), remote, normalizeFn);
             writeLocalList(storageKey, merged);
             onUpdate(merged);
-            flush().catch(() => {});
+            if (!snapshot.metadata.fromCache) {
+              flush().catch(() => {});
+            }
           },
           (err) => {
             console.warn(`${collectionName} listener fallback:`, err.message);
@@ -336,14 +334,25 @@ export const flushPendingSopHandovers = handoverStore.flush;
 export const pollSopHandovers = handoverStore.poll;
 export const subscribeSopHandovers = handoverStore.subscribe;
 
-export async function flushAllPendingSopData(): Promise<void> {
-  await Promise.all([
+export function getTotalPendingSopCount(): number {
+  return (
+    readPendingQueue(PROD_PENDING_KEY).length +
+    readPendingQueue(QC_PENDING_KEY).length +
+    readPendingQueue(SCRAP_PENDING_KEY).length +
+    readPendingQueue(MIXING_PENDING_KEY).length +
+    readPendingQueue(HANDOVER_PENDING_KEY).length
+  );
+}
+
+export async function flushAllPendingSopData(): Promise<number> {
+  const counts = await Promise.all([
     flushPendingSopProduction().catch(() => 0),
     flushPendingSopQc().catch(() => 0),
     flushPendingSopScrap().catch(() => 0),
     flushPendingSopMixing().catch(() => 0),
     flushPendingSopHandovers().catch(() => 0),
   ]);
+  return counts.reduce((a, b) => a + b, 0);
 }
 
 // ======================================================

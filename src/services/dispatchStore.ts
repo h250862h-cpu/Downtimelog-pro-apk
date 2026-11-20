@@ -1,12 +1,11 @@
 import {
   collection,
   doc,
-  getDocs,
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
-import { db, ensureFirebaseAuth } from '../firebase';
+import { db, deepSanitizeForFirestore, ensureFirebaseAuth, getCollectionDocsServerFirst } from '../firebase';
 import { DispatchEntry, normalizeMachineName, SopProductionRecord } from '../types';
 import { FACTORY_STAFF_ROSTER } from '../types/factoryStaff';
 import { saveFileBlob, ymd } from './downtimeCalc';
@@ -189,14 +188,7 @@ function removePendingDispatchId(id: string) {
 }
 
 function sanitizeDispatchForFirestore<T extends Record<string, any>>(obj: T): T {
-  const clean: Record<string, any> = {};
-  Object.keys(obj).forEach((k) => {
-    const val = obj[k];
-    if (val !== undefined && !Number.isNaN(val)) {
-      clean[k] = val;
-    }
-  });
-  return clean as T;
+  return deepSanitizeForFirestore(obj);
 }
 
 function mergeDispatches(local: DispatchEntry[], remote: DispatchEntry[]): DispatchEntry[] {
@@ -216,12 +208,13 @@ function mergeDispatches(local: DispatchEntry[], remote: DispatchEntry[]): Dispa
 }
 
 export async function saveDispatchEntryToFirebase(
-  entry: DispatchEntry
+  entry: DispatchEntry,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
   const normEntry = normalizeDispatchEntry(entry);
   const updatedEntry: DispatchEntry = {
     ...normEntry,
-    upd: Date.now(),
+    upd: options?.preserveUpd && normEntry.upd ? normEntry.upd : Date.now(),
   };
 
   // Persist locally immediately
@@ -271,7 +264,7 @@ export async function flushPendingDispatches(): Promise<number> {
   for (const id of pendingIds) {
     const found = local.find((e) => e.id === id);
     if (found) {
-      const res = await saveDispatchEntryToFirebase(found);
+      const res = await saveDispatchEntryToFirebase(found, { preserveUpd: true });
       if (res.ok) flushed++;
     } else {
       removePendingDispatchId(id);
@@ -283,7 +276,7 @@ export async function flushPendingDispatches(): Promise<number> {
 export async function pollDispatchEntries(): Promise<DispatchEntry[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, DISPATCH_COLLECTION));
+    const snap = await getCollectionDocsServerFirst(collection(db, DISPATCH_COLLECTION));
     const remote: DispatchEntry[] = [];
     snap.forEach((d) => {
       remote.push(d.data() as DispatchEntry);
@@ -316,6 +309,7 @@ export function subscribeDispatchEntries(
       const colRef = collection(db, DISPATCH_COLLECTION);
       unsub = onSnapshot(
         colRef,
+        { includeMetadataChanges: true },
         (snapshot) => {
           const remote: DispatchEntry[] = [];
           snapshot.forEach((d) => {
@@ -326,7 +320,9 @@ export function subscribeDispatchEntries(
           lastDispatchSyncError = null;
           onSyncError?.(null);
           onUpdate(merged);
-          flushPendingDispatches().catch(() => {});
+          if (!snapshot.metadata.fromCache) {
+            flushPendingDispatches().catch(() => {});
+          }
         },
         (err) => {
           console.warn('Dispatch Firestore listener warning:', err.message);

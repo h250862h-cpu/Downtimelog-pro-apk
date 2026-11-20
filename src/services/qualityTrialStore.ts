@@ -1,12 +1,16 @@
 import {
   collection,
   doc,
-  getDocs,
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
-import { db, ensureFirebaseAuth } from '../firebase';
+import {
+  db,
+  deepSanitizeForFirestore,
+  ensureFirebaseAuth,
+  getCollectionDocsServerFirst,
+} from '../firebase';
 import { QualityTrialReport, normalizeMachineName } from '../types';
 import { saveFileBlob, ymd } from './downtimeCalc';
 
@@ -15,22 +19,7 @@ const TRIAL_PENDING_KEY = 'lgplast_quality_trials_pending_v1';
 const TRIAL_COLLECTION = 'quality_trial_reports';
 
 function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
-  const clean: Record<string, any> = {};
-  Object.keys(obj).forEach((k) => {
-    const val = obj[k];
-    if (val !== undefined && !Number.isNaN(val)) {
-      if (Array.isArray(val)) {
-        clean[k] = val.map((item) =>
-          item && typeof item === 'object' ? sanitizeForFirestore(item) : item
-        );
-      } else if (val && typeof val === 'object' && !(val instanceof Date)) {
-        clean[k] = sanitizeForFirestore(val);
-      } else {
-        clean[k] = val;
-      }
-    }
-  });
-  return clean as T;
+  return deepSanitizeForFirestore(obj);
 }
 
 function readLocalTrials(): QualityTrialReport[] {
@@ -97,12 +86,13 @@ export function getLocalQualityTrials(): QualityTrialReport[] {
 }
 
 export async function saveQualityTrialToFirebase(
-  trial: QualityTrialReport
+  trial: QualityTrialReport,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
   const updated: QualityTrialReport = {
     ...trial,
     machine: normalizeMachineName(trial.machine),
-    upd: Date.now(),
+    upd: options?.preserveUpd && trial.upd ? trial.upd : Date.now(),
   };
 
   const mergedLocal = mergeTrials(readLocalTrials(), [updated]);
@@ -120,6 +110,10 @@ export async function saveQualityTrialToFirebase(
   }
 }
 
+export function getPendingQualityTrialsCount(): number {
+  return getPendingIds().length;
+}
+
 export async function flushPendingQualityTrials(): Promise<number> {
   const ids = getPendingIds();
   if (!ids.length) return 0;
@@ -128,7 +122,7 @@ export async function flushPendingQualityTrials(): Promise<number> {
   for (const id of ids) {
     const found = local.find((t) => t.id === id);
     if (found) {
-      const r = await saveQualityTrialToFirebase(found);
+      const r = await saveQualityTrialToFirebase(found, { preserveUpd: true });
       if (r.ok) flushed++;
     } else {
       removePendingId(id);
@@ -140,7 +134,7 @@ export async function flushPendingQualityTrials(): Promise<number> {
 export async function pollQualityTrials(): Promise<QualityTrialReport[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, TRIAL_COLLECTION));
+    const snap = await getCollectionDocsServerFirst(collection(db, TRIAL_COLLECTION));
     const remote: QualityTrialReport[] = [];
     snap.forEach((d) => remote.push(d.data() as QualityTrialReport));
     const merged = mergeTrials(readLocalTrials(), remote);
@@ -163,12 +157,16 @@ export function subscribeQualityTrials(
     try {
       unsub = onSnapshot(
         collection(db, TRIAL_COLLECTION),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: QualityTrialReport[] = [];
           snap.forEach((d) => remote.push(d.data() as QualityTrialReport));
           const merged = mergeTrials(readLocalTrials(), remote);
           saveLocalTrials(merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingQualityTrials().catch(() => {});
+          }
         },
         (err) => console.warn('QualityTrials listener warning:', err.message)
       );

@@ -53,6 +53,12 @@ import {
 } from '../services/downtimeStore';
 import { saveFileBlob, ymd } from '../services/downtimeCalc';
 import {
+  CloudSyncDiagnosticsResult,
+  getUnifiedPendingQueueBreakdown,
+  PendingSyncBreakdown,
+  runFullCloudSyncNow,
+} from '../services/cloudSyncService';
+import {
   DEFAULT_REPORTERS,
   DowntimeEntry,
   getDefaultPermissionsForRole,
@@ -69,8 +75,10 @@ interface SyncAndMachinesViewProps {
   isOnline: boolean;
   syncStatus: 'synced' | 'syncing' | 'offline' | 'error';
   syncStatusMessage: string;
+  totalPendingCount?: number;
   onReporterChange: (name: string) => void;
   onRefreshData: () => void;
+  onFullCloudSync?: () => Promise<void>;
   onOpenAuthModal: () => void;
   onOpenInstallModal: () => void;
 }
@@ -82,8 +90,10 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
   isOnline,
   syncStatus,
   syncStatusMessage,
+  totalPendingCount,
   onReporterChange,
   onRefreshData,
+  onFullCloudSync,
   onOpenAuthModal,
   onOpenInstallModal,
 }) => {
@@ -92,6 +102,11 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
   const [selectedRemoveMachine, setSelectedRemoveMachine] = useState<string>(machines[0] || '');
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [isSyncingNow, setIsSyncingNow] = useState(false);
+  const [cloudDiag, setCloudDiag] = useState<CloudSyncDiagnosticsResult | null>(null);
+  const [pendingBreakdown, setPendingBreakdown] = useState<PendingSyncBreakdown>(() =>
+    getUnifiedPendingQueueBreakdown()
+  );
+  const [swUpdateNote, setSwUpdateNote] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedGitCmd, setCopiedGitCmd] = useState(false);
 
@@ -141,7 +156,13 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
     const unsub = subscribePlantUsers((users) => {
       setPlantUsers(users);
     });
-    return () => unsub();
+    const refreshPending = setInterval(() => {
+      setPendingBreakdown(getUnifiedPendingQueueBreakdown());
+    }, 3000);
+    return () => {
+      unsub();
+      clearInterval(refreshPending);
+    };
   }, []);
 
   const applyRolePreset = (role: PlantRole) => {
@@ -359,16 +380,56 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
     onRefreshData();
   };
 
-  // Manual Trigger Sync
+  // Manual Full Cloud Sync & Cross-Device Diagnostics
   const handleManualSync = async () => {
     setIsSyncingNow(true);
     try {
-      const count = await syncAllLocalToFirebase(entries);
-      setBackupMessage(`Synced ${count} entries with Firebase project downtime-log-d484f.`);
+      await syncAllLocalToFirebase(entries).catch(() => 0);
+      const diag = await runFullCloudSyncNow();
+      setCloudDiag(diag);
+      setPendingBreakdown(diag.pendingAfter);
+      if (onFullCloudSync) {
+        await onFullCloudSync();
+      } else {
+        onRefreshData();
+      }
+      if (diag.ok) {
+        setBackupMessage(
+          `Cloud Sync Verified (${diag.latencyMs} ms): ${diag.flushedTotal} outbox item(s) uploaded, server collections refreshed cleanly.`
+        );
+      } else {
+        setBackupMessage(
+          `Sync warning: ${diag.error || 'Could not reach Firebase server. Pending on device: ' + diag.pendingAfter.totalPending}`
+        );
+      }
     } catch (e: any) {
       setBackupMessage(`Sync error: ${e?.message || 'Check internet connection.'}`);
     } finally {
       setIsSyncingNow(false);
+    }
+  };
+
+  // Check for Latest Published App / Service Worker Update
+  const handleCheckAppVersionUpdate = async () => {
+    setSwUpdateNote('Checking for latest app build...');
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.update().catch(() => {})));
+        const hasWaiting = regs.some((r) => r.waiting);
+        if (hasWaiting) {
+          regs.forEach((r) => {
+            if (r.waiting) r.waiting.postMessage({ type: 'SKIP_WAITING' });
+          });
+          setSwUpdateNote('New version ready — reloading now...');
+          setTimeout(() => window.location.reload(), 600);
+          return;
+        }
+      }
+      setSwUpdateNote('Reloading live web link to clear browser cache...');
+      setTimeout(() => window.location.reload(), 500);
+    } catch {
+      window.location.reload();
     }
   };
 
@@ -1364,27 +1425,29 @@ git push -u origin main`}
         </div>
       </div>
 
-      {/* 5. Online Firebase Sync Status */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-6 shadow-md">
+      {/* 5. Online Firebase Sync Status & Cross-Device Diagnostics */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-6 shadow-md space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Cloud className="h-5 w-5 text-blue-400" />
-              <span>Online Firebase Sync</span>
+              <span>Online Firebase Cloud Sync &amp; Server Diagnostics</span>
             </h3>
             <p className="text-xs text-slate-400">
-              Active Project: <b className="text-slate-200 font-mono">downtime-log-d484f</b> •{' '}
+              Active Project: <b className="text-slate-200 font-mono">downtime-log-d484f</b> (Database: <code className="text-slate-300">(default)</code>) •{' '}
               <span className={syncStatus === 'error' ? 'text-rose-400 font-semibold' : 'text-slate-300'}>
                 {syncStatusMessage}
               </span>
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span
               className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${
                 syncStatus === 'error'
                   ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                  : (totalPendingCount ?? pendingBreakdown.totalPending) > 0
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                   : isOnline
                   ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                   : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
@@ -1394,26 +1457,155 @@ git push -u origin main`}
                 className={`h-2 w-2 rounded-full ${
                   syncStatus === 'error'
                     ? 'bg-rose-400'
+                    : (totalPendingCount ?? pendingBreakdown.totalPending) > 0
+                    ? 'bg-amber-400 animate-pulse'
                     : isOnline
                     ? 'bg-emerald-400 animate-pulse'
                     : 'bg-amber-400'
                 }`}
               />
-              {syncStatus === 'error' ? 'Sync Error' : isOnline ? 'Online Sync Active' : 'Offline Mode'}
+              {syncStatus === 'error'
+                ? 'Sync Error'
+                : (totalPendingCount ?? pendingBreakdown.totalPending) > 0
+                ? `${totalPendingCount ?? pendingBreakdown.totalPending} Unsent on Device`
+                : isOnline
+                ? 'Server Synced'
+                : 'Offline Mode'}
             </span>
 
             <button
               onClick={handleManualSync}
               disabled={isSyncingNow || !isOnline}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-750 disabled:opacity-50 transition"
+              className="flex items-center gap-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 px-3.5 py-1.5 text-xs font-bold text-white disabled:opacity-50 transition shadow"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${isSyncingNow ? 'animate-spin' : ''}`} />
-              <span>Sync now</span>
+              <span>{isSyncingNow ? 'Verifying Server...' : 'Force Full Sync & Probe'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCheckAppVersionUpdate}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition"
+              title="Fetch latest deployed app bundle & clear stale PWA cache"
+            >
+              <RotateCcw className="h-3.5 w-3.5 text-sky-400" />
+              <span>Reload App Version</span>
             </button>
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Live Cloud Diagnostics Summary */}
+        <div className="rounded-xl border border-slate-800 bg-slate-950/75 p-3.5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2">
+              {cloudDiag ? (
+                cloudDiag.ok ? (
+                  <span className="inline-flex items-center gap-1.5 text-emerald-400 font-bold">
+                    <CheckCircle2 className="h-4 w-4" />
+                    Server Connected ({cloudDiag.latencyMs} ms) • Auth: {cloudDiag.authEmail || 'Active'}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-rose-400 font-bold">
+                    <AlertCircle className="h-4 w-4" />
+                    Server Issue: {cloudDiag.error || 'Unreachable'}
+                  </span>
+                )
+              ) : (
+                <span className="text-slate-400">
+                  Click <b className="text-slate-200">Force Full Sync &amp; Probe</b> to test live phone-to-cloud connectivity and pull the latest server records across all modules.
+                </span>
+              )}
+            </div>
+            <div className="text-[11px] font-mono text-slate-400">
+              Device Outbox: <b className={pendingBreakdown.totalPending > 0 ? 'text-amber-300' : 'text-emerald-400'}>{pendingBreakdown.totalPending} pending</b>
+            </div>
+          </div>
+
+          {pendingBreakdown.totalPending > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200 flex flex-wrap gap-x-4 gap-y-1">
+              <span className="font-bold text-amber-300">Unsent Items Waiting on This Device:</span>
+              {pendingBreakdown.downtime > 0 && <span>Downtime: {pendingBreakdown.downtime}</span>}
+              {pendingBreakdown.dispatch > 0 && <span>Dispatch: {pendingBreakdown.dispatch}</span>}
+              {pendingBreakdown.specialOrders > 0 && <span>Special Orders: {pendingBreakdown.specialOrders}</span>}
+              {pendingBreakdown.qualityTrials > 0 && <span>Trials: {pendingBreakdown.qualityTrials}</span>}
+              {pendingBreakdown.sop > 0 && <span>SOP Logs: {pendingBreakdown.sop}</span>}
+              {pendingBreakdown.diesel > 0 && <span>Diesel: {pendingBreakdown.diesel}</span>}
+              {pendingBreakdown.powerGen > 0 && <span>Power/Gen: {pendingBreakdown.powerGen}</span>}
+              {pendingBreakdown.planningAndHist > 0 && <span>Plans/History: {pendingBreakdown.planningAndHist}</span>}
+              {pendingBreakdown.attendanceAndQc > 0 && <span>Attendance/QC: {pendingBreakdown.attendanceAndQc}</span>}
+            </div>
+          )}
+
+          {cloudDiag && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 text-[11px]">
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Downtime Logs</div>
+                <div className="font-bold text-white">{cloudDiag.counts.downtime}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Dispatch Records</div>
+                <div className="font-bold text-white">{cloudDiag.counts.dispatch}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Special Orders</div>
+                <div className="font-bold text-white">
+                  {cloudDiag.counts.specialOrderProd} fac / {cloudDiag.counts.specialOrderWh} WH
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Quality Trials</div>
+                <div className="font-bold text-white">{cloudDiag.counts.trials}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">SOP Floor / QC</div>
+                <div className="font-bold text-white">
+                  {cloudDiag.counts.sopProd} prod / {cloudDiag.counts.sopQc} QC
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Diesel / GRNs</div>
+                <div className="font-bold text-white">
+                  {cloudDiag.counts.dieselReqs} req / {cloudDiag.counts.dieselGrns} GRN
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Power Cut / Gen</div>
+                <div className="font-bold text-white">
+                  {cloudDiag.counts.powerCuts} cut / {cloudDiag.counts.generatorLogs} gen
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Monthly Plans</div>
+                <div className="font-bold text-white">{cloudDiag.counts.plans}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Attendance Batches</div>
+                <div className="font-bold text-white">{cloudDiag.counts.attendance}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Machines / Staff</div>
+                <div className="font-bold text-white">
+                  {cloudDiag.counts.machines} mach / {cloudDiag.counts.users} staff
+                </div>
+              </div>
+            </div>
+          )}
+
+          {swUpdateNote && (
+            <div className="text-[11px] font-semibold text-sky-300 bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5 rounded-lg">
+              {swUpdateNote}
+            </div>
+          )}
+
+          <div className="rounded-lg border border-blue-500/20 bg-blue-950/20 p-2.5 text-[11px] text-slate-300 flex items-start gap-2">
+            <Info className="h-4 w-4 text-blue-400 shrink-0 mt-0.5" />
+            <span>
+              <b>Note on Shared Link &amp; Live Data:</b> Both the Dev preview (<code className="text-sky-300">ais-dev</code>) and Shared App Link (<code className="text-emerald-300">ais-pre</code>) read &amp; write the exact same live Firebase <code className="text-slate-200">(default)</code> database for plant logs. If new app screens/features were updated in your workspace, remember to click <b>Publish / Share</b> once so the phone&apos;s <code className="text-emerald-300">ais-pre</code> link receives the latest UI build, or tap <b>Reload App Version</b> above.
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">
               Active Shift Reporter Name

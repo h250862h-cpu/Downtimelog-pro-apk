@@ -1,11 +1,17 @@
-import { collection, doc, getDoc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import {
   DIESEL_CSV_SEED_VERSION,
   SEEDED_DIESEL_GRNS,
   SEEDED_DIESEL_REQUESTS,
 } from '../data/dieselCsvSeed';
-import { db, ensureFirebaseAuth } from '../firebase';
+import {
+  db,
+  deepSanitizeForFirestore,
+  ensureFirebaseAuth,
+  getCollectionDocsServerFirst,
+  getDocServerFirst,
+} from '../firebase';
 import {
   DieselFuelRequest,
   DieselGrnRecord,
@@ -112,8 +118,8 @@ function ensureDieselCsvSeeded() {
         {
           ...baseTank,
           currentMeterReading: Math.max(170215, baseTank.currentMeterReading || 0),
-          upd: Math.max(baseTank.upd || 1, Date.now()),
-          lastUpdatedAt: new Date().toISOString(),
+          upd: Math.max(baseTank.upd || 1, 1775400001000),
+          lastUpdatedAt: baseTank.lastUpdatedAt || '2026-11-01T07:30:00.000Z',
         },
         mergedReqs,
         mergedGrns,
@@ -172,14 +178,7 @@ function removeFromQueue(key: string, id: string) {
 }
 
 function sanitizeObj<T extends Record<string, any>>(obj: T): T {
-  const clean: Record<string, any> = {};
-  Object.keys(obj).forEach((k) => {
-    const v = obj[k];
-    if (v !== undefined && !(typeof v === 'number' && Number.isNaN(v))) {
-      clean[k] = v;
-    }
-  });
-  return clean as T;
+  return deepSanitizeForFirestore(obj);
 }
 
 function mergeById<T extends { id: string; upd?: number }>(local: T[], remote: T[]): T[] {
@@ -254,7 +253,7 @@ export async function pollDieselTank(): Promise<DieselTankConfig> {
   const local = getLocalDieselTank();
   try {
     await ensureFirebaseAuth();
-    const snap = await getDoc(doc(db, TANK_COLLECTION, 'main_bowser'));
+    const snap = await getDocServerFirst(doc(db, TANK_COLLECTION, 'main_bowser'));
     if (snap.exists()) {
       const remote = snap.data() as DieselTankConfig;
       if ((remote.upd || 0) >= (local.upd || 0)) {
@@ -277,6 +276,7 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
     try {
       unsub = onSnapshot(
         doc(db, TANK_COLLECTION, 'main_bowser'),
+        { includeMetadataChanges: true },
         (snap) => {
           const local = getLocalDieselTank();
           if (snap.exists()) {
@@ -287,6 +287,9 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
             } else {
               onUpdate(local);
             }
+          }
+          if (!snap.metadata.fromCache) {
+            flushPendingDieselData().catch(() => {});
           }
         },
         () => {}
@@ -310,9 +313,13 @@ export function getLocalDieselRequests(): DieselFuelRequest[] {
 }
 
 export async function saveDieselRequest(
-  req: DieselFuelRequest
+  req: DieselFuelRequest,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
-  const updated: DieselFuelRequest = { ...req, upd: Date.now() };
+  const updated: DieselFuelRequest = {
+    ...req,
+    upd: options?.preserveUpd && req.upd ? req.upd : Date.now(),
+  };
   const merged = mergeById(getLocalDieselRequests(), [updated]);
   writeLocalList(REQ_KEY, merged);
 
@@ -332,7 +339,7 @@ export async function saveDieselRequest(
 export async function pollDieselRequests(): Promise<DieselFuelRequest[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, REQ_COLLECTION));
+    const snap = await getCollectionDocsServerFirst(collection(db, REQ_COLLECTION));
     const remote: DieselFuelRequest[] = [];
     snap.forEach((d) => remote.push(d.data() as DieselFuelRequest));
     const merged = mergeById(getLocalDieselRequests(), remote);
@@ -354,12 +361,16 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
     try {
       unsub = onSnapshot(
         collection(db, REQ_COLLECTION),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: DieselFuelRequest[] = [];
           snap.forEach((d) => remote.push(d.data() as DieselFuelRequest));
           const merged = mergeById(getLocalDieselRequests(), remote);
           writeLocalList(REQ_KEY, merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingDieselData().catch(() => {});
+          }
         },
         () => {}
       );
@@ -382,9 +393,13 @@ export function getLocalDieselGrns(): DieselGrnRecord[] {
 }
 
 export async function saveDieselGrn(
-  grn: DieselGrnRecord
+  grn: DieselGrnRecord,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
-  const updated: DieselGrnRecord = { ...grn, upd: Date.now() };
+  const updated: DieselGrnRecord = {
+    ...grn,
+    upd: options?.preserveUpd && grn.upd ? grn.upd : Date.now(),
+  };
   const merged = mergeById(getLocalDieselGrns(), [updated]);
   writeLocalList(GRN_KEY, merged);
 
@@ -404,7 +419,7 @@ export async function saveDieselGrn(
 export async function pollDieselGrns(): Promise<DieselGrnRecord[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, GRN_COLLECTION));
+    const snap = await getCollectionDocsServerFirst(collection(db, GRN_COLLECTION));
     const remote: DieselGrnRecord[] = [];
     snap.forEach((d) => remote.push(d.data() as DieselGrnRecord));
     const merged = mergeById(getLocalDieselGrns(), remote);
@@ -426,12 +441,16 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
     try {
       unsub = onSnapshot(
         collection(db, GRN_COLLECTION),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: DieselGrnRecord[] = [];
           snap.forEach((d) => remote.push(d.data() as DieselGrnRecord));
           const merged = mergeById(getLocalDieselGrns(), remote);
           writeLocalList(GRN_KEY, merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingDieselData().catch(() => {});
+          }
         },
         () => {}
       );
@@ -443,6 +462,17 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
     cancelled = true;
     unsub();
   };
+}
+
+export function getPendingDieselCount(): number {
+  const tankPending = (() => {
+    try {
+      return localStorage.getItem(TANK_PENDING_KEY) === '1' ? 1 : 0;
+    } catch {
+      return 0;
+    }
+  })();
+  return tankPending + readQueue(REQ_PENDING_KEY).length + readQueue(GRN_PENDING_KEY).length;
 }
 
 export async function flushPendingDieselData(): Promise<number> {

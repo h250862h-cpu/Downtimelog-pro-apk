@@ -1,14 +1,18 @@
 import {
   collection,
   doc,
-  getDocs,
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
-import { db, ensureFirebaseAuth } from '../firebase';
+import {
+  db,
+  deepSanitizeForFirestore,
+  ensureFirebaseAuth,
+  getCollectionDocsServerFirst,
+} from '../firebase';
 import {
   DispatchEntry,
   GUM_BOOT_SIZES,
@@ -50,22 +54,7 @@ export const DEFAULT_GUM_BOOT_SPECIAL_ORDER: SpecialOrder = {
 };
 
 function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
-  const clean: Record<string, any> = {};
-  Object.keys(obj).forEach((k) => {
-    const val = obj[k];
-    if (val !== undefined && !Number.isNaN(val)) {
-      if (Array.isArray(val)) {
-        clean[k] = val.map((item) =>
-          item && typeof item === 'object' ? sanitizeForFirestore(item) : item
-        );
-      } else if (val && typeof val === 'object' && !(val instanceof Date)) {
-        clean[k] = sanitizeForFirestore(val);
-      } else {
-        clean[k] = val;
-      }
-    }
-  });
-  return clean as T;
+  return deepSanitizeForFirestore(obj);
 }
 
 export function buildSpecialOrderSizeProductName(
@@ -158,12 +147,13 @@ export function getLocalSpecialOrderWhDispatches(): SpecialOrderWhDispatch[] {
 // ======================================================
 
 export async function saveSpecialOrderToFirebase(
-  order: SpecialOrder
+  order: SpecialOrder,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
   const updated: SpecialOrder = {
     ...order,
     machine: normalizeMachineName(order.machine || 'Gumboot Machine'),
-    upd: Date.now(),
+    upd: options?.preserveUpd && order.upd ? order.upd : Date.now(),
   };
   const current = getLocalSpecialOrders();
   const next = mergeById(current, [updated]);
@@ -182,12 +172,13 @@ export async function saveSpecialOrderToFirebase(
 }
 
 export async function saveSpecialOrderProductionToFirebase(
-  entry: SpecialOrderFactoryProduction
+  entry: SpecialOrderFactoryProduction,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
   const updated: SpecialOrderFactoryProduction = {
     ...entry,
     machine: normalizeMachineName(entry.machine),
-    upd: Date.now(),
+    upd: options?.preserveUpd && entry.upd ? entry.upd : Date.now(),
   };
   const current = getLocalSpecialOrderProductions();
   const next = mergeById(current, [updated]);
@@ -206,12 +197,13 @@ export async function saveSpecialOrderProductionToFirebase(
 }
 
 export async function saveSpecialOrderWhDispatchToFirebase(
-  entry: SpecialOrderWhDispatch
+  entry: SpecialOrderWhDispatch,
+  options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
   const updated: SpecialOrderWhDispatch = {
     ...entry,
     machine: normalizeMachineName(entry.machine),
-    upd: Date.now(),
+    upd: options?.preserveUpd && entry.upd ? entry.upd : Date.now(),
   };
   const current = getLocalSpecialOrderWhDispatches();
   const next = mergeById(current, [updated]);
@@ -229,6 +221,14 @@ export async function saveSpecialOrderWhDispatchToFirebase(
   }
 }
 
+export function getPendingSpecialOrderCount(): number {
+  return (
+    readLocalList<string>(ORDERS_PENDING_KEY).length +
+    readLocalList<string>(PROD_PENDING_KEY).length +
+    readLocalList<string>(WH_DISPATCH_PENDING_KEY).length
+  );
+}
+
 export async function flushPendingSpecialOrderData(): Promise<number> {
   let count = 0;
   const orderIds = readLocalList<string>(ORDERS_PENDING_KEY);
@@ -236,7 +236,7 @@ export async function flushPendingSpecialOrderData(): Promise<number> {
   for (const id of orderIds) {
     const found = localOrders.find((x) => x.id === id);
     if (found) {
-      const r = await saveSpecialOrderToFirebase(found);
+      const r = await saveSpecialOrderToFirebase(found, { preserveUpd: true });
       if (r.ok) count++;
     } else {
       removePendingId(ORDERS_PENDING_KEY, id);
@@ -248,7 +248,7 @@ export async function flushPendingSpecialOrderData(): Promise<number> {
   for (const id of prodIds) {
     const found = localProd.find((x) => x.id === id);
     if (found) {
-      const r = await saveSpecialOrderProductionToFirebase(found);
+      const r = await saveSpecialOrderProductionToFirebase(found, { preserveUpd: true });
       if (r.ok) count++;
     } else {
       removePendingId(PROD_PENDING_KEY, id);
@@ -260,7 +260,7 @@ export async function flushPendingSpecialOrderData(): Promise<number> {
   for (const id of whIds) {
     const found = localWh.find((x) => x.id === id);
     if (found) {
-      const r = await saveSpecialOrderWhDispatchToFirebase(found);
+      const r = await saveSpecialOrderWhDispatchToFirebase(found, { preserveUpd: true });
       if (r.ok) count++;
     } else {
       removePendingId(WH_DISPATCH_PENDING_KEY, id);
@@ -273,7 +273,7 @@ export async function flushPendingSpecialOrderData(): Promise<number> {
 export async function pollSpecialOrders(): Promise<SpecialOrder[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, ORDERS_COL));
+    const snap = await getCollectionDocsServerFirst(collection(db, ORDERS_COL));
     const remote: SpecialOrder[] = [];
     snap.forEach((d) => remote.push(d.data() as SpecialOrder));
     const merged = ensureDefaultGumBootOrder(mergeById(getLocalSpecialOrders(), remote));
@@ -287,7 +287,7 @@ export async function pollSpecialOrders(): Promise<SpecialOrder[]> {
 export async function pollSpecialOrderProductions(): Promise<SpecialOrderFactoryProduction[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, PROD_COL));
+    const snap = await getCollectionDocsServerFirst(collection(db, PROD_COL));
     const remote: SpecialOrderFactoryProduction[] = [];
     snap.forEach((d) => remote.push(d.data() as SpecialOrderFactoryProduction));
     const merged = mergeById(getLocalSpecialOrderProductions(), remote);
@@ -301,7 +301,7 @@ export async function pollSpecialOrderProductions(): Promise<SpecialOrderFactory
 export async function pollSpecialOrderWhDispatches(): Promise<SpecialOrderWhDispatch[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, WH_DISPATCH_COL));
+    const snap = await getCollectionDocsServerFirst(collection(db, WH_DISPATCH_COL));
     const remote: SpecialOrderWhDispatch[] = [];
     snap.forEach((d) => remote.push(d.data() as SpecialOrderWhDispatch));
     const merged = mergeById(getLocalSpecialOrderWhDispatches(), remote);
@@ -322,12 +322,16 @@ export function subscribeSpecialOrders(onUpdate: (rows: SpecialOrder[]) => void)
     try {
       unsub = onSnapshot(
         collection(db, ORDERS_COL),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: SpecialOrder[] = [];
           snap.forEach((d) => remote.push(d.data() as SpecialOrder));
           const merged = ensureDefaultGumBootOrder(mergeById(getLocalSpecialOrders(), remote));
           saveLocalList(ORDERS_STORAGE_KEY, merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingSpecialOrderData().catch(() => {});
+          }
         },
         (err) => console.warn('SpecialOrders listener warning:', err.message)
       );
@@ -351,12 +355,16 @@ export function subscribeSpecialOrderProductions(
     try {
       unsub = onSnapshot(
         collection(db, PROD_COL),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: SpecialOrderFactoryProduction[] = [];
           snap.forEach((d) => remote.push(d.data() as SpecialOrderFactoryProduction));
           const merged = mergeById(getLocalSpecialOrderProductions(), remote);
           saveLocalList(PROD_STORAGE_KEY, merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingSpecialOrderData().catch(() => {});
+          }
         },
         (err) => console.warn('SpecialOrderProduction listener warning:', err.message)
       );
@@ -380,12 +388,16 @@ export function subscribeSpecialOrderWhDispatches(
     try {
       unsub = onSnapshot(
         collection(db, WH_DISPATCH_COL),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: SpecialOrderWhDispatch[] = [];
           snap.forEach((d) => remote.push(d.data() as SpecialOrderWhDispatch));
           const merged = mergeById(getLocalSpecialOrderWhDispatches(), remote);
           saveLocalList(WH_DISPATCH_STORAGE_KEY, merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingSpecialOrderData().catch(() => {});
+          }
         },
         (err) => console.warn('SpecialOrderWhDispatches listener warning:', err.message)
       );

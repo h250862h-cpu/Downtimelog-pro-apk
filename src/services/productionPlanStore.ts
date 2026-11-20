@@ -1,7 +1,12 @@
-import { collection, doc, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import historicalDispatchRaw from '../data/historicalDispatch.json';
-import { db, ensureFirebaseAuth } from '../firebase';
+import {
+  db,
+  deepSanitizeForFirestore,
+  ensureFirebaseAuth,
+  getCollectionDocsServerFirst,
+} from '../firebase';
 import {
   DieselFuelRequest,
   DieselGrnRecord,
@@ -161,14 +166,7 @@ function removeFromQueue(key: string, id: string) {
 }
 
 function sanitizeObj<T extends Record<string, any>>(obj: T): T {
-  const clean: Record<string, any> = {};
-  Object.keys(obj).forEach((k) => {
-    const v = obj[k];
-    if (v !== undefined && !(typeof v === 'number' && Number.isNaN(v))) {
-      clean[k] = v;
-    }
-  });
-  return clean as T;
+  return deepSanitizeForFirestore(obj);
 }
 
 function mergeById<T extends { id: string; upd?: number }>(local: T[], remote: T[]): T[] {
@@ -275,7 +273,7 @@ export async function flushPendingUploadedBackgroundDispatches(): Promise<number
 export async function pollUploadedBackgroundDispatches(): Promise<DispatchEntry[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, HIST_UPLOAD_COLLECTION));
+    const snap = await getCollectionDocsServerFirst(collection(db, HIST_UPLOAD_COLLECTION));
     const remote: DispatchEntry[] = [];
     snap.forEach((d) => remote.push(normalizeUploadedHistoryEntry(d.data() as DispatchEntry)));
     const merged = mergeById(getLocalUploadedBackgroundDispatches(), remote);
@@ -299,12 +297,16 @@ export function subscribeUploadedBackgroundDispatches(
     try {
       unsub = onSnapshot(
         collection(db, HIST_UPLOAD_COLLECTION),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: DispatchEntry[] = [];
           snap.forEach((d) => remote.push(normalizeUploadedHistoryEntry(d.data() as DispatchEntry)));
           const merged = mergeById(getLocalUploadedBackgroundDispatches(), remote);
           writeList(HIST_UPLOAD_KEY, merged);
           onUpdate(merged);
+          if (!snap.metadata.fromCache) {
+            flushPendingUploadedBackgroundDispatches().catch(() => {});
+          }
         },
         () => {}
       );
@@ -561,10 +563,14 @@ export async function flushPendingProductionPlans(): Promise<number> {
   return flushed;
 }
 
+export function getPendingPlanningAndHistCount(): number {
+  return readQueue(PLAN_PENDING_KEY).length + readQueue(HIST_UPLOAD_PENDING_KEY).length;
+}
+
 export async function pollProductionPlans(): Promise<ProductionPlanItem[]> {
   try {
     await ensureFirebaseAuth();
-    const snap = await getDocs(collection(db, PLAN_COLLECTION));
+    const snap = await getCollectionDocsServerFirst(collection(db, PLAN_COLLECTION));
     const remote: ProductionPlanItem[] = [];
     snap.forEach((d) => remote.push(normalizePlanItem(d.data() as ProductionPlanItem)));
     const merged = mergeById(getAllRawLocalProductionPlans(), remote);
@@ -586,12 +592,16 @@ export function subscribeProductionPlans(onUpdate: (items: ProductionPlanItem[])
     try {
       unsub = onSnapshot(
         collection(db, PLAN_COLLECTION),
+        { includeMetadataChanges: true },
         (snap) => {
           const remote: ProductionPlanItem[] = [];
           snap.forEach((d) => remote.push(normalizePlanItem(d.data() as ProductionPlanItem)));
           const merged = mergeById(getAllRawLocalProductionPlans(), remote);
           writeList(PLAN_STORAGE_KEY, merged);
           onUpdate(merged.filter((p) => !p.superseded));
+          if (!snap.metadata.fromCache) {
+            flushPendingProductionPlans().catch(() => {});
+          }
         },
         () => {}
       );

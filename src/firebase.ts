@@ -9,15 +9,23 @@ import {
   updateProfile,
 } from 'firebase/auth';
 import {
+  CollectionReference,
   collection,
   deleteDoc,
   doc,
+  DocumentData,
+  DocumentReference,
+  DocumentSnapshot,
+  enableNetwork,
+  getDoc,
   getDocFromServer,
   getDocs,
+  getDocsFromServer,
+  getFirestore,
   initializeFirestore,
   onSnapshot,
-  persistentLocalCache,
-  persistentMultipleTabManager,
+  Query,
+  QuerySnapshot,
   setDoc,
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
@@ -31,29 +39,20 @@ import {
 } from './types';
 
 const app = initializeApp(firebaseConfig);
-const dbId =
-  firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
-    ? firebaseConfig.firestoreDatabaseId
-    : undefined;
+const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
 
 function createFirestoreInstance() {
-  const settings = {
-    ignoreUndefinedProperties: true,
-    experimentalAutoDetectLongPolling: true,
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager(),
-    }),
-  };
   try {
-    return dbId ? initializeFirestore(app, settings, dbId) : initializeFirestore(app, settings);
+    return initializeFirestore(
+      app,
+      {
+        ignoreUndefinedProperties: true,
+        experimentalAutoDetectLongPolling: true,
+      },
+      dbId
+    );
   } catch {
-    const fallbackSettings = {
-      ignoreUndefinedProperties: true,
-      experimentalAutoDetectLongPolling: true,
-    };
-    return dbId
-      ? initializeFirestore(app, fallbackSettings, dbId)
-      : initializeFirestore(app, fallbackSettings);
+    return getFirestore(app, dbId);
   }
 }
 
@@ -94,15 +93,21 @@ async function signInOrProvisionAccount(
 let pendingAuthPromise: Promise<boolean> | null = null;
 
 /**
- * Ensures Firebase Auth has a real signed-in user token (request.auth != null)
- * without relying on Anonymous Auth (which is disabled in downtime-log-d484f).
+ * Ensures Firebase Auth has finished hydrating its persisted IndexedDB session
+ * and has a valid signed-in user token before issuing Firestore requests.
  */
 export async function ensureFirebaseAuth(): Promise<boolean> {
+  try {
+    await auth.authStateReady();
+  } catch {}
   if (auth.currentUser) return true;
   if (pendingAuthPromise) return pendingAuthPromise;
 
   pendingAuthPromise = (async () => {
     try {
+      await auth.authStateReady().catch(() => {});
+      if (auth.currentUser) return true;
+
       const session = getActiveSessionUser();
       if (!session) return false;
 
@@ -115,7 +120,6 @@ export async function ensureFirebaseAuth(): Promise<boolean> {
       }
 
       if (session.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase() || session.isAdmin) {
-        // Attempt primary admin sync fallback if session was stored locally
         return await signInOrProvisionAccount(
           SYNC_SERVICE_EMAIL,
           SYNC_SERVICE_PASS,
@@ -136,12 +140,139 @@ export async function ensureFirebaseAuth(): Promise<boolean> {
   return pendingAuthPromise;
 }
 
-export async function testConnection() {
+/**
+ * Recursively strips `undefined` and `NaN` from objects and arrays before calling setDoc.
+ */
+export function deepSanitizeForFirestore<T>(val: T): T {
+  if (val === null || val === undefined) return val;
+  if (typeof val === 'number') {
+    return (Number.isNaN(val) ? 0 : val) as unknown as T;
+  }
+  if (Array.isArray(val)) {
+    return val
+      .filter((item) => item !== undefined)
+      .map((item) =>
+        item && typeof item === 'object' && !(item instanceof Date)
+          ? deepSanitizeForFirestore(item)
+          : typeof item === 'number' && Number.isNaN(item)
+          ? 0
+          : item
+      ) as unknown as T;
+  }
+  if (typeof val === 'object' && !(val instanceof Date)) {
+    const clean: Record<string, any> = {};
+    Object.keys(val as Record<string, any>).forEach((k) => {
+      const v = (val as Record<string, any>)[k];
+      if (v === undefined) return;
+      if (typeof v === 'number' && Number.isNaN(v)) return;
+      clean[k] =
+        v !== null && typeof v === 'object' && !(v instanceof Date)
+          ? deepSanitizeForFirestore(v)
+          : v;
+    });
+    return clean as T;
+  }
+  return val;
+}
+
+/**
+ * Server-first collection read so manual sync & polling bypass stale persistentLocalCache
+ * and always pull updates created by other phones/devices when online.
+ */
+export async function getCollectionDocsServerFirst<T = DocumentData>(
+  colOrQuery: CollectionReference<T> | Query<T>
+): Promise<QuerySnapshot<T>> {
+  const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+  if (isBrowserOnline) {
+    try {
+      return await getDocsFromServer(colOrQuery);
+    } catch (err: any) {
+      const msg = (err?.message || '').toLowerCase();
+      if (msg.includes('permission')) throw err;
+      // Fall back to cache only if server unreachable
+    }
+  }
+  return await getDocs(colOrQuery);
+}
+
+/**
+ * Server-first single document read (with local cache fallback if genuinely offline).
+ */
+export async function getDocServerFirst<T = DocumentData>(
+  docRef: DocumentReference<T>
+): Promise<DocumentSnapshot<T>> {
+  const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+  if (isBrowserOnline) {
+    try {
+      return await getDocFromServer(docRef);
+    } catch (err: any) {
+      const msg = (err?.message || '').toLowerCase();
+      if (msg.includes('permission')) throw err;
+    }
+  }
+  return await getDoc(docRef);
+}
+
+let lastNetworkEnableAt = 0;
+
+export async function reconnectFirestoreNetwork(force: boolean = false): Promise<boolean> {
+  const now = Date.now();
+  if (force || now - lastNetworkEnableAt > 10000) {
+    lastNetworkEnableAt = now;
+    try {
+      await enableNetwork(db);
+    } catch {}
+  }
+  return await ensureFirebaseAuth().catch(() => false);
+}
+
+export async function probeFirestoreCloudHealth(): Promise<{
+  ok: boolean;
+  latencyMs: number;
+  authEmail: string | null;
+  error?: string;
+}> {
+  const started = Date.now();
   try {
+    await reconnectFirestoreNetwork(false);
+    await getDocFromServer(doc(db, 'app_config', 'machinery'));
+    return {
+      ok: true,
+      latencyMs: Math.max(1, Date.now() - started),
+      authEmail: auth.currentUser?.email || getActiveSessionUser()?.email || null,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      latencyMs: Math.max(1, Date.now() - started),
+      authEmail: auth.currentUser?.email || getActiveSessionUser()?.email || null,
+      error: err?.message || String(err),
+    };
+  }
+}
+
+export async function testConnection() {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return;
+  }
+  try {
+    await auth.authStateReady().catch(() => {});
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      try {
+        await reconnectFirestoreNetwork(true);
+        await getDocFromServer(doc(db, 'test', 'connection'));
+        return;
+      } catch (retryError) {
+        if (retryError instanceof Error && retryError.message.includes('the client is offline')) {
+          console.error('Please check your Firebase configuration.');
+        }
+      }
     }
   }
 }
@@ -436,11 +567,16 @@ export async function loginWithEmail(identifier: string, pass: string) {
     });
     return cred;
   } catch (err: any) {
-    // If user not found, and it is admin credentials, attempt to auto-create in Firebase Auth
+    const skipAutoCreate =
+      typeof localStorage !== 'undefined' &&
+      localStorage.getItem(`dt_auth_exists_${normEmail}`) === '1';
+
+    // If user not found, and it is admin credentials, attempt to auto-create once in Firebase Auth
     if (
-      isMasterAdminCred ||
-      err.code === 'auth/user-not-found' ||
-      err.code === 'auth/invalid-credential'
+      !skipAutoCreate &&
+      (isMasterAdminCred ||
+        err.code === 'auth/user-not-found' ||
+        err.code === 'auth/invalid-credential')
     ) {
       try {
         const newCred = await createUserWithEmailAndPassword(auth, normEmail, trimmedPass);
@@ -476,6 +612,11 @@ export async function loginWithEmail(identifier: string, pass: string) {
         });
         return newCred;
       } catch (createErr: any) {
+        if (createErr?.code === 'auth/email-already-in-use') {
+          try {
+            localStorage.setItem(`dt_auth_exists_${normEmail}`, '1');
+          } catch {}
+        }
         console.warn('Auto-create in Firebase Auth note:', createErr.message);
       }
     }
@@ -582,7 +723,8 @@ export function getLocalPlantUsers(): PlantUserAccount[] {
  */
 export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
   try {
-    const snap = await getDocs(collection(db, 'plant_users'));
+    await ensureFirebaseAuth().catch(() => false);
+    const snap = await getCollectionDocsServerFirst(collection(db, 'plant_users'));
     const list: PlantUserAccount[] = [];
     const docsToPatch: PlantUserAccount[] = [];
     snap.forEach((d) => {
