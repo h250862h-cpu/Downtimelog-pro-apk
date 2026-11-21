@@ -69,6 +69,57 @@ export default defineConfig(() => {
         '@': path.resolve('.'),
       },
     },
+    build: {
+      chunkSizeWarningLimit: 600,
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              {
+                name: 'vendor-react',
+                test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+                priority: 40,
+              },
+              {
+                name: 'vendor-firebase-firestore',
+                test: /[\\/]node_modules[\\/](firebase[\\/]firestore|@firebase[\\/]firestore)[\\/]/,
+                priority: 35,
+              },
+              {
+                name: 'vendor-firebase-core',
+                test: /[\\/]node_modules[\\/](firebase|@firebase)[\\/]/,
+                priority: 30,
+              },
+              {
+                name: 'vendor-xlsx',
+                test: /[\\/]node_modules[\\/]xlsx[\\/]/,
+                priority: 30,
+              },
+              {
+                name: 'vendor-pdf',
+                test: /[\\/]node_modules[\\/](jspdf|jspdf-autotable)[\\/]/,
+                priority: 30,
+              },
+              {
+                name: 'vendor-ui',
+                test: /[\\/]node_modules[\\/](lucide-react|motion|framer-motion)[\\/]/,
+                priority: 25,
+              },
+              {
+                name: 'data-attendance',
+                test: /[\\/]src[\\/]data[\\/]historicalAttendance\.json/,
+                priority: 22,
+              },
+              {
+                name: 'data-seeds',
+                test: /[\\/]src[\\/]data[\\/]/,
+                priority: 20,
+              },
+            ],
+          },
+        },
+      },
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.

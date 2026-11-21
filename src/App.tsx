@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   Activity,
@@ -32,23 +32,13 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { AttendanceLoggerApp } from './components/AttendanceLoggerApp';
 import { AuthModal } from './components/AuthModal';
-import { DailyHoursView } from './components/DailyHoursView';
-import { DieselBowserView } from './components/DieselBowserView';
 import { DieselPopupAlert, DieselSubTab } from './components/DieselPopupAlert';
 import { DispatchPopupAlert, DispatchSubStage } from './components/DispatchPopupAlert';
-import { DispatchSystemView } from './components/DispatchSystemView';
 import { LgplastLogo } from './components/LgplastLogo';
-import { LogDowntimeView } from './components/LogDowntimeView';
 import { LoginGate } from './components/LoginGate';
 import { MachineStatusBoard } from './components/MachineStatusBoard';
-import { PeriodProductionReportView } from './components/PeriodProductionReportView';
-import { PeriodReportView } from './components/PeriodReportView';
-import { PowerCutAndGeneratorView } from './components/PowerCutAndGeneratorView';
-import { ProductionPlanningView } from './components/ProductionPlanningView';
 import { PWAInstallModal } from './components/PWAInstallModal';
-import { QualityTrialView } from './components/QualityTrialView';
 import {
   ActiveScheduleSlot,
   getActiveWeightOutputSlot,
@@ -56,12 +46,54 @@ import {
   ShiftWeightOutputPopupAlert,
 } from './components/ShiftWeightOutputPopupAlert';
 import { SignedCertificateModal } from './components/SignedCertificateModal';
-import { SopFloorApkView } from './components/SopFloorApkView';
 import { SopPopupAlert, SopSubTab } from './components/SopPopupAlert';
 import { SpecialOrderPopupAlert } from './components/SpecialOrderPopupAlert';
-import { SpecialOrderSubTab, SpecialOrdersView } from './components/SpecialOrdersView';
-import { SyncAndMachinesView } from './components/SyncAndMachinesView';
+import type { SpecialOrderSubTab } from './components/SpecialOrdersView';
 import polymerWatermarkImg from './assets/images/polymer_3d_watermark_1795109115357.jpg';
+
+const AttendanceLoggerApp = lazy(() =>
+  import('./components/AttendanceLoggerApp').then((m) => ({ default: m.AttendanceLoggerApp }))
+);
+const DailyHoursView = lazy(() =>
+  import('./components/DailyHoursView').then((m) => ({ default: m.DailyHoursView }))
+);
+const DieselBowserView = lazy(() =>
+  import('./components/DieselBowserView').then((m) => ({ default: m.DieselBowserView }))
+);
+const DispatchSystemView = lazy(() =>
+  import('./components/DispatchSystemView').then((m) => ({ default: m.DispatchSystemView }))
+);
+const LogDowntimeView = lazy(() =>
+  import('./components/LogDowntimeView').then((m) => ({ default: m.LogDowntimeView }))
+);
+const PeriodProductionReportView = lazy(() =>
+  import('./components/PeriodProductionReportView').then((m) => ({
+    default: m.PeriodProductionReportView,
+  }))
+);
+const PeriodReportView = lazy(() =>
+  import('./components/PeriodReportView').then((m) => ({ default: m.PeriodReportView }))
+);
+const PowerCutAndGeneratorView = lazy(() =>
+  import('./components/PowerCutAndGeneratorView').then((m) => ({
+    default: m.PowerCutAndGeneratorView,
+  }))
+);
+const ProductionPlanningView = lazy(() =>
+  import('./components/ProductionPlanningView').then((m) => ({ default: m.ProductionPlanningView }))
+);
+const QualityTrialView = lazy(() =>
+  import('./components/QualityTrialView').then((m) => ({ default: m.QualityTrialView }))
+);
+const SopFloorApkView = lazy(() =>
+  import('./components/SopFloorApkView').then((m) => ({ default: m.SopFloorApkView }))
+);
+const SpecialOrdersView = lazy(() =>
+  import('./components/SpecialOrdersView').then((m) => ({ default: m.SpecialOrdersView }))
+);
+const SyncAndMachinesView = lazy(() =>
+  import('./components/SyncAndMachinesView').then((m) => ({ default: m.SyncAndMachinesView }))
+);
 import {
   auth,
   canAccessFirestorePath,
@@ -1895,7 +1927,13 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <>
+              <Suspense
+                fallback={
+                  <div className="flex items-center justify-center py-16 text-xs font-semibold text-slate-400">
+                    Loading module...
+                  </div>
+                }
+              >
                 {activeDowntimeTab === 'status' && effectivePermissions.viewMachineStatus && (
                   <MachineStatusBoard
                     machines={machines}
@@ -2121,7 +2159,7 @@ export default function App() {
                       onOpenInstallModal={() => setIsInstallModalOpen(true)}
                     />
                   )}
-              </>
+              </Suspense>
             )}
           </div>
         </main>
