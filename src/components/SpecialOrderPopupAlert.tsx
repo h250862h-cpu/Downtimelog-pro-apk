@@ -39,6 +39,7 @@ export const SpecialOrderPopupAlert: React.FC<SpecialOrderPopupAlertProps> = ({
   const pendingFactoryHod = canHod
     ? prodEntries.filter(
         (p) =>
+          !p.deleted &&
           p.status === 'PENDING_HOD_FACTORY' &&
           !dismissedKeys.includes(`SO_FAC_${p.id}`)
       )
@@ -47,6 +48,7 @@ export const SpecialOrderPopupAlert: React.FC<SpecialOrderPopupAlertProps> = ({
   const pendingWh = canWh
     ? whDispatches.filter(
         (w) =>
+          !w.deleted &&
           w.status === 'PENDING_WH' &&
           !dismissedKeys.includes(`SO_WH_${w.id}`)
       )
@@ -55,6 +57,7 @@ export const SpecialOrderPopupAlert: React.FC<SpecialOrderPopupAlertProps> = ({
   const pendingHodWh = canHod
     ? whDispatches.filter(
         (w) =>
+          !w.deleted &&
           w.status === 'PENDING_HOD' &&
           !dismissedKeys.includes(`SO_HOD_${w.id}`)
       )

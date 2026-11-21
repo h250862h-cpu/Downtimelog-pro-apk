@@ -20,19 +20,21 @@ import {
 import {
   DispatchEntry,
   GUM_BOOT_SIZES,
+  ProductionPlanItem,
   SpecialOrder,
   SpecialOrderFactoryProduction,
   SpecialOrderSizeItem,
   SpecialOrderWhDispatch,
   normalizeMachineName,
 } from '../types';
-import { saveDispatchEntryToFirebase } from './dispatchStore';
+import { saveDispatchEntryToFirebase, softDeleteDispatchEntryById } from './dispatchStore';
 import { saveFileBlob, ymd } from './downtimeCalc';
 import { drawLgplastPdfHeader, ensureLgplastLogoLoaded } from './reportPdf';
 
 const ORDERS_STORAGE_KEY = 'lgplast_special_orders_v1';
 const PROD_STORAGE_KEY = 'lgplast_special_order_prod_v1';
 const WH_DISPATCH_STORAGE_KEY = 'lgplast_special_order_wh_dispatch_v1';
+const DELETED_IDS_KEY = 'lgplast_so_deleted_ids_v1';
 
 const ORDERS_PENDING_KEY = 'lgplast_so_orders_pending_v1';
 const PROD_PENDING_KEY = 'lgplast_so_prod_pending_v1';
@@ -74,25 +76,75 @@ export function buildSpecialOrderSizeProductName(
   return `${cleanPrefix} ${cleanSize}`.trim();
 }
 
-function mergeById<T extends { id: string; upd?: number }>(
+function readDeletedIdSet(): Set<string> {
+  const set = new Set<string>();
+  try {
+    const raw = localStorage.getItem(DELETED_IDS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((id) => {
+          if (typeof id === 'string' && id) set.add(id);
+        });
+      }
+    }
+  } catch {}
+  return set;
+}
+
+function markIdsDeletedLocally(ids: string[]) {
+  if (!ids.length) return;
+  const current = readDeletedIdSet();
+  ids.forEach((id) => {
+    if (id) current.add(id);
+  });
+  saveLocalList(DELETED_IDS_KEY, Array.from(current).slice(-500));
+}
+
+function mergeById<T extends { id: string; upd?: number; deleted?: boolean }>(
   local: T[],
   remote: T[],
-  sortDesc = true
+  sortDesc = true,
+  enforceDeletedTombstones = false
 ): T[] {
+  const deletedSet = enforceDeletedTombstones ? readDeletedIdSet() : new Set<string>();
+  const newlyDeletedFromRemote: string[] = [];
   const map: Record<string, T> = {};
+
   local.forEach((item) => {
-    if (item?.id) map[item.id] = item;
+    if (!item?.id) return;
+    if (enforceDeletedTombstones && item.deleted) deletedSet.add(item.id);
+    map[item.id] = item;
   });
+
   remote.forEach((item) => {
     if (!item?.id) return;
+    if (enforceDeletedTombstones && item.deleted) {
+      deletedSet.add(item.id);
+      newlyDeletedFromRemote.push(item.id);
+    }
     const existing = map[item.id];
-    if (!existing || (item.upd || 0) >= (existing.upd || 0)) {
+    if (!existing) {
+      map[item.id] = item;
+    } else if (enforceDeletedTombstones && existing.deleted && !item.deleted) {
+      // Once HOD deletes a raised batch/dispatch ID, keep it deleted forever
+      map[item.id] = existing;
+    } else if ((enforceDeletedTombstones && item.deleted) || (item.upd || 0) >= (existing.upd || 0)) {
       map[item.id] = item;
     }
   });
-  return Object.values(map).sort((a, b) =>
-    sortDesc ? (b.upd || 0) - (a.upd || 0) : (a.upd || 0) - (b.upd || 0)
-  );
+
+  if (enforceDeletedTombstones && newlyDeletedFromRemote.length > 0) {
+    markIdsDeletedLocally(newlyDeletedFromRemote);
+  }
+
+  return Object.values(map)
+    .map((item) =>
+      enforceDeletedTombstones && deletedSet.has(item.id) && !item.deleted
+        ? ({ ...item, deleted: true } as T)
+        : item
+    )
+    .sort((a, b) => (sortDesc ? (b.upd || 0) - (a.upd || 0) : (a.upd || 0) - (b.upd || 0)));
 }
 
 function readLocalList<T>(key: string): T[] {
@@ -181,24 +233,69 @@ function ensureDefaultGumBootOrder(orders: SpecialOrder[]): SpecialOrder[] {
 }
 
 // ======================================================
-// LOCAL ACCESSORS
+// LOCAL ACCESSORS (RAW VS ACTIVE FILTERED)
 // ======================================================
+
+function filterActiveRecords<T extends { id: string; deleted?: boolean }>(items: T[]): T[] {
+  const deletedSet = readDeletedIdSet();
+  return items.filter((item) => item && !item.deleted && !deletedSet.has(item.id));
+}
+
+function readRawSpecialOrderProductions(): SpecialOrderFactoryProduction[] {
+  return readLocalList<SpecialOrderFactoryProduction>(PROD_STORAGE_KEY);
+}
+
+function readRawSpecialOrderWhDispatches(): SpecialOrderWhDispatch[] {
+  return readLocalList<SpecialOrderWhDispatch>(WH_DISPATCH_STORAGE_KEY);
+}
 
 export function getLocalSpecialOrders(): SpecialOrder[] {
   return ensureDefaultGumBootOrder(readLocalList<SpecialOrder>(ORDERS_STORAGE_KEY));
 }
 
 export function getLocalSpecialOrderProductions(): SpecialOrderFactoryProduction[] {
-  return readLocalList<SpecialOrderFactoryProduction>(PROD_STORAGE_KEY);
+  return filterActiveRecords(readRawSpecialOrderProductions());
 }
 
 export function getLocalSpecialOrderWhDispatches(): SpecialOrderWhDispatch[] {
-  return readLocalList<SpecialOrderWhDispatch>(WH_DISPATCH_STORAGE_KEY);
+  return filterActiveRecords(readRawSpecialOrderWhDispatches());
 }
 
 // ======================================================
 // CLOUD SAVE + FLUSH + POLL + SUBSCRIBE
 // ======================================================
+
+const FIRESTORE_WRITE_TIMEOUT_MS = 3500;
+
+async function commitDocWithUiTimeout(
+  colName: string,
+  docId: string,
+  payload: Record<string, any>,
+  onCommitSuccess: () => void,
+  onCommitFailure: (err: any) => void
+): Promise<{ ok: boolean; error?: string }> {
+  const writePromise = (async () => {
+    await ensureFirebaseAuth();
+    await setDoc(doc(db, colName, docId), payload, { merge: true });
+  })().then(
+    () => {
+      onCommitSuccess();
+      return { ok: true as const };
+    },
+    (err: any) => {
+      onCommitFailure(err);
+      return { ok: false as const, error: err?.message || 'Saved locally (offline)' };
+    }
+  );
+
+  const timeoutPromise = new Promise<{ ok: false; error: string }>((resolve) =>
+    setTimeout(() => {
+      resolve({ ok: false, error: 'Saved locally — queued for cloud sync' });
+    }, FIRESTORE_WRITE_TIMEOUT_MS)
+  );
+
+  return Promise.race([writePromise, timeoutPromise]);
+}
 
 export async function saveSpecialOrderToFirebase(
   order: SpecialOrder,
@@ -212,18 +309,29 @@ export async function saveSpecialOrderToFirebase(
   const current = getLocalSpecialOrders();
   const next = mergeById(current, [updated]);
   saveLocalList(ORDERS_STORAGE_KEY, next);
+  addPendingId(ORDERS_PENDING_KEY, updated.id);
 
   try {
-    await ensureFirebaseAuth();
     const syncTs = Date.now();
     const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
-    await setDoc(doc(db, ORDERS_COL, updated.id), payload, { merge: true });
-    removePendingId(ORDERS_PENDING_KEY, updated.id);
-    const latest = getLocalSpecialOrders().map((x) =>
-      x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrder) : x
+    return await commitDocWithUiTimeout(
+      ORDERS_COL,
+      updated.id,
+      payload,
+      () => {
+        removePendingId(ORDERS_PENDING_KEY, updated.id);
+        const latest = getLocalSpecialOrders().map((x) =>
+          x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrder) : x
+        );
+        saveLocalList(ORDERS_STORAGE_KEY, latest);
+      },
+      (err) => {
+        if (isPermissionDeniedError(err)) {
+          markFirestorePathBlockedByRules(ORDERS_COL);
+        }
+        addPendingId(ORDERS_PENDING_KEY, updated.id);
+      }
     );
-    saveLocalList(ORDERS_STORAGE_KEY, latest);
-    return { ok: true };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
       markFirestorePathBlockedByRules(ORDERS_COL);
@@ -242,21 +350,35 @@ export async function saveSpecialOrderProductionToFirebase(
     machine: normalizeMachineName(entry.machine),
     upd: options?.preserveUpd && entry.upd ? entry.upd : Date.now(),
   };
-  const current = getLocalSpecialOrderProductions();
-  const next = mergeById(current, [updated]);
+  if (updated.deleted) {
+    markIdsDeletedLocally([updated.id]);
+  }
+  const current = readRawSpecialOrderProductions();
+  const next = mergeById(current, [updated], true, true);
   saveLocalList(PROD_STORAGE_KEY, next);
+  addPendingId(PROD_PENDING_KEY, updated.id);
 
   try {
-    await ensureFirebaseAuth();
     const syncTs = Date.now();
     const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
-    await setDoc(doc(db, PROD_COL, updated.id), payload, { merge: true });
-    removePendingId(PROD_PENDING_KEY, updated.id);
-    const latest = getLocalSpecialOrderProductions().map((x) =>
-      x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrderFactoryProduction) : x
+    return await commitDocWithUiTimeout(
+      PROD_COL,
+      updated.id,
+      payload,
+      () => {
+        removePendingId(PROD_PENDING_KEY, updated.id);
+        const latest = readRawSpecialOrderProductions().map((x) =>
+          x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrderFactoryProduction) : x
+        );
+        saveLocalList(PROD_STORAGE_KEY, latest);
+      },
+      (err) => {
+        if (isPermissionDeniedError(err)) {
+          markFirestorePathBlockedByRules(PROD_COL);
+        }
+        addPendingId(PROD_PENDING_KEY, updated.id);
+      }
     );
-    saveLocalList(PROD_STORAGE_KEY, latest);
-    return { ok: true };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
       markFirestorePathBlockedByRules(PROD_COL);
@@ -275,21 +397,35 @@ export async function saveSpecialOrderWhDispatchToFirebase(
     machine: normalizeMachineName(entry.machine),
     upd: options?.preserveUpd && entry.upd ? entry.upd : Date.now(),
   };
-  const current = getLocalSpecialOrderWhDispatches();
-  const next = mergeById(current, [updated]);
+  if (updated.deleted) {
+    markIdsDeletedLocally([updated.id]);
+  }
+  const current = readRawSpecialOrderWhDispatches();
+  const next = mergeById(current, [updated], true, true);
   saveLocalList(WH_DISPATCH_STORAGE_KEY, next);
+  addPendingId(WH_DISPATCH_PENDING_KEY, updated.id);
 
   try {
-    await ensureFirebaseAuth();
     const syncTs = Date.now();
     const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
-    await setDoc(doc(db, WH_DISPATCH_COL, updated.id), payload, { merge: true });
-    removePendingId(WH_DISPATCH_PENDING_KEY, updated.id);
-    const latest = getLocalSpecialOrderWhDispatches().map((x) =>
-      x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrderWhDispatch) : x
+    return await commitDocWithUiTimeout(
+      WH_DISPATCH_COL,
+      updated.id,
+      payload,
+      () => {
+        removePendingId(WH_DISPATCH_PENDING_KEY, updated.id);
+        const latest = readRawSpecialOrderWhDispatches().map((x) =>
+          x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrderWhDispatch) : x
+        );
+        saveLocalList(WH_DISPATCH_STORAGE_KEY, latest);
+      },
+      (err) => {
+        if (isPermissionDeniedError(err)) {
+          markFirestorePathBlockedByRules(WH_DISPATCH_COL);
+        }
+        addPendingId(WH_DISPATCH_PENDING_KEY, updated.id);
+      }
     );
-    saveLocalList(WH_DISPATCH_STORAGE_KEY, latest);
-    return { ok: true };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
       markFirestorePathBlockedByRules(WH_DISPATCH_COL);
@@ -302,8 +438,8 @@ export async function saveSpecialOrderWhDispatchToFirebase(
 export function repairPendingSpecialOrderQueues(): number {
   return (
     repairQueueForList(ORDERS_PENDING_KEY, getLocalSpecialOrders() as Array<SpecialOrder & { sy?: number }>) +
-    repairQueueForList(PROD_PENDING_KEY, getLocalSpecialOrderProductions() as Array<SpecialOrderFactoryProduction & { sy?: number }>) +
-    repairQueueForList(WH_DISPATCH_PENDING_KEY, getLocalSpecialOrderWhDispatches() as Array<SpecialOrderWhDispatch & { sy?: number }>)
+    repairQueueForList(PROD_PENDING_KEY, readRawSpecialOrderProductions() as Array<SpecialOrderFactoryProduction & { sy?: number }>) +
+    repairQueueForList(WH_DISPATCH_PENDING_KEY, readRawSpecialOrderWhDispatches() as Array<SpecialOrderWhDispatch & { sy?: number }>)
   );
 }
 
@@ -346,7 +482,7 @@ export async function flushPendingSpecialOrderData(): Promise<number> {
 
   const prodIds = readLocalList<string>(PROD_PENDING_KEY);
   if (prodIds.length && (await canAccessFirestorePath(PROD_COL, false))) {
-    const localProd = getLocalSpecialOrderProductions();
+    const localProd = readRawSpecialOrderProductions();
     for (const id of prodIds) {
       if (isFirestorePathBlockedByRules(PROD_COL)) break;
       const found = localProd.find((x) => x.id === id);
@@ -361,7 +497,7 @@ export async function flushPendingSpecialOrderData(): Promise<number> {
 
   const whIds = readLocalList<string>(WH_DISPATCH_PENDING_KEY);
   if (whIds.length && (await canAccessFirestorePath(WH_DISPATCH_COL, false))) {
-    const localWh = getLocalSpecialOrderWhDispatches();
+    const localWh = readRawSpecialOrderWhDispatches();
     for (const id of whIds) {
       if (isFirestorePathBlockedByRules(WH_DISPATCH_COL)) break;
       const found = localWh.find((x) => x.id === id);
@@ -414,11 +550,11 @@ export async function pollSpecialOrderProductions(): Promise<SpecialOrderFactory
       const raw = d.data() as SpecialOrderFactoryProduction & { sy?: number };
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderFactoryProduction);
     });
-    const local = getLocalSpecialOrderProductions();
-    const merged = mergeById(local, remote);
+    const local = readRawSpecialOrderProductions();
+    const merged = mergeById(local, remote, true, true);
     saveLocalList(PROD_STORAGE_KEY, merged);
     clearSyncedIdsFromQueue(PROD_PENDING_KEY, local, remote);
-    return merged;
+    return filterActiveRecords(merged);
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
       markFirestorePathBlockedByRules(PROD_COL);
@@ -439,11 +575,11 @@ export async function pollSpecialOrderWhDispatches(): Promise<SpecialOrderWhDisp
       const raw = d.data() as SpecialOrderWhDispatch & { sy?: number };
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderWhDispatch);
     });
-    const local = getLocalSpecialOrderWhDispatches();
-    const merged = mergeById(local, remote);
+    const local = readRawSpecialOrderWhDispatches();
+    const merged = mergeById(local, remote, true, true);
     saveLocalList(WH_DISPATCH_STORAGE_KEY, merged);
     clearSyncedIdsFromQueue(WH_DISPATCH_PENDING_KEY, local, remote);
-    return merged;
+    return filterActiveRecords(merged);
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
       markFirestorePathBlockedByRules(WH_DISPATCH_COL);
@@ -516,11 +652,11 @@ export function subscribeSpecialOrderProductions(
             const raw = d.data() as SpecialOrderFactoryProduction & { sy?: number };
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderFactoryProduction);
           });
-          const local = getLocalSpecialOrderProductions();
-          const merged = mergeById(local, remote);
+          const local = readRawSpecialOrderProductions();
+          const merged = mergeById(local, remote, true, true);
           saveLocalList(PROD_STORAGE_KEY, merged);
           clearSyncedIdsFromQueue(PROD_PENDING_KEY, local, remote);
-          onUpdate(merged);
+          onUpdate(filterActiveRecords(merged));
           if (!snap.metadata.fromCache) {
             flushPendingSpecialOrderData().catch(() => {});
           }
@@ -561,11 +697,11 @@ export function subscribeSpecialOrderWhDispatches(
             const raw = d.data() as SpecialOrderWhDispatch & { sy?: number };
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderWhDispatch);
           });
-          const local = getLocalSpecialOrderWhDispatches();
-          const merged = mergeById(local, remote);
+          const local = readRawSpecialOrderWhDispatches();
+          const merged = mergeById(local, remote, true, true);
           saveLocalList(WH_DISPATCH_STORAGE_KEY, merged);
           clearSyncedIdsFromQueue(WH_DISPATCH_PENDING_KEY, local, remote);
-          onUpdate(merged);
+          onUpdate(filterActiveRecords(merged));
           if (!snap.metadata.fromCache) {
             flushPendingSpecialOrderData().catch(() => {});
           }
@@ -586,7 +722,7 @@ export function subscribeSpecialOrderWhDispatches(
 }
 
 // ======================================================
-// FACTORY STOCK MATRIX COMPUTATION (SIZES 39-46 & CUSTOM)
+// FACTORY STOCK MATRIX COMPUTATION (SIZES 39-46 & PLANNING TARGETS)
 // ======================================================
 
 export interface SpecialOrderSizeStockRow {
@@ -598,6 +734,9 @@ export interface SpecialOrderSizeStockRow {
   dispatchedToWh: number;
   confirmedWh: number;
   availableInFactory: number;
+  requiredRemaining: number;
+  planProgressPct: number;
+  isPlanMet: boolean;
 }
 
 export function computeOrderFactoryStock(
@@ -606,18 +745,27 @@ export function computeOrderFactoryStock(
   whDispatches: SpecialOrderWhDispatch[]
 ): {
   rows: SpecialOrderSizeStockRow[];
+  totalTargetQty: number;
   totalProducedConfirmed: number;
   totalPendingFactoryHod: number;
   totalDispatchedToWh: number;
   totalConfirmedWh: number;
   totalAvailableInFactory: number;
+  totalRequiredRemaining: number;
+  openPlanCount: number;
+  closedPlanCount: number;
 } {
-  const orderProd = prodEntries.filter((p) => p.orderId === order.id);
-  const orderWh = whDispatches.filter((w) => w.orderId === order.id);
+  const deletedSet = readDeletedIdSet();
+  const orderProd = prodEntries.filter(
+    (p) => p.orderId === order.id && !p.deleted && !deletedSet.has(p.id)
+  );
+  const orderWh = whDispatches.filter(
+    (w) => w.orderId === order.id && !w.deleted && !deletedSet.has(w.id)
+  );
 
   const rows: SpecialOrderSizeStockRow[] = order.sizes.map((sizeLabel) => {
     const productName = buildSpecialOrderSizeProductName(order.productPrefix, sizeLabel);
-    const targetQty = Number(order.sizeTargets?.[sizeLabel] || 0);
+    const targetQty = Math.max(0, Number(order.sizeTargets?.[sizeLabel] || 0));
 
     let producedConfirmed = 0;
     let pendingFactoryHod = 0;
@@ -648,6 +796,11 @@ export function computeOrderFactoryStock(
     });
 
     const availableInFactory = Math.max(0, producedConfirmed - dispatchedToWh);
+    const requiredRemaining = targetQty > 0 ? Math.max(0, targetQty - availableInFactory) : 0;
+    const planProgressPct =
+      targetQty > 0 ? Math.min(100, Math.round((availableInFactory / targetQty) * 100)) : 0;
+    const isPlanMet = targetQty > 0 && availableInFactory >= targetQty;
+
     return {
       sizeLabel,
       productName,
@@ -657,17 +810,161 @@ export function computeOrderFactoryStock(
       dispatchedToWh,
       confirmedWh,
       availableInFactory,
+      requiredRemaining,
+      planProgressPct,
+      isPlanMet,
     };
   });
 
   return {
     rows,
+    totalTargetQty: rows.reduce((s, r) => s + r.targetQty, 0),
     totalProducedConfirmed: rows.reduce((s, r) => s + r.producedConfirmed, 0),
     totalPendingFactoryHod: rows.reduce((s, r) => s + r.pendingFactoryHod, 0),
     totalDispatchedToWh: rows.reduce((s, r) => s + r.dispatchedToWh, 0),
     totalConfirmedWh: rows.reduce((s, r) => s + r.confirmedWh, 0),
     totalAvailableInFactory: rows.reduce((s, r) => s + r.availableInFactory, 0),
+    totalRequiredRemaining: rows.reduce((s, r) => s + r.requiredRemaining, 0),
+    openPlanCount: rows.filter((r) => r.targetQty > 0 && !r.isPlanMet).length,
+    closedPlanCount: rows.filter((r) => r.isPlanMet).length,
   };
+}
+
+// ======================================================
+// SIZE PLANNING IMPORT & TARGET MANAGEMENT
+// ======================================================
+
+export async function updateSpecialOrderSizePlanning(params: {
+  order: SpecialOrder;
+  sizeTargets: Record<string, number>;
+  updatedBy: string;
+  sourceLabel?: string;
+}): Promise<{ ok: boolean; order: SpecialOrder; error?: string }> {
+  const cleaned: Record<string, number> = {};
+  params.order.sizes.forEach((sz) => {
+    const val = Number(params.sizeTargets[sz] || 0);
+    cleaned[sz] = Number.isFinite(val) && val > 0 ? Math.round(val) : 0;
+  });
+
+  const updated: SpecialOrder = {
+    ...params.order,
+    sizeTargets: cleaned,
+    planningUpdatedBy: params.updatedBy,
+    planningUpdatedAt: new Date().toISOString(),
+    planningSource: params.sourceLabel || 'Manual Size Planning Entry',
+    upd: Date.now(),
+  };
+  const res = await saveSpecialOrderToFirebase(updated);
+  return { ok: res.ok, order: updated, error: res.error };
+}
+
+function normalizeSizeToken(raw: string): string {
+  return raw.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+}
+
+export function pullTargetsFromMonthlyPlans(
+  order: SpecialOrder,
+  monthlyPlans: ProductionPlanItem[]
+): { targets: Record<string, number>; matchedSizes: number; activeMonth: string | null } {
+  const activePlans = monthlyPlans.filter((p) => !p.superseded && (p.plannedQty || 0) > 0);
+  if (activePlans.length === 0) {
+    return { targets: {}, matchedSizes: 0, activeMonth: null };
+  }
+  const latestMonth =
+    activePlans
+      .map((p) => p.month)
+      .filter(Boolean)
+      .sort()
+      .reverse()[0] || null;
+  const scopedPlans = latestMonth
+    ? activePlans.filter((p) => p.month === latestMonth)
+    : activePlans;
+
+  const targets: Record<string, number> = {};
+  let matchedSizes = 0;
+
+  order.sizes.forEach((sizeLabel) => {
+    const mappedProd = normalizeSizeToken(
+      buildSpecialOrderSizeProductName(order.productPrefix, sizeLabel)
+    );
+    const sizeNum = sizeLabel.replace(/[^0-9]+/g, '').trim();
+    const sizeNorm = normalizeSizeToken(sizeLabel);
+
+    const matched = scopedPlans.filter((plan) => {
+      const prodNorm = normalizeSizeToken(plan.product || '');
+      if (prodNorm === mappedProd) return true;
+      if (prodNorm.includes(sizeNorm) && (prodNorm.includes('BOOT') || prodNorm.includes('GUM'))) {
+        return true;
+      }
+      if (sizeNum && prodNorm.includes(`SIZE ${sizeNum}`) && (prodNorm.includes('BOOT') || prodNorm.includes('GUM'))) {
+        return true;
+      }
+      return false;
+    });
+
+    if (matched.length > 0) {
+      targets[sizeLabel] = Math.round(
+        matched.reduce((s, m) => s + Number(m.plannedQty || 0), 0)
+      );
+      matchedSizes++;
+    } else if (order.sizeTargets?.[sizeLabel]) {
+      targets[sizeLabel] = order.sizeTargets[sizeLabel];
+    }
+  });
+
+  return { targets, matchedSizes, activeMonth: latestMonth };
+}
+
+export async function parseSpecialOrderSizePlanWorkbook(
+  file: File,
+  sizes: string[],
+  productPrefix: string
+): Promise<{ targets: Record<string, number>; matchedCount: number }> {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  const targets: Record<string, number> = {};
+  let matchedCount = 0;
+
+  const sizeMatchers = sizes.map((sz) => ({
+    sizeLabel: sz,
+    normSize: normalizeSizeToken(sz),
+    digits: sz.replace(/[^0-9]+/g, '').trim(),
+    mappedProd: normalizeSizeToken(buildSpecialOrderSizeProductName(productPrefix, sz)),
+  }));
+
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: '' });
+    if (!rows.length) continue;
+
+    for (const row of rows) {
+      const keys = Object.keys(row);
+      const labelKey =
+        keys.find((k) => /size|product|item|description|side|variant/i.test(k)) || keys[0];
+      const qtyKey =
+        keys.find((k) => /plan|req|target|qty|quantity|order/i.test(k) && k !== labelKey) ||
+        keys.find((k) => k !== labelKey && !Number.isNaN(Number(row[k])));
+
+      if (!labelKey || !qtyKey) continue;
+      const rawLabel = normalizeSizeToken(String(row[labelKey] || ''));
+      const rawQty = Number(String(row[qtyKey] || '').replace(/,/g, '').trim());
+      if (!rawLabel || !Number.isFinite(rawQty) || rawQty < 0) continue;
+
+      const hit = sizeMatchers.find(
+        (m) =>
+          rawLabel === m.normSize ||
+          rawLabel === m.mappedProd ||
+          (m.digits && (rawLabel === m.digits || rawLabel.includes(`SIZE ${m.digits}`) || rawLabel.endsWith(` ${m.digits}`)))
+      );
+      if (hit) {
+        targets[hit.sizeLabel] = Math.round(rawQty);
+        matchedCount++;
+      }
+    }
+    if (matchedCount > 0) break;
+  }
+
+  return { targets, matchedCount };
 }
 
 // ======================================================
@@ -743,6 +1040,54 @@ export async function hodConfirmSpecialOrderFactoryStock(params: {
     upd: Date.now(),
   };
   return saveSpecialOrderProductionToFirebase(updated);
+}
+
+/**
+ * Permanently soft-deletes a Shift In Charge raised factory production batch as HOD/Admin
+ * using a synced tombstone (`deleted: true`) so it never reappears on any device
+ * and never triggers Firestore `delete` rule errors.
+ */
+export async function hodDeleteSpecialOrderFactoryBatch(params: {
+  entry: SpecialOrderFactoryProduction;
+  hodName: string;
+  hodEmail: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  markIdsDeletedLocally([params.entry.id]);
+  const tombstoned: SpecialOrderFactoryProduction = {
+    ...params.entry,
+    deleted: true,
+    deletedBy: params.hodName,
+    deletedByEmail: params.hodEmail,
+    deletedAt: new Date().toISOString(),
+    upd: Date.now(),
+  };
+  return saveSpecialOrderProductionToFirebase(tombstoned);
+}
+
+/**
+ * Permanently soft-deletes a Shift In Charge raised WH dispatch order as HOD/Admin
+ * (and any linked regular dispatch rows if it was already posted) via tombstones.
+ */
+export async function hodDeleteSpecialOrderWhDispatch(params: {
+  entry: SpecialOrderWhDispatch;
+  hodName: string;
+  hodEmail: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  markIdsDeletedLocally([params.entry.id]);
+  if (params.entry.linkedRegularDispatchIds && params.entry.linkedRegularDispatchIds.length > 0) {
+    for (const linkedId of params.entry.linkedRegularDispatchIds) {
+      await softDeleteDispatchEntryById(linkedId, params.hodName, params.hodEmail).catch(() => {});
+    }
+  }
+  const tombstoned: SpecialOrderWhDispatch = {
+    ...params.entry,
+    deleted: true,
+    deletedBy: params.hodName,
+    deletedByEmail: params.hodEmail,
+    deletedAt: new Date().toISOString(),
+    upd: Date.now(),
+  };
+  return saveSpecialOrderWhDispatchToFirebase(tombstoned);
 }
 
 export async function submitSpecialOrderWhDispatch(params: {
@@ -926,30 +1271,49 @@ export function exportSpecialOrderFactoryStockExcel(params: {
   if (!params.isAdmin) return;
   const { order, prodEntries, whDispatches } = params;
   const stockSummary = computeOrderFactoryStock(order, prodEntries, whDispatches);
+  const deletedSet = readDeletedIdSet();
   const orderProd = prodEntries
-    .filter((p) => p.orderId === order.id)
+    .filter((p) => p.orderId === order.id && !p.deleted && !deletedSet.has(p.id))
     .sort((a, b) => (b.date + b.shiftSubmittedAt).localeCompare(a.date + a.shiftSubmittedAt));
 
   const matrixRows = stockSummary.rows.map((r) => ({
     'Order No.': order.orderNo,
     'Size': r.sizeLabel,
     'Inventory Product Name': r.productName,
-    'Order Target Qty': r.targetQty || '—',
+    'Planned Qty Required': r.targetQty || '—',
     'Confirmed Produced (Factory)': r.producedConfirmed,
     'Pending HOD Confirm': r.pendingFactoryHod,
     'Moved / Dispatched to WH': r.dispatchedToWh,
     'Available Stock in Factory': r.availableInFactory,
+    'Still Required Stock (vs Avail)': r.targetQty > 0 ? r.requiredRemaining : '—',
+    'Plan Progress %': r.targetQty > 0 ? `${r.planProgressPct}%` : '—',
+    'Plan Status':
+      r.targetQty > 0
+        ? r.isPlanMet
+          ? 'CLOSED — REQUIRED MET (RED)'
+          : `OPEN (${r.requiredRemaining} REQ)`
+        : 'No Plan',
   }));
 
   matrixRows.push({
     'Order No.': 'TOTAL',
     'Size': `${order.sizes.length} Sizes`,
     'Inventory Product Name': order.title,
-    'Order Target Qty': stockSummary.rows.reduce((s, r) => s + r.targetQty, 0) || '—',
+    'Planned Qty Required': stockSummary.totalTargetQty || '—',
     'Confirmed Produced (Factory)': stockSummary.totalProducedConfirmed,
     'Pending HOD Confirm': stockSummary.totalPendingFactoryHod,
     'Moved / Dispatched to WH': stockSummary.totalDispatchedToWh,
     'Available Stock in Factory': stockSummary.totalAvailableInFactory,
+    'Still Required Stock (vs Avail)':
+      stockSummary.totalTargetQty > 0 ? stockSummary.totalRequiredRemaining : '—',
+    'Plan Progress %':
+      stockSummary.totalTargetQty > 0
+        ? `${Math.min(100, Math.round((stockSummary.totalAvailableInFactory / stockSummary.totalTargetQty) * 100))}%`
+        : '—',
+    'Plan Status':
+      stockSummary.totalTargetQty > 0
+        ? `${stockSummary.closedPlanCount} RED CLOSED / ${stockSummary.openPlanCount} OPEN`
+        : 'No Plan',
   });
 
   const dailyRows = orderProd.flatMap((batch) =>
@@ -1021,8 +1385,9 @@ export function exportSpecialOrderWhDispatchedExcel(params: {
 }) {
   if (!params.isAdmin) return;
   const { order, whDispatches } = params;
+  const deletedSet = readDeletedIdSet();
   const list = whDispatches
-    .filter((w) => w.orderId === order.id)
+    .filter((w) => w.orderId === order.id && !w.deleted && !deletedSet.has(w.id))
     .sort((a, b) => (b.date + b.shiftSubmittedAt).localeCompare(a.date + a.shiftSubmittedAt));
 
   const summaryRows = list.map((d) => {

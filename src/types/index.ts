@@ -807,6 +807,12 @@ export interface DispatchEntry {
   isSpecialOrderDispatch?: boolean;
   specialOrderId?: string;
   specialOrderDispatchId?: string;
+
+  // Soft-delete tombstone (never uses deleteDoc so Firestore WatchStreams stay safe)
+  deleted?: boolean;
+  deletedBy?: string;
+  deletedByEmail?: string;
+  deletedAt?: string;
 }
 
 // ======================================================
@@ -1182,6 +1188,9 @@ export interface SpecialOrder {
   sizes: string[]; // e.g. ['Size 39', ..., 'Size 46']
   sizeTargets?: Record<string, number>;
   unitWeightKgBySize?: Record<string, number>;
+  planningUpdatedBy?: string;
+  planningUpdatedAt?: string;
+  planningSource?: string;
   status: 'ACTIVE' | 'READY_FOR_WH' | 'COMPLETED';
   notes?: string;
   createdBy: string;
@@ -1231,6 +1240,10 @@ export interface SpecialOrderFactoryProduction {
   hodConfirmedAt?: string;
 
   status: 'PENDING_HOD_FACTORY' | 'CONFIRMED_IN_FACTORY';
+  deleted?: boolean;
+  deletedBy?: string;
+  deletedByEmail?: string;
+  deletedAt?: string;
   upd: number;
   sy?: number;
 }
@@ -1281,6 +1294,10 @@ export interface SpecialOrderWhDispatch {
   linkedRegularDispatchIds?: string[];
   syncedToRegularDispatchAt?: string;
   status: DispatchStatus;
+  deleted?: boolean;
+  deletedBy?: string;
+  deletedByEmail?: string;
+  deletedAt?: string;
   upd: number;
   sy?: number;
 }

@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertOctagon,
   ArrowRight,
   Boxes,
+  Calendar,
   CheckCircle2,
   ClipboardCheck,
   Factory,
@@ -12,7 +14,9 @@ import {
   PenTool,
   Plus,
   ShieldCheck,
+  Trash2,
   Truck,
+  Upload,
   X,
 } from 'lucide-react';
 import { DigitalSignaturePad } from './DigitalSignaturePad';
@@ -25,13 +29,19 @@ import {
   generateSpecialOrderMovementPdf,
   hodConfirmSpecialOrderFactoryStock,
   hodConfirmSpecialOrderWhDispatch,
+  hodDeleteSpecialOrderFactoryBatch,
+  hodDeleteSpecialOrderWhDispatch,
+  parseSpecialOrderSizePlanWorkbook,
+  pullTargetsFromMonthlyPlans,
   saveSpecialOrderToFirebase,
   submitSpecialOrderProduction,
   submitSpecialOrderWhDispatch,
+  updateSpecialOrderSizePlanning,
   whConfirmSpecialOrderDispatch,
 } from '../services/specialOrderStore';
 import {
   GUM_BOOT_SIZES,
+  ProductionPlanItem,
   SpecialOrder,
   SpecialOrderFactoryProduction,
   SpecialOrderSizeItem,
@@ -43,17 +53,33 @@ import { GENERAL_HAND_OPTIONS, OPERATOR_OPTIONS } from '../types/factoryStaff';
 
 export type SpecialOrderSubTab = 'stock' | 'factory_prod' | 'wh_dispatch' | 'reports';
 
+function getPlanProgressWidthClass(pct: number): string {
+  if (pct <= 0) return 'w-0';
+  if (pct < 12) return 'w-1/12';
+  if (pct < 20) return 'w-1/6';
+  if (pct < 30) return 'w-1/4';
+  if (pct < 40) return 'w-1/3';
+  if (pct < 55) return 'w-1/2';
+  if (pct < 70) return 'w-2/3';
+  if (pct < 80) return 'w-3/4';
+  if (pct < 90) return 'w-5/6';
+  if (pct < 99) return 'w-11/12';
+  return 'w-full';
+}
+
 interface SpecialOrdersViewProps {
   machines: string[];
   orders: SpecialOrder[];
   prodEntries: SpecialOrderFactoryProduction[];
   whDispatches: SpecialOrderWhDispatch[];
+  monthlyPlans?: ProductionPlanItem[];
   permissions: UserPermissions;
   isAdmin: boolean;
   currentUserName: string;
   currentUserEmail: string;
   requestedSubTab?: SpecialOrderSubTab | null;
   onSubTabHandled?: () => void;
+  onDataChanged?: () => void;
 }
 
 export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
@@ -61,12 +87,14 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
   orders,
   prodEntries,
   whDispatches,
+  monthlyPlans = [],
   permissions,
   isAdmin,
   currentUserName,
   currentUserEmail,
   requestedSubTab,
   onSubTabHandled,
+  onDataChanged,
 }) => {
   const [subTab, setSubTab] = useState<SpecialOrderSubTab>('stock');
   const [selectedOrderId, setSelectedOrderId] = useState<string>(
@@ -139,6 +167,22 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
     null | 'prod_shift' | 'prod_hod' | 'wh_shift' | 'wh_receive' | 'wh_hod'
   >(null);
 
+  // Per-Size Planning Modal State
+  const [showPlanningModal, setShowPlanningModal] = useState(false);
+  const [planDraftTargets, setPlanDraftTargets] = useState<Record<string, string>>({});
+  const [planSourceNote, setPlanSourceNote] = useState('Manual Size Planning Entry');
+  const [planImportMsg, setPlanImportMsg] = useState<string | null>(null);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const planFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // HOD Delete Confirmation Modal State
+  const [deleteTarget, setDeleteTarget] = useState<
+    | null
+    | { kind: 'factory'; entry: SpecialOrderFactoryProduction }
+    | { kind: 'wh'; entry: SpecialOrderWhDispatch }
+  >(null);
+  const [deletingRecord, setDeletingRecord] = useState(false);
+
   useEffect(() => {
     if (requestedSubTab) {
       setSubTab(requestedSubTab);
@@ -166,7 +210,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
   const orderProdEntries = useMemo(
     () =>
       prodEntries
-        .filter((p) => !activeOrder || p.orderId === activeOrder.id)
+        .filter((p) => !p.deleted && (!activeOrder || p.orderId === activeOrder.id))
         .sort((a, b) => (b.upd || 0) - (a.upd || 0)),
     [prodEntries, activeOrder]
   );
@@ -174,7 +218,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
   const orderWhDispatches = useMemo(
     () =>
       whDispatches
-        .filter((w) => !activeOrder || w.orderId === activeOrder.id)
+        .filter((w) => !w.deleted && (!activeOrder || w.orderId === activeOrder.id))
         .sort((a, b) => (b.upd || 0) - (a.upd || 0)),
     [whDispatches, activeOrder]
   );
@@ -192,6 +236,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
   const canShiftWrite = isAdmin || permissions.dispatchShiftEntry || permissions.specialOrdersAccess;
   const canWhConfirm = isAdmin || permissions.dispatchWHConfirm;
   const canHodConfirm = isAdmin || permissions.dispatchHODConfirm;
+  const canManagePlanning = isAdmin || canHodConfirm || permissions.productionPlanningAccess;
 
   const flashMsg = (text: string, isError = false) => {
     setFeedback({ text, isError });
@@ -222,6 +267,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
       upd: Date.now(),
     };
     const res = await saveSpecialOrderToFirebase(order);
+    onDataChanged?.();
     setSelectedOrderId(order.id);
     setShowNewOrderModal(false);
     setNewOrderNo('');
@@ -233,6 +279,153 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
         ? `Special Order ${order.orderNo} created & synced.`
         : `Saved locally (${res.error || 'offline'}).`
     );
+  };
+
+  const openPlanningModal = () => {
+    if (!activeOrder) return;
+    const draft: Record<string, string> = {};
+    activeOrder.sizes.forEach((sz) => {
+      const existing = Number(activeOrder.sizeTargets?.[sz] || 0);
+      draft[sz] = existing > 0 ? String(existing) : '';
+    });
+    setPlanDraftTargets(draft);
+    setPlanSourceNote(activeOrder.planningSource || 'Manual Size Planning Entry');
+    setPlanImportMsg(null);
+    setShowPlanningModal(true);
+  };
+
+  const handlePullFromMonthlyPlan = () => {
+    if (!activeOrder) return;
+    const pulled = pullTargetsFromMonthlyPlans(activeOrder, monthlyPlans);
+    if (pulled.matchedSizes === 0) {
+      setPlanImportMsg(
+        monthlyPlans.length === 0
+          ? 'No active Monthly Production Plans found. Enter targets manually or upload an Excel/CSV file.'
+          : 'No matching Gumboot/Size rows found in the latest Monthly Plan. Enter targets below or upload a spreadsheet.'
+      );
+      return;
+    }
+    const nextDraft: Record<string, string> = { ...planDraftTargets };
+    Object.entries(pulled.targets).forEach(([sz, qty]) => {
+      nextDraft[sz] = qty > 0 ? String(qty) : '';
+    });
+    setPlanDraftTargets(nextDraft);
+    setPlanSourceNote(`Monthly Plan (${pulled.activeMonth || 'Active'})`);
+    setPlanImportMsg(
+      `Loaded ${pulled.matchedSizes} size target(s) from Monthly Plan (${pulled.activeMonth || 'Active'}). Review & click Save Size Planning.`
+    );
+  };
+
+  const handlePlanExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !activeOrder) return;
+    try {
+      const parsed = await parseSpecialOrderSizePlanWorkbook(
+        file,
+        activeOrder.sizes,
+        activeOrder.productPrefix
+      );
+      if (parsed.matchedCount === 0) {
+        setPlanImportMsg(
+          `Could not match any size rows (e.g. Size 39–46) in "${file.name}". Ensure columns include Size/Product and Planned Qty.`
+        );
+        return;
+      }
+      const nextDraft: Record<string, string> = { ...planDraftTargets };
+      Object.entries(parsed.targets).forEach(([sz, qty]) => {
+        nextDraft[sz] = qty > 0 ? String(qty) : '';
+      });
+      setPlanDraftTargets(nextDraft);
+      setPlanSourceNote(`Excel Plan (${file.name})`);
+      setPlanImportMsg(
+        `Matched ${parsed.matchedCount} size target(s) from "${file.name}". Review & click Save Size Planning.`
+      );
+    } catch (err: any) {
+      setPlanImportMsg(`Import failed: ${err?.message || 'Invalid workbook format'}`);
+    }
+  };
+
+  const handleSaveSizePlanning = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeOrder) return;
+    setSavingPlan(true);
+    const numericTargets: Record<string, number> = {};
+    activeOrder.sizes.forEach((sz) => {
+      const val = Number(planDraftTargets[sz] || 0);
+      numericTargets[sz] = Number.isFinite(val) && val > 0 ? Math.round(val) : 0;
+    });
+    const res = await updateSpecialOrderSizePlanning({
+      order: activeOrder,
+      sizeTargets: numericTargets,
+      updatedBy: currentUserName,
+      sourceLabel: planSourceNote,
+    });
+    setSavingPlan(false);
+    onDataChanged?.();
+    setShowPlanningModal(false);
+    flashMsg(
+      res.ok
+        ? `Per-size planning targets saved & synced for ${activeOrder.orderNo}.`
+        : `Planning targets saved locally (${res.error || 'offline sync queued'}).`
+    );
+  };
+
+  const handleClearSizePlanning = async () => {
+    if (!activeOrder) return;
+    setSavingPlan(true);
+    const cleared: Record<string, number> = {};
+    activeOrder.sizes.forEach((sz) => {
+      cleared[sz] = 0;
+    });
+    const res = await updateSpecialOrderSizePlanning({
+      order: activeOrder,
+      sizeTargets: cleared,
+      updatedBy: currentUserName,
+      sourceLabel: 'Cleared',
+    });
+    setSavingPlan(false);
+    onDataChanged?.();
+    setShowPlanningModal(false);
+    flashMsg(
+      res.ok
+        ? `Cleared size planning targets for ${activeOrder.orderNo}.`
+        : `Cleared locally (${res.error || 'offline sync queued'}).`
+    );
+  };
+
+  const handleConfirmDeleteRaisedOrder = async () => {
+    if (!deleteTarget || !canHodConfirm) return;
+    setDeletingRecord(true);
+    if (deleteTarget.kind === 'factory') {
+      const res = await hodDeleteSpecialOrderFactoryBatch({
+        entry: deleteTarget.entry,
+        hodName: currentUserName,
+        hodEmail: currentUserEmail,
+      });
+      setDeletingRecord(false);
+      setDeleteTarget(null);
+      onDataChanged?.();
+      flashMsg(
+        res.ok
+          ? `Deleted raised factory batch ${deleteTarget.entry.batchNo} permanently across synced devices.`
+          : `Deleted locally (${res.error || 'pending cloud tombstone sync'}).`
+      );
+    } else {
+      const res = await hodDeleteSpecialOrderWhDispatch({
+        entry: deleteTarget.entry,
+        hodName: currentUserName,
+        hodEmail: currentUserEmail,
+      });
+      setDeletingRecord(false);
+      setDeleteTarget(null);
+      onDataChanged?.();
+      flashMsg(
+        res.ok
+          ? `Deleted raised WH dispatch ${deleteTarget.entry.dispatchRef} permanently across synced devices.`
+          : `Deleted locally (${res.error || 'pending cloud tombstone sync'}).`
+      );
+    }
   };
 
   const handleSubmitFactoryProd = async (e: React.FormEvent) => {
@@ -284,6 +477,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
     setProdSizeQtys({});
     setProdNotes('');
     setProdSig('');
+    onDataChanged?.();
     flashMsg(
       res.ok
         ? `Factory production batch ${res.record.batchNo} submitted (${res.record.totalQty} units) — awaiting Production HOD confirmation.`
@@ -307,6 +501,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
     setActiveFactoryConfirm(null);
     setFactoryHodNotes('');
     setFactoryHodSig('');
+    onDataChanged?.();
     flashMsg(
       res.ok
         ? `Confirmed into Factory Stock (${activeFactoryConfirm.batchNo}).`
@@ -381,6 +576,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
     setWhTrolleyNo('');
     setWhShiftNotes('');
     setWhShiftSig('');
+    onDataChanged?.();
     flashMsg(
       res.ok
         ? `Ready WH Dispatch ${res.record.dispatchRef} submitted (${res.record.totalRecordedQty} units) — WH Personnel notified.`
@@ -432,6 +628,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
     });
     setActiveWhConfirm(null);
     setWhConfirmSig('');
+    onDataChanged?.();
     flashMsg(
       res.ok
         ? `WH receipt confirmed for ${activeWhConfirm.dispatchRef} — awaiting Production HOD final approval.`
@@ -455,6 +652,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
     setActiveHodWhConfirm(null);
     setHodWhNotes('');
     setHodWhSig('');
+    onDataChanged?.();
     flashMsg(
       `Final HOD Confirmed! ${res.linkedDispatchIds.length} record(s) automatically posted into Regular Dispatch Excel & Ledger.`
     );
@@ -506,37 +704,76 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
 
         {/* KPI Strip */}
         {stockSummary && (
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-2.5 tabular-nums">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div className="text-[11px] font-medium text-slate-500">Confirmed Produced</div>
-              <div className="text-lg font-bold text-slate-900">
-                {stockSummary.totalProducedConfirmed.toLocaleString()}
+          <div className="mt-4 space-y-2.5 tabular-nums">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="text-[11px] font-medium text-slate-500">Confirmed Produced</div>
+                <div className="text-lg font-bold text-slate-900">
+                  {stockSummary.totalProducedConfirmed.toLocaleString()}
+                </div>
+              </div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="text-[11px] font-medium text-amber-800">Pending HOD (Factory)</div>
+                <div className="text-lg font-bold text-amber-900">
+                  {stockSummary.totalPendingFactoryHod.toLocaleString()}
+                </div>
+              </div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <div className="text-[11px] font-medium text-emerald-800">Available in Factory</div>
+                <div className="text-lg font-bold text-emerald-900">
+                  {stockSummary.totalAvailableInFactory.toLocaleString()}
+                </div>
+              </div>
+              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
+                <div className="text-[11px] font-medium text-sky-800">Dispatched to WH</div>
+                <div className="text-lg font-bold text-sky-900">
+                  {stockSummary.totalDispatchedToWh.toLocaleString()}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-[#0F1E36] p-3 text-white col-span-2 sm:col-span-1">
+                <div className="text-[11px] font-medium text-slate-300">Confirmed in WH &amp; Dispatch</div>
+                <div className="text-lg font-bold text-white">
+                  {stockSummary.totalConfirmedWh.toLocaleString()}
+                </div>
               </div>
             </div>
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-              <div className="text-[11px] font-medium text-amber-800">Pending HOD (Factory)</div>
-              <div className="text-lg font-bold text-amber-900">
-                {stockSummary.totalPendingFactoryHod.toLocaleString()}
+
+            {stockSummary.totalTargetQty > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="rounded-lg border border-sky-200 bg-sky-50/70 px-3 py-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-sky-800">
+                    Total Planned Required
+                  </div>
+                  <div className="text-base font-black text-sky-900">
+                    {stockSummary.totalTargetQty.toLocaleString()}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">
+                    Required Stock Remaining
+                  </div>
+                  <div className="text-base font-black text-emerald-900">
+                    {stockSummary.totalRequiredRemaining.toLocaleString()}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">
+                    Sizes Open (Required)
+                  </div>
+                  <div className="text-base font-black text-emerald-800">
+                    {stockSummary.openPlanCount}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-rose-700">
+                    Sizes Closed (Red · Plan Met)
+                  </div>
+                  <div className="text-base font-black text-rose-700">
+                    {stockSummary.closedPlanCount}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-              <div className="text-[11px] font-medium text-emerald-800">Available in Factory</div>
-              <div className="text-lg font-bold text-emerald-900">
-                {stockSummary.totalAvailableInFactory.toLocaleString()}
-              </div>
-            </div>
-            <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
-              <div className="text-[11px] font-medium text-sky-800">Dispatched to WH</div>
-              <div className="text-lg font-bold text-sky-900">
-                {stockSummary.totalDispatchedToWh.toLocaleString()}
-              </div>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-[#0F1E36] p-3 text-white col-span-2 sm:col-span-1">
-              <div className="text-[11px] font-medium text-slate-300">Confirmed in WH &amp; Dispatch</div>
-              <div className="text-lg font-bold text-white">
-                {stockSummary.totalConfirmedWh.toLocaleString()}
-              </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -615,10 +852,27 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                 Stock Held in Factory by Size — {activeOrder.orderNo}
               </h3>
               <p className="text-xs text-slate-500">
-                Stock stays strictly in Factory Balance until a Ready Dispatch to WH is submitted and confirmed.
+                Tracks Available Factory Stock against Planned Qty Required per size. Rows turn{' '}
+                <span className="font-bold text-rose-700">RED (Closed)</span> once Available Stock reaches Planned Qty, matching Monthly Planning.
               </p>
+              {activeOrder.planningUpdatedAt && (
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Planning loaded by <b>{activeOrder.planningUpdatedBy || 'Admin'}</b> (
+                  {activeOrder.planningSource || 'Manual'})
+                </p>
+              )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {canManagePlanning && (
+                <button
+                  type="button"
+                  onClick={openPlanningModal}
+                  className="flex items-center gap-1.5 rounded-lg border border-sky-300 bg-sky-50 hover:bg-sky-100 px-3 py-1.5 text-xs font-bold text-sky-900 transition"
+                >
+                  <Calendar className="h-3.5 w-3.5 text-sky-700" />
+                  <span>Load Planning Qty / Size</span>
+                </button>
+              )}
               {canShiftWrite && (
                 <button
                   type="button"
@@ -647,18 +901,43 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                 <tr>
                   <th className="px-3 py-2.5 font-semibold">Size</th>
                   <th className="px-3 py-2.5 font-semibold">Mapped Inventory Item</th>
+                  <th className="px-3 py-2.5 font-semibold text-right">Planned Qty</th>
                   <th className="px-3 py-2.5 font-semibold text-right">Confirmed Produced</th>
                   <th className="px-3 py-2.5 font-semibold text-right">Pending HOD</th>
                   <th className="px-3 py-2.5 font-semibold text-right">Moved to WH</th>
                   <th className="px-3 py-2.5 font-semibold text-right">Available in Factory</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">WH Confirmed</th>
+                  <th className="px-3 py-2.5 font-semibold text-right">Required Stock</th>
+                  <th className="px-3 py-2.5 font-semibold w-36">Plan Progress</th>
+                  <th className="px-3 py-2.5 font-semibold text-center">Plan Flag</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {stockSummary.rows.map((r) => (
-                  <tr key={r.sizeLabel} className="hover:bg-slate-50">
-                    <td className="px-3 py-2.5 font-bold text-[#0F1E36]">{r.sizeLabel}</td>
-                    <td className="px-3 py-2.5 font-medium text-slate-700">{r.productName}</td>
+                  <tr
+                    key={r.sizeLabel}
+                    className={
+                      r.isPlanMet
+                        ? 'bg-rose-50/90 hover:bg-rose-100/80 border-l-4 border-l-rose-600 transition'
+                        : 'hover:bg-slate-50 transition'
+                    }
+                  >
+                    <td
+                      className={`px-3 py-2.5 font-bold ${
+                        r.isPlanMet ? 'text-rose-800' : 'text-[#0F1E36]'
+                      }`}
+                    >
+                      {r.sizeLabel}
+                    </td>
+                    <td
+                      className={`px-3 py-2.5 font-medium ${
+                        r.isPlanMet ? 'text-rose-900 font-semibold' : 'text-slate-700'
+                      }`}
+                    >
+                      {r.productName}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-bold text-sky-700">
+                      {r.targetQty > 0 ? r.targetQty.toLocaleString() : '—'}
+                    </td>
                     <td className="px-3 py-2.5 text-right font-semibold text-slate-900">
                       {r.producedConfirmed.toLocaleString()}
                     </td>
@@ -668,17 +947,72 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                     <td className="px-3 py-2.5 text-right font-semibold text-sky-700">
                       {r.dispatchedToWh.toLocaleString()}
                     </td>
-                    <td className="px-3 py-2.5 text-right font-bold text-emerald-700 bg-emerald-50/60">
+                    <td
+                      className={`px-3 py-2.5 text-right font-bold ${
+                        r.isPlanMet
+                          ? 'text-rose-800 bg-rose-100/70'
+                          : 'text-emerald-700 bg-emerald-50/60'
+                      }`}
+                    >
                       {r.availableInFactory.toLocaleString()}
                     </td>
-                    <td className="px-3 py-2.5 text-right font-semibold text-slate-800">
-                      {r.confirmedWh.toLocaleString()}
+                    <td
+                      className={`px-3 py-2.5 text-right font-black ${
+                        r.targetQty === 0
+                          ? 'text-slate-400'
+                          : r.isPlanMet
+                          ? 'text-rose-700'
+                          : 'text-emerald-700'
+                      }`}
+                    >
+                      {r.targetQty > 0 ? r.requiredRemaining.toLocaleString() : '—'}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {r.targetQty > 0 ? (
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-2 rounded-full bg-slate-200 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${getPlanProgressWidthClass(
+                                r.planProgressPct
+                              )} ${r.isPlanMet ? 'bg-rose-500' : 'bg-emerald-500'}`}
+                            />
+                          </div>
+                          <span
+                            className={`text-[10px] font-black ${
+                              r.isPlanMet ? 'text-rose-700' : 'text-emerald-700'
+                            }`}
+                          >
+                            {r.planProgressPct}%
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      {r.targetQty === 0 ? (
+                        <span className="text-[11px] font-medium text-slate-400">No Plan</span>
+                      ) : r.isPlanMet ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-rose-600 px-2 py-0.5 text-[10px] font-black text-white shadow-2xs">
+                          <AlertOctagon className="h-3 w-3" />
+                          CLOSED — PLAN MET
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-md border border-emerald-500/40 bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-800">
+                          OPEN · {r.requiredRemaining.toLocaleString()} REQ
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
                 <tr className="bg-slate-100 font-bold text-slate-900">
                   <td className="px-3 py-2.5">TOTAL</td>
                   <td className="px-3 py-2.5">{activeOrder.title}</td>
+                  <td className="px-3 py-2.5 text-right text-sky-800">
+                    {stockSummary.totalTargetQty > 0
+                      ? stockSummary.totalTargetQty.toLocaleString()
+                      : '—'}
+                  </td>
                   <td className="px-3 py-2.5 text-right">
                     {stockSummary.totalProducedConfirmed.toLocaleString()}
                   </td>
@@ -691,8 +1025,26 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                   <td className="px-3 py-2.5 text-right text-emerald-800">
                     {stockSummary.totalAvailableInFactory.toLocaleString()}
                   </td>
-                  <td className="px-3 py-2.5 text-right">
-                    {stockSummary.totalConfirmedWh.toLocaleString()}
+                  <td className="px-3 py-2.5 text-right text-emerald-900">
+                    {stockSummary.totalTargetQty > 0
+                      ? stockSummary.totalRequiredRemaining.toLocaleString()
+                      : '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-[11px]">
+                    {stockSummary.totalTargetQty > 0
+                      ? `${Math.min(
+                          100,
+                          Math.round(
+                            (stockSummary.totalAvailableInFactory / stockSummary.totalTargetQty) *
+                              100
+                          )
+                        )}%`
+                      : '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-center text-[10px]">
+                    {stockSummary.totalTargetQty > 0
+                      ? `${stockSummary.closedPlanCount} RED / ${stockSummary.openPlanCount} OPEN`
+                      : '—'}
                   </td>
                 </tr>
               </tbody>
@@ -840,41 +1192,61 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                   Enter Daily Produced Quantities per Size ({activeOrder.sizes.join(', ')})
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  {activeOrder.sizes.map((sizeLabel) => (
-                    <div
-                      key={sizeLabel}
-                      className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 space-y-1.5"
-                    >
-                      <div className="text-xs font-bold text-[#0F1E36]">{sizeLabel}</div>
-                      <input
-                        type="number"
-                        min={0}
-                        placeholder="Qty (pairs/packs)"
-                        value={prodSizeQtys[sizeLabel] || ''}
-                        onChange={(e) =>
-                          setProdSizeQtys((prev) => ({
-                            ...prev,
-                            [sizeLabel]: e.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold tabular-nums"
-                      />
-                      <input
-                        type="number"
-                        step="0.01"
-                        min={0}
-                        placeholder="Unit Wt (kg opt)"
-                        value={prodSizeUnitWt[sizeLabel] || ''}
-                        onChange={(e) =>
-                          setProdSizeUnitWt((prev) => ({
-                            ...prev,
-                            [sizeLabel]: e.target.value,
-                          }))
-                        }
-                        className="w-full rounded border border-slate-200 bg-white px-2.5 py-1 text-[11px] tabular-nums"
-                      />
-                    </div>
-                  ))}
+                  {activeOrder.sizes.map((sizeLabel) => {
+                    const rowPlan = stockSummary?.rows.find((r) => r.sizeLabel === sizeLabel);
+                    return (
+                      <div
+                        key={sizeLabel}
+                        className={`rounded-lg border p-2.5 space-y-1.5 ${
+                          rowPlan?.isPlanMet
+                            ? 'border-rose-300 bg-rose-50/70'
+                            : 'border-slate-200 bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-bold text-[#0F1E36]">{sizeLabel}</span>
+                          {rowPlan && rowPlan.targetQty > 0 && (
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                                rowPlan.isPlanMet
+                                  ? 'bg-rose-600 text-white'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}
+                            >
+                              {rowPlan.isPlanMet ? 'Plan Met' : `Req: ${rowPlan.requiredRemaining}`}
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="Qty (pairs/packs)"
+                          value={prodSizeQtys[sizeLabel] || ''}
+                          onChange={(e) =>
+                            setProdSizeQtys((prev) => ({
+                              ...prev,
+                              [sizeLabel]: e.target.value,
+                            }))
+                          }
+                          className="w-full rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold tabular-nums"
+                        />
+                        <input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          placeholder="Unit Wt (kg opt)"
+                          value={prodSizeUnitWt[sizeLabel] || ''}
+                          onChange={(e) =>
+                            setProdSizeUnitWt((prev) => ({
+                              ...prev,
+                              [sizeLabel]: e.target.value,
+                            }))
+                          }
+                          className="w-full rounded border border-slate-200 bg-white px-2.5 py-1 text-[11px] tabular-nums"
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -968,20 +1340,33 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                       </div>
                     </div>
 
-                    {batch.status === 'PENDING_HOD_FACTORY' && canHodConfirm && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveFactoryConfirm(batch);
-                          setFactoryHodNotes('');
-                          setFactoryHodSig('');
-                        }}
-                        className="shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        <span>HOD Confirm Factory Stock</span>
-                      </button>
-                    )}
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {batch.status === 'PENDING_HOD_FACTORY' && canHodConfirm && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveFactoryConfirm(batch);
+                            setFactoryHodNotes('');
+                            setFactoryHodSig('');
+                          }}
+                          className="flex items-center gap-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          <span>HOD Confirm Factory Stock</span>
+                        </button>
+                      )}
+                      {canHodConfirm && (
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget({ kind: 'factory', entry: batch })}
+                          className="flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 px-3 py-2 text-xs font-bold text-rose-700 transition"
+                          title="Delete Shift In Charge raised batch permanently as HOD"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>Delete</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1281,6 +1666,18 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                           >
                             <ShieldCheck className="h-3.5 w-3.5" />
                             <span>HOD Final Confirm &amp; Sync Dispatch</span>
+                          </button>
+                        )}
+
+                        {canHodConfirm && (
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget({ kind: 'wh', entry: dsp })}
+                            className="flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 transition"
+                            title="Delete Shift In Charge raised WH dispatch permanently as HOD"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Delete</span>
                           </button>
                         )}
                       </div>
@@ -1696,6 +2093,211 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                 className="rounded-lg bg-emerald-700 hover:bg-emerald-600 px-4 py-2 font-bold text-white"
               >
                 Final Confirm &amp; Post to Dispatch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: LOAD PLANNING QUANTITIES PER SIZE */}
+      {showPlanningModal && activeOrder && stockSummary && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 overflow-y-auto">
+          <form
+            onSubmit={handleSaveSizePlanning}
+            className="w-full max-w-2xl rounded-xl border border-slate-300 bg-white p-5 shadow-2xl space-y-4 text-xs my-auto"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div>
+                <h4 className="text-sm font-bold text-[#0F1E36]">
+                  Load Planning Qty Required per Size — {activeOrder.orderNo}
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Factory Stock tracks Available Stock against these size targets and turns RED (Closed) when Required Stock reaches 0.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPlanningModal(false)}
+                className="p-1 text-slate-500 hover:text-slate-800"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <button
+                type="button"
+                onClick={handlePullFromMonthlyPlan}
+                className="flex items-center gap-1.5 rounded-lg border border-sky-300 bg-white hover:bg-sky-50 px-3 py-1.5 font-bold text-sky-900 transition"
+              >
+                <Calendar className="h-3.5 w-3.5 text-sky-700" />
+                <span>Pull from Monthly Plan</span>
+              </button>
+
+              <input
+                ref={planFileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={handlePlanExcelUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => planFileInputRef.current?.click()}
+                className="flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white hover:bg-emerald-50 px-3 py-1.5 font-bold text-emerald-800 transition"
+              >
+                <Upload className="h-3.5 w-3.5 text-emerald-700" />
+                <span>Import Excel / CSV Plan</span>
+              </button>
+
+              <span className="ml-auto text-[11px] text-slate-500">
+                Source: <b className="text-slate-700">{planSourceNote}</b>
+              </span>
+            </div>
+
+            {planImportMsg && (
+              <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] font-semibold text-sky-900">
+                {planImportMsg}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[50vh] overflow-y-auto pr-1">
+              {activeOrder.sizes.map((sz) => {
+                const stockRow = stockSummary.rows.find((r) => r.sizeLabel === sz);
+                const avail = stockRow?.availableInFactory ?? 0;
+                const draftVal = Math.max(0, Number(planDraftTargets[sz] || 0) || 0);
+                const previewReq = draftVal > 0 ? Math.max(0, draftVal - avail) : 0;
+                const previewClosed = draftVal > 0 && avail >= draftVal;
+                return (
+                  <div
+                    key={sz}
+                    className={`rounded-lg border p-3 flex items-center justify-between gap-3 ${
+                      previewClosed
+                        ? 'border-rose-300 bg-rose-50/70'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="font-bold text-[#0F1E36]">{sz}</div>
+                      <div className="text-[10px] text-slate-500 truncate">
+                        Factory Avail: <b className="text-emerald-700 tabular-nums">{avail}</b>
+                        {draftVal > 0 && (
+                          <>
+                            {' · '}
+                            {previewClosed ? (
+                              <span className="font-bold text-rose-700">CLOSED (MET)</span>
+                            ) : (
+                              <span className="font-bold text-emerald-800 tabular-nums">
+                                Req: {previewReq}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <input
+                      type="number"
+                      min={0}
+                      placeholder="Planned Qty"
+                      value={planDraftTargets[sz] ?? ''}
+                      onChange={(e) => {
+                        setPlanSourceNote('Manual Size Planning Entry');
+                        setPlanDraftTargets((prev) => ({ ...prev, [sz]: e.target.value }));
+                      }}
+                      className="w-28 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-right font-bold tabular-nums focus:border-[#0F1E36] focus:outline-none"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3">
+              <button
+                type="button"
+                disabled={savingPlan}
+                onClick={handleClearSizePlanning}
+                className="rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 px-3 py-2 font-semibold text-rose-700 disabled:opacity-50"
+              >
+                Clear All Planning
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPlanningModal(false)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPlan}
+                  className="rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-4 py-2 font-bold text-white disabled:opacity-50"
+                >
+                  {savingPlan ? 'Saving...' : 'Save Size Planning'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL: HOD PERMANENT DELETE OF SHIFT IN CHARGE RAISED ORDER */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-md rounded-xl border border-rose-300 bg-white p-5 shadow-2xl space-y-3 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+              <div className="flex items-center gap-2 text-rose-700">
+                <Trash2 className="h-4 w-4" />
+                <h4 className="text-sm font-bold">
+                  HOD Delete Raised Order (Permanent)
+                </h4>
+              </div>
+              <button type="button" onClick={() => setDeleteTarget(null)}>
+                <X className="h-4 w-4 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-900 space-y-1">
+              <p className="font-bold">
+                {deleteTarget.kind === 'factory'
+                  ? `Factory Batch ${deleteTarget.entry.batchNo}`
+                  : `WH Dispatch ${deleteTarget.entry.dispatchRef}`}
+              </p>
+              <p>
+                Raised by Shift In Charge: <b>{deleteTarget.entry.shiftInChargeName}</b> (
+                {deleteTarget.entry.date} · {deleteTarget.entry.shift})
+              </p>
+              <p>
+                Items:{' '}
+                {deleteTarget.entry.items.map((i) => `${i.sizeLabel}: ${i.qty}`).join(' | ')}
+              </p>
+            </div>
+
+            <p className="text-slate-600 leading-relaxed">
+              Deleting as HOD permanently removes this Shift In Charge order from Factory Stock, pending HOD alerts, and Excel reports across all connected devices so it will not reappear.
+              {deleteTarget.kind === 'wh' &&
+                deleteTarget.entry.linkedRegularDispatchIds &&
+                deleteTarget.entry.linkedRegularDispatchIds.length > 0 &&
+                ' Linked Regular Dispatch ledger rows will also be removed.'}
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={deletingRecord}
+                onClick={() => setDeleteTarget(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingRecord}
+                onClick={handleConfirmDeleteRaisedOrder}
+                className="flex items-center gap-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 px-4 py-2 font-bold text-white disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>{deletingRecord ? 'Deleting...' : 'Delete Permanently'}</span>
               </button>
             </div>
           </div>

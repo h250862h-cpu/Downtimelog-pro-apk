@@ -120,7 +120,7 @@ import {
   subscribeDieselRequests,
   subscribeDieselTank,
 } from './services/dieselStore';
-import { subscribeDispatchEntries } from './services/dispatchStore';
+import { getStoredDispatches, subscribeDispatchEntries } from './services/dispatchStore';
 import { dtl, ymd } from './services/downtimeCalc';
 import {
   getActiveMachines,
@@ -2026,12 +2026,19 @@ export default function App() {
                     orders={specialOrders}
                     prodEntries={specialOrderProductions}
                     whDispatches={specialOrderWhDispatches}
+                    monthlyPlans={monthlyPlans}
                     permissions={effectivePermissions}
                     isAdmin={isAdmin}
                     currentUserName={user.displayName || currentReporter}
                     currentUserEmail={user.email || ''}
                     requestedSubTab={requestedSpecialOrderSubTab}
                     onSubTabHandled={() => setRequestedSpecialOrderSubTab(null)}
+                    onDataChanged={() => {
+                      setSpecialOrders(getLocalSpecialOrders());
+                      setSpecialOrderProductions(getLocalSpecialOrderProductions());
+                      setSpecialOrderWhDispatches(getLocalSpecialOrderWhDispatches());
+                      setDispatchEntries(getStoredDispatches());
+                    }}
                   />
                 )}
 

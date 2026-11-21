@@ -152,7 +152,7 @@ export function normalizeDispatchEntry(entry: DispatchEntry): DispatchEntry {
   };
 }
 
-export function getStoredDispatches(): DispatchEntry[] {
+function readRawStoredDispatches(): DispatchEntry[] {
   try {
     const raw = localStorage.getItem(DISPATCH_STORAGE_KEY);
     if (!raw) return [];
@@ -161,6 +161,10 @@ export function getStoredDispatches(): DispatchEntry[] {
   } catch {
     return [];
   }
+}
+
+export function getStoredDispatches(): DispatchEntry[] {
+  return readRawStoredDispatches().filter((e) => !e.deleted);
 }
 
 export function saveStoredDispatches(entries: DispatchEntry[]) {
@@ -205,7 +209,7 @@ export function repairPendingDispatchQueue(): number {
       localStorage.removeItem(DISPATCH_PENDING_KEY);
       return 0;
     }
-    const entries = getStoredDispatches();
+    const entries = readRawStoredDispatches();
     const byId = new Map(entries.map((e) => [e.id, e]));
     const cleaned: string[] = [];
     const seen = new Set<string>();
@@ -253,7 +257,14 @@ function mergeDispatches(local: DispatchEntry[], remote: DispatchEntry[]): Dispa
     if (!r || !r.id) return;
     const normR = normalizeDispatchEntry(r);
     const existing = map[normR.id];
-    if (!existing || (normR.upd || 0) >= (existing.upd || 0)) {
+    if (!existing) {
+      map[normR.id] = normR;
+    } else if (existing.deleted && !normR.deleted) {
+      // Preserve soft-delete tombstone once deleted unless remote timestamp is strictly newer and non-deleted
+      if ((normR.upd || 0) > (existing.upd || 0)) {
+        map[normR.id] = normR;
+      }
+    } else if (normR.deleted || (normR.upd || 0) >= (existing.upd || 0)) {
       map[normR.id] = normR;
     }
   });
@@ -271,7 +282,7 @@ export async function saveDispatchEntryToFirebase(
   };
 
   // Persist locally immediately
-  const local = getStoredDispatches();
+  const local = readRawStoredDispatches();
   const idx = local.findIndex((x) => x.id === updatedEntry.id);
   const nextLocal = [...local];
   if (idx >= 0) {
@@ -294,7 +305,7 @@ export async function saveDispatchEntryToFirebase(
     lastDispatchSyncError = null;
 
     // Update sync timestamp in local cache
-    const latest = getStoredDispatches().map((x) =>
+    const latest = readRawStoredDispatches().map((x) =>
       x.id === updatedEntry.id ? { ...x, sy: payload.sy } : x
     );
     saveStoredDispatches(latest);
@@ -318,13 +329,31 @@ export async function saveDispatchEntryToFirebase(
   }
 }
 
+export async function softDeleteDispatchEntryById(
+  id: string,
+  deletedBy: string,
+  deletedByEmail: string
+): Promise<{ ok: boolean; error?: string }> {
+  const raw = readRawStoredDispatches();
+  const existing = raw.find((x) => x.id === id);
+  if (!existing) return { ok: true };
+  return saveDispatchEntryToFirebase({
+    ...existing,
+    deleted: true,
+    deletedBy,
+    deletedByEmail,
+    deletedAt: new Date().toISOString(),
+    upd: Date.now(),
+  });
+}
+
 export async function flushPendingDispatches(): Promise<number> {
   repairPendingDispatchQueue();
   const pendingIds = getPendingDispatchQueue();
   if (!pendingIds.length) return 0;
   if (!(await canAccessFirestorePath(DISPATCH_COLLECTION, false))) return 0;
 
-  const local = getStoredDispatches();
+  const local = readRawStoredDispatches();
   let flushed = 0;
   for (const id of pendingIds) {
     if (isFirestorePathBlockedByRules(DISPATCH_COLLECTION)) break;
@@ -347,12 +376,12 @@ export async function pollDispatchEntries(): Promise<DispatchEntry[]> {
     snap.forEach((d) => {
       remote.push(d.data() as DispatchEntry);
     });
-    const local = getStoredDispatches();
+    const local = readRawStoredDispatches();
     const merged = mergeDispatches(local, remote);
     saveStoredDispatches(merged);
     clearSyncedFromDispatchQueue(local, remote);
     lastDispatchSyncError = null;
-    return merged;
+    return merged.filter((e) => !e.deleted);
   } catch (err: any) {
     lastDispatchSyncError = err?.message || null;
     return getStoredDispatches();
@@ -383,13 +412,13 @@ export function subscribeDispatchEntries(
           snapshot.forEach((d) => {
             remote.push(d.data() as DispatchEntry);
           });
-          const local = getStoredDispatches();
+          const local = readRawStoredDispatches();
           const merged = mergeDispatches(local, remote);
           saveStoredDispatches(merged);
           clearSyncedFromDispatchQueue(local, remote);
           lastDispatchSyncError = null;
           onSyncError?.(null);
-          onUpdate(merged);
+          onUpdate(merged.filter((e) => !e.deleted));
           if (!snapshot.metadata.fromCache) {
             flushPendingDispatches().catch(() => {});
           }

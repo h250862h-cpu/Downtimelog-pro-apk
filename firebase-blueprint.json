@@ -301,13 +301,17 @@
     },
     "special_order": {
       "title": "Special Production Order Header",
-      "description": "Special customer/factory order tracker (e.g. Gum Boots Sizes 39-46)",
+      "description": "Special customer/factory order tracker (e.g. Gum Boots Sizes 39-46) with per-size planning targets",
       "type": "object",
       "properties": {
         "orderNo": { "type": "string", "maxLength": 60 },
         "title": { "type": "string", "maxLength": 200 },
         "productPrefix": { "type": "string", "maxLength": 150 },
         "machine": { "type": "string", "maxLength": 100 },
+        "sizeTargets": { "type": "object" },
+        "planningUpdatedBy": { "type": "string", "maxLength": 120 },
+        "planningUpdatedAt": { "type": "string", "maxLength": 50 },
+        "planningSource": { "type": "string", "maxLength": 120 },
         "status": { "type": "string", "maxLength": 30 },
         "createdAt": { "type": "string", "maxLength": 50 },
         "upd": { "type": "number" }
@@ -328,6 +332,9 @@
         "totalQty": { "type": "number" },
         "totalWeightKg": { "type": "number" },
         "status": { "type": "string", "maxLength": 40 },
+        "deleted": { "type": "boolean" },
+        "deletedBy": { "type": "string", "maxLength": 120 },
+        "deletedAt": { "type": "string", "maxLength": 50 },
         "upd": { "type": "number" }
       },
       "required": ["batchNo", "orderId", "date", "shift", "totalQty", "status"]
@@ -346,6 +353,9 @@
         "totalRecordedQty": { "type": "number" },
         "totalWhReceivedQty": { "type": "number" },
         "status": { "type": "string", "maxLength": 30 },
+        "deleted": { "type": "boolean" },
+        "deletedBy": { "type": "string", "maxLength": 120 },
+        "deletedAt": { "type": "string", "maxLength": 50 },
         "upd": { "type": "number" }
       },
       "required": ["dispatchRef", "orderId", "date", "shift", "totalRecordedQty", "status"]
