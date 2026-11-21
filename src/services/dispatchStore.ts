@@ -5,7 +5,16 @@ import {
   setDoc,
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
-import { db, deepSanitizeForFirestore, ensureFirebaseAuth, getCollectionDocsServerFirst } from '../firebase';
+import {
+  canAccessFirestorePath,
+  db,
+  deepSanitizeForFirestore,
+  ensureFirebaseAuth,
+  getCollectionDocsServerFirst,
+  isFirestorePathBlockedByRules,
+  isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
+} from '../firebase';
 import { DispatchEntry, normalizeMachineName, SopProductionRecord } from '../types';
 import { FACTORY_STAFF_ROSTER } from '../types/factoryStaff';
 import { saveFileBlob, ymd } from './downtimeCalc';
@@ -187,6 +196,50 @@ function removePendingDispatchId(id: string) {
   } catch {}
 }
 
+export function repairPendingDispatchQueue(): number {
+  try {
+    const raw = localStorage.getItem(DISPATCH_PENDING_KEY);
+    if (!raw) return 0;
+    const queue = JSON.parse(raw);
+    if (!Array.isArray(queue)) {
+      localStorage.removeItem(DISPATCH_PENDING_KEY);
+      return 0;
+    }
+    const entries = getStoredDispatches();
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const id of queue) {
+      if (typeof id !== 'string' || !id || seen.has(id)) continue;
+      const found = byId.get(id);
+      if (!found) continue;
+      if (found.sy && (!found.upd || found.sy >= found.upd)) continue;
+      seen.add(id);
+      cleaned.push(id);
+    }
+    if (cleaned.length !== queue.length) {
+      localStorage.setItem(DISPATCH_PENDING_KEY, JSON.stringify(cleaned));
+    }
+    return cleaned.length;
+  } catch {
+    return 0;
+  }
+}
+
+function clearSyncedFromDispatchQueue(local: DispatchEntry[], remote: DispatchEntry[]) {
+  const pending = getPendingDispatchQueue();
+  if (!pending.length) return;
+  const localMap = new Map(local.map((e) => [e.id, e]));
+  const remoteMap = new Map(remote.map((e) => [e.id, e]));
+  pending.forEach((id) => {
+    const r = remoteMap.get(id);
+    const l = localMap.get(id);
+    if (r && (!l || (r.upd || 0) >= (l.upd || 0))) {
+      removePendingDispatchId(id);
+    }
+  });
+}
+
 function sanitizeDispatchForFirestore<T extends Record<string, any>>(obj: T): T {
   return deepSanitizeForFirestore(obj);
 }
@@ -248,20 +301,33 @@ export async function saveDispatchEntryToFirebase(
 
     return { ok: true };
   } catch (err: any) {
+    const code = String(err?.code || '').toLowerCase();
     const msg = err?.message || 'Failed syncing dispatch entry to cloud';
-    lastDispatchSyncError = msg;
-    addPendingDispatchId(updatedEntry.id);
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(DISPATCH_COLLECTION);
+      addPendingDispatchId(updatedEntry.id);
+      lastDispatchSyncError = null;
+    } else if (code.includes('invalid-argument')) {
+      removePendingDispatchId(updatedEntry.id);
+      lastDispatchSyncError = null;
+    } else {
+      lastDispatchSyncError = msg;
+      addPendingDispatchId(updatedEntry.id);
+    }
     return { ok: false, error: msg };
   }
 }
 
 export async function flushPendingDispatches(): Promise<number> {
+  repairPendingDispatchQueue();
   const pendingIds = getPendingDispatchQueue();
   if (!pendingIds.length) return 0;
+  if (!(await canAccessFirestorePath(DISPATCH_COLLECTION, false))) return 0;
 
   const local = getStoredDispatches();
   let flushed = 0;
   for (const id of pendingIds) {
+    if (isFirestorePathBlockedByRules(DISPATCH_COLLECTION)) break;
     const found = local.find((e) => e.id === id);
     if (found) {
       const res = await saveDispatchEntryToFirebase(found, { preserveUpd: true });
@@ -281,8 +347,10 @@ export async function pollDispatchEntries(): Promise<DispatchEntry[]> {
     snap.forEach((d) => {
       remote.push(d.data() as DispatchEntry);
     });
-    const merged = mergeDispatches(getStoredDispatches(), remote);
+    const local = getStoredDispatches();
+    const merged = mergeDispatches(local, remote);
     saveStoredDispatches(merged);
+    clearSyncedFromDispatchQueue(local, remote);
     lastDispatchSyncError = null;
     return merged;
   } catch (err: any) {
@@ -315,8 +383,10 @@ export function subscribeDispatchEntries(
           snapshot.forEach((d) => {
             remote.push(d.data() as DispatchEntry);
           });
-          const merged = mergeDispatches(getStoredDispatches(), remote);
+          const local = getStoredDispatches();
+          const merged = mergeDispatches(local, remote);
           saveStoredDispatches(merged);
+          clearSyncedFromDispatchQueue(local, remote);
           lastDispatchSyncError = null;
           onSyncError?.(null);
           onUpdate(merged);

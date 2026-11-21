@@ -13,6 +13,7 @@ import {
   getCollectionDocsServerFirst,
   getDocServerFirst,
   handleFirestoreError,
+  isPermissionDeniedError,
   isRestrictedShiftInChargeAccount,
   OperationType,
   reconnectFirestoreNetwork,
@@ -333,26 +334,40 @@ export async function pollMachineryConfig(): Promise<string[]> {
  * Listen for real-time machinery config updates from Firestore
  */
 export function subscribeMachineryConfig(onUpdate: (machines: string[]) => void) {
-  const configDoc = doc(db, 'app_config', 'machinery');
-  return onSnapshot(
-    configDoc,
-    { includeMetadataChanges: true },
-    (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        if (Array.isArray(data.customMachines)) {
-          setStoredCustomMachines(data.customMachines);
+  let unsub: (() => void) | null = null;
+  let cancelled = false;
+
+  (async () => {
+    await ensureFirebaseAuth().catch(() => false);
+    if (cancelled) return;
+    try {
+      const configDoc = doc(db, 'app_config', 'machinery');
+      unsub = onSnapshot(
+        configDoc,
+        { includeMetadataChanges: true },
+        (snapshot) => {
+          if (snapshot.exists()) {
+            const data = snapshot.data();
+            if (Array.isArray(data.customMachines)) {
+              setStoredCustomMachines(data.customMachines);
+            }
+            if (Array.isArray(data.goneMachines)) {
+              setStoredGoneMachines(data.goneMachines);
+            }
+            onUpdate(getActiveMachines());
+          }
+        },
+        (err) => {
+          console.warn('Machinery subscription note:', err.message);
         }
-        if (Array.isArray(data.goneMachines)) {
-          setStoredGoneMachines(data.goneMachines);
-        }
-        onUpdate(getActiveMachines());
-      }
-    },
-    (err) => {
-      console.warn('Machinery subscription note:', err.message);
-    }
-  );
+      );
+    } catch {}
+  })();
+
+  return () => {
+    cancelled = true;
+    if (unsub) unsub();
+  };
 }
 
 // User / Device identity
@@ -588,6 +603,36 @@ export function removeFromPendingSyncQueue(id: string) {
   } catch {}
 }
 
+export function repairPendingSyncQueue(): number {
+  try {
+    const raw = localStorage.getItem(PENDING_QUEUE_KEY);
+    if (!raw) return 0;
+    const queue = JSON.parse(raw);
+    if (!Array.isArray(queue)) {
+      localStorage.removeItem(PENDING_QUEUE_KEY);
+      return 0;
+    }
+    const entries = getStoredEntries();
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const id of queue) {
+      if (typeof id !== 'string' || !id || id.startsWith('SEED-') || seen.has(id)) continue;
+      const found = byId.get(id);
+      if (!found || found.del === 1) continue;
+      if (found.sy && (!found.upd || found.sy >= found.upd)) continue;
+      seen.add(id);
+      cleaned.push(id);
+    }
+    if (cleaned.length !== queue.length) {
+      localStorage.setItem(PENDING_QUEUE_KEY, JSON.stringify(cleaned));
+    }
+    return cleaned.length;
+  } catch {
+    return 0;
+  }
+}
+
 function markEntrySyncedLocally(entryId: string, syncTimestamp: number) {
   try {
     const current = getStoredEntries();
@@ -607,6 +652,7 @@ function markEntrySyncedLocally(entryId: string, syncTimestamp: number) {
 
 export async function flushPendingSyncQueue(): Promise<number> {
   await ensureFirebaseAuth().catch(() => false);
+  repairPendingSyncQueue();
 
   const queue = getPendingSyncQueue();
   const allEntries = getStoredEntries();
@@ -618,7 +664,7 @@ export async function flushPendingSyncQueue(): Promise<number> {
       return;
     }
     const found = allEntries.find((e) => e.id === id);
-    if (found) {
+    if (found && found.del !== 1) {
       toSyncMap.set(id, found);
     } else {
       removeFromPendingSyncQueue(id);
@@ -626,7 +672,7 @@ export async function flushPendingSyncQueue(): Promise<number> {
   });
 
   allEntries.forEach((e) => {
-    if (e.id.startsWith('SEED-')) return;
+    if (e.id.startsWith('SEED-') || e.del === 1) return;
     if (!e.sy || (e.upd && e.upd > e.sy)) {
       toSyncMap.set(e.id, e);
     }
@@ -635,6 +681,7 @@ export async function flushPendingSyncQueue(): Promise<number> {
   if (toSyncMap.size === 0) return 0;
 
   let syncedCount = 0;
+  let updatedLocalMetadata = false;
   for (const entry of Array.from(toSyncMap.values())) {
     try {
       const docRef = doc(db, 'downtime_entries', entry.id);
@@ -642,12 +689,21 @@ export async function flushPendingSyncQueue(): Promise<number> {
       const payload = sanitizeForFirestore({ ...entry, sy: syncTs });
       await setDoc(docRef, payload, { merge: true });
       entry.sy = syncTs;
+      updatedLocalMetadata = true;
       removeFromPendingSyncQueue(entry.id);
       syncedCount++;
       lastSyncError = null;
     } catch (err: any) {
       const msg = err?.message || String(err);
-      lastSyncError = msg;
+      const code = String(err?.code || '').toLowerCase();
+      if (isPermissionDeniedError(err) || code.includes('invalid-argument')) {
+        // Specific malformed/soft-deleted entry rejected by server rules — prevent infinite queue spin
+        removeFromPendingSyncQueue(entry.id);
+        entry.sy = entry.upd || Date.now();
+        updatedLocalMetadata = true;
+      } else {
+        lastSyncError = msg;
+      }
       console.warn(`Auto-sync retry note for ${entry.id}:`, msg);
       if (msg.toLowerCase().includes('permission')) {
         try {
@@ -657,7 +713,7 @@ export async function flushPendingSyncQueue(): Promise<number> {
     }
   }
 
-  if (syncedCount > 0) {
+  if (syncedCount > 0 || updatedLocalMetadata) {
     saveStoredEntries(allEntries);
   }
   return syncedCount;
@@ -676,7 +732,11 @@ export async function pollFirebaseEntries(
       const remoteMap: Record<string, DowntimeEntry> = {};
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as DowntimeEntry;
-        remoteMap[docSnap.id] = normalizeDowntimeEntry({ ...data, id: docSnap.id });
+        remoteMap[docSnap.id] = normalizeDowntimeEntry({
+          ...data,
+          id: docSnap.id,
+          sy: data.sy || data.upd || 1,
+        });
       });
 
       const currentLocal = getStoredEntries();
@@ -686,12 +746,18 @@ export async function pollFirebaseEntries(
         if (e.id.startsWith('SEED-') && Object.keys(remoteMap).length > 0) {
           if (!mergedMap[e.id]) return;
         }
+        if (e.del === 1) {
+          removeFromPendingSyncQueue(e.id);
+          return;
+        }
         if (!mergedMap[e.id]) {
           mergedMap[e.id] = e;
           addToPendingSyncQueue(e.id);
         } else if ((e.upd || 0) > (mergedMap[e.id].upd || 0)) {
           mergedMap[e.id] = e;
           addToPendingSyncQueue(e.id);
+        } else {
+          removeFromPendingSyncQueue(e.id);
         }
       });
 
@@ -751,7 +817,11 @@ export function subscribeFirebaseEntries(
           const remoteMap: Record<string, DowntimeEntry> = {};
           snapshot.forEach((docSnap) => {
             const data = docSnap.data() as DowntimeEntry;
-            remoteMap[docSnap.id] = normalizeDowntimeEntry({ ...data, id: docSnap.id });
+            remoteMap[docSnap.id] = normalizeDowntimeEntry({
+              ...data,
+              id: docSnap.id,
+              sy: data.sy || data.upd || 1,
+            });
           });
 
           const currentLocal = getStoredEntries();
@@ -768,12 +838,18 @@ export function subscribeFirebaseEntries(
               }
               return;
             }
+            if (e.del === 1) {
+              removeFromPendingSyncQueue(e.id);
+              return;
+            }
             if (!mergedMap[e.id]) {
               mergedMap[e.id] = e;
               addToPendingSyncQueue(e.id);
             } else if ((e.upd || 0) > (mergedMap[e.id].upd || 0)) {
               mergedMap[e.id] = e;
               addToPendingSyncQueue(e.id);
+            } else {
+              removeFromPendingSyncQueue(e.id);
             }
           });
 

@@ -146,7 +146,7 @@ export async function ensureFirebaseAuth(): Promise<boolean> {
 export function deepSanitizeForFirestore<T>(val: T): T {
   if (val === null || val === undefined) return val;
   if (typeof val === 'number') {
-    return (Number.isNaN(val) ? 0 : val) as unknown as T;
+    return (Number.isFinite(val) ? val : 0) as unknown as T;
   }
   if (Array.isArray(val)) {
     return val
@@ -154,7 +154,7 @@ export function deepSanitizeForFirestore<T>(val: T): T {
       .map((item) =>
         item && typeof item === 'object' && !(item instanceof Date)
           ? deepSanitizeForFirestore(item)
-          : typeof item === 'number' && Number.isNaN(item)
+          : typeof item === 'number' && !Number.isFinite(item)
           ? 0
           : item
       ) as unknown as T;
@@ -164,7 +164,7 @@ export function deepSanitizeForFirestore<T>(val: T): T {
     Object.keys(val as Record<string, any>).forEach((k) => {
       const v = (val as Record<string, any>)[k];
       if (v === undefined) return;
-      if (typeof v === 'number' && Number.isNaN(v)) return;
+      if (typeof v === 'number' && !Number.isFinite(v)) return;
       clean[k] =
         v !== null && typeof v === 'object' && !(v instanceof Date)
           ? deepSanitizeForFirestore(v)
@@ -175,21 +175,237 @@ export function deepSanitizeForFirestore<T>(val: T): T {
   return val;
 }
 
+const pathAccessCache = new Map<string, { allowed: boolean; checkedAt: number }>();
+const pathAccessInFlight = new Map<string, Promise<boolean>>();
+let pathAccessCacheScope: string | null = null;
+const PATH_ACCESS_TTL_MS = 15 * 60 * 1000;
+const PATH_ACCESS_STORAGE_KEY = 'dt_fs_path_access_v1';
+
+const CORE_FIRESTORE_COLLECTIONS = new Set([
+  'downtime_entries',
+  'app_config',
+  'plant_users',
+  'dispatch_entries',
+  'attendance_batches',
+  'qc_inspections',
+]);
+
+const SECONDARY_SENTINEL_COLLECTION = 'sop_production_logs';
+const SECONDARY_COLLECTIONS = [
+  'sop_production_logs',
+  'sop_qc_checks',
+  'sop_scrap_pipeline',
+  'sop_mixing_reports',
+  'sop_shift_handovers',
+  'historical_dispatch_uploads',
+  'monthly_production_plans',
+  'diesel_tank_config',
+  'diesel_fuel_requests',
+  'diesel_grn_records',
+  'power_cut_logs',
+  'generator_logs',
+  'special_orders',
+  'special_order_production',
+  'special_order_wh_dispatches',
+  'quality_trial_reports',
+];
+
+function getPathCacheScope(): string {
+  return `${firebaseConfig.projectId}:${auth.currentUser?.uid || 'anon'}`;
+}
+
+function hydratePathAccessFromStorage() {
+  const activeScope = getPathCacheScope();
+  if (pathAccessCacheScope === activeScope && pathAccessCache.size > 0) return;
+  if (pathAccessCacheScope !== activeScope) {
+    pathAccessCache.clear();
+    pathAccessCacheScope = activeScope;
+  }
+  try {
+    const raw = localStorage.getItem(PATH_ACCESS_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as {
+      scope?: string;
+      entries?: Record<string, { allowed: boolean; checkedAt: number }>;
+    };
+    const isSameProject =
+      typeof parsed?.scope === 'string' && parsed.scope.startsWith(`${firebaseConfig.projectId}:`);
+    const scopeMatches =
+      parsed?.scope === activeScope || (activeScope.endsWith(':anon') && isSameProject);
+    if (!scopeMatches || !parsed.entries) return;
+    const now = Date.now();
+    Object.entries(parsed.entries).forEach(([k, v]) => {
+      if (v && typeof v.checkedAt === 'number' && now - v.checkedAt < PATH_ACCESS_TTL_MS) {
+        pathAccessCache.set(k, v);
+      }
+    });
+  } catch {}
+}
+
+function persistPathAccessToStorage() {
+  try {
+    const activeScope = getPathCacheScope();
+    pathAccessCacheScope = activeScope;
+    const entries: Record<string, { allowed: boolean; checkedAt: number }> = {};
+    pathAccessCache.forEach((v, k) => {
+      entries[k] = v;
+    });
+    localStorage.setItem(
+      PATH_ACCESS_STORAGE_KEY,
+      JSON.stringify({ scope: activeScope, entries })
+    );
+  } catch {}
+}
+
+export function resetFirestorePathAccessCache() {
+  pathAccessCache.clear();
+  pathAccessCacheScope = null;
+  try {
+    localStorage.removeItem(PATH_ACCESS_STORAGE_KEY);
+  } catch {}
+}
+
+export function isPermissionDeniedError(err: any): boolean {
+  const code = String(err?.code || '').toLowerCase();
+  const msg = String(err?.message || err || '').toLowerCase();
+  return code.includes('permission-denied') || msg.includes('missing or insufficient permissions') || msg.includes('permission_denied');
+}
+
+export function isFirestorePathBlockedByRules(firestorePath: string): boolean {
+  const collectionRoot = firestorePath.replace(/^\/+/, '').split('/')[0];
+  if (!collectionRoot) return false;
+  hydratePathAccessFromStorage();
+  const cached = pathAccessCache.get(collectionRoot);
+  if (!cached) return false;
+  if (Date.now() - cached.checkedAt >= PATH_ACCESS_TTL_MS) return false;
+  return cached.allowed === false;
+}
+
+export function markFirestorePathBlockedByRules(firestorePath: string) {
+  const collectionRoot = firestorePath.replace(/^\/+/, '').split('/')[0];
+  if (!collectionRoot) return;
+  const ts = Date.now();
+  pathAccessCache.set(collectionRoot, { allowed: false, checkedAt: ts });
+  if (!CORE_FIRESTORE_COLLECTIONS.has(collectionRoot)) {
+    SECONDARY_COLLECTIONS.forEach((col) => {
+      pathAccessCache.set(col, { allowed: false, checkedAt: ts });
+    });
+  }
+  persistPathAccessToStorage();
+}
+
+async function probeCollectionRootAccess(collectionRoot: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
+    await ensureFirebaseAuth().catch(() => false);
+    const token = auth.currentUser ? await auth.currentUser.getIdToken().catch(() => null) : null;
+    const encodedDb = encodeURIComponent(dbId);
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${encodedDb}/documents/${collectionRoot}?pageSize=1`;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch(url, { method: 'GET', headers });
+    if (res.status === 403 || res.status === 401) {
+      pathAccessCache.set(collectionRoot, { allowed: false, checkedAt: Date.now() });
+      persistPathAccessToStorage();
+      return false;
+    }
+    if (res.ok || res.status === 404) {
+      pathAccessCache.set(collectionRoot, { allowed: true, checkedAt: Date.now() });
+      persistPathAccessToStorage();
+      return true;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 /**
- * Server-first collection read so manual sync & polling bypass stale persistentLocalCache
- * and always pull updates created by other phones/devices when online.
+ * Lightweight REST check for whether the active Firestore security rules allow reading
+ * a given collection or document path. Keeps Firestore SDK's internal WatchStream free
+ * from concurrent PERMISSION_DENIED target cancellations when optional modules are gated.
+ */
+export async function canAccessFirestorePath(
+  firestorePath: string,
+  _isDocument: boolean = false
+): Promise<boolean> {
+  const cleanPath = firestorePath.replace(/^\/+/, '');
+  const collectionRoot = cleanPath.split('/')[0];
+  if (!collectionRoot) return true;
+
+  await ensureFirebaseAuth().catch(() => false);
+  hydratePathAccessFromStorage();
+
+  const now = Date.now();
+  const cached = pathAccessCache.get(collectionRoot);
+  if (cached && now - cached.checkedAt < PATH_ACCESS_TTL_MS) {
+    return cached.allowed;
+  }
+
+  const inFlightKey = `${getPathCacheScope()}:${collectionRoot}`;
+  const existing = pathAccessInFlight.get(inFlightKey);
+  if (existing) return existing;
+
+  const probePromise = (async () => {
+    try {
+      // If probing a secondary module collection, check sentinel first so we do not emit 16 parallel 403 requests
+      if (!CORE_FIRESTORE_COLLECTIONS.has(collectionRoot)) {
+        const sentinelCached = pathAccessCache.get(SECONDARY_SENTINEL_COLLECTION);
+        let sentinelAllowed: boolean;
+        if (sentinelCached && Date.now() - sentinelCached.checkedAt < PATH_ACCESS_TTL_MS) {
+          sentinelAllowed = sentinelCached.allowed;
+        } else if (collectionRoot !== SECONDARY_SENTINEL_COLLECTION) {
+          sentinelAllowed = await canAccessFirestorePath(SECONDARY_SENTINEL_COLLECTION, false);
+        } else {
+          sentinelAllowed = await probeCollectionRootAccess(SECONDARY_SENTINEL_COLLECTION);
+        }
+
+        if (!sentinelAllowed) {
+          const ts = Date.now();
+          SECONDARY_COLLECTIONS.forEach((col) => {
+            pathAccessCache.set(col, { allowed: false, checkedAt: ts });
+          });
+          pathAccessCache.set(collectionRoot, { allowed: false, checkedAt: ts });
+          persistPathAccessToStorage();
+          return false;
+        }
+        if (collectionRoot === SECONDARY_SENTINEL_COLLECTION) {
+          return true;
+        }
+      }
+
+      return await probeCollectionRootAccess(collectionRoot);
+    } finally {
+      pathAccessInFlight.delete(inFlightKey);
+    }
+  })();
+
+  pathAccessInFlight.set(inFlightKey, probePromise);
+  return probePromise;
+}
+
+/**
+ * Server-first collection read so manual sync & polling always pull
+ * updates created by other phones/devices when online.
  */
 export async function getCollectionDocsServerFirst<T = DocumentData>(
   colOrQuery: CollectionReference<T> | Query<T>
 ): Promise<QuerySnapshot<T>> {
   const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
   if (isBrowserOnline) {
+    const refPath = (colOrQuery as any)?.path;
+    if (typeof refPath === 'string' && !(await canAccessFirestorePath(refPath, false))) {
+      throw new Error(`Missing or insufficient permissions for ${refPath}`);
+    }
     try {
       return await getDocsFromServer(colOrQuery);
     } catch (err: any) {
       const msg = (err?.message || '').toLowerCase();
       if (msg.includes('permission')) throw err;
-      // Fall back to cache only if server unreachable
     }
   }
   return await getDocs(colOrQuery);
@@ -203,6 +419,10 @@ export async function getDocServerFirst<T = DocumentData>(
 ): Promise<DocumentSnapshot<T>> {
   const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
   if (isBrowserOnline) {
+    const refPath = (docRef as any)?.path;
+    if (typeof refPath === 'string' && !(await canAccessFirestorePath(refPath, true))) {
+      throw new Error(`Missing or insufficient permissions for ${refPath}`);
+    }
     try {
       return await getDocFromServer(docRef);
     } catch (err: any) {
@@ -213,12 +433,8 @@ export async function getDocServerFirst<T = DocumentData>(
   return await getDoc(docRef);
 }
 
-let lastNetworkEnableAt = 0;
-
 export async function reconnectFirestoreNetwork(force: boolean = false): Promise<boolean> {
-  const now = Date.now();
-  if (force || now - lastNetworkEnableAt > 10000) {
-    lastNetworkEnableAt = now;
+  if (force) {
     try {
       await enableNetwork(db);
     } catch {}
@@ -234,7 +450,7 @@ export async function probeFirestoreCloudHealth(): Promise<{
 }> {
   const started = Date.now();
   try {
-    await reconnectFirestoreNetwork(false);
+    await ensureFirebaseAuth().catch(() => false);
     await getDocFromServer(doc(db, 'app_config', 'machinery'));
     return {
       ok: true,
@@ -256,7 +472,7 @@ export async function testConnection() {
     return;
   }
   try {
-    await auth.authStateReady().catch(() => {});
+    await ensureFirebaseAuth().catch(() => false);
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
@@ -677,6 +893,7 @@ export async function registerWithEmail(email: string, pass: string, displayName
 
 export async function logoutUser() {
   setActiveSessionUser(null);
+  resetFirestorePathAccessCache();
   try {
     await signOut(auth);
   } catch (err) {
@@ -793,55 +1010,64 @@ export function subscribePlantUsers(
   const initial = getLocalPlantUsers().map((u) => enforceShiftInChargeAccount(u).account);
   onUpdate(initial);
 
-  try {
-    const colRef = collection(db, 'plant_users');
-    const unsub = onSnapshot(
-      colRef,
-      (snapshot) => {
-        const list: PlantUserAccount[] = [];
-        const docsToPatch: PlantUserAccount[] = [];
-        snapshot.forEach((d) => {
-          const rawUser = d.data() as PlantUserAccount;
-          const { account, changed } = enforceShiftInChargeAccount(rawUser);
-          list.push(account);
-          if (changed) docsToPatch.push(account);
-        });
-        if (docsToPatch.length > 0) {
-          Promise.all(
-            docsToPatch.map((u) =>
-              setDoc(doc(db, 'plant_users', u.uid), u, { merge: true }).catch(() => {})
-            )
-          ).catch(() => {});
-        }
-        if (list.length > 0) {
-          // Merge with master admin if not in list
-          if (!list.some((u) => u.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase())) {
-            list.unshift({
-              uid: 'admin-master',
-              email: PRIMARY_ADMIN_EMAIL,
-              displayName: 'Plant Administrator',
-              role: 'Plant Administrator',
-              department: 'Management',
-              permissions: { ...FULL_ADMIN_PERMISSIONS },
-              createdBy: 'System Root',
-              createdAt: '2026-01-01T00:00:00.000Z',
-              status: 'active',
-            });
+  let unsub: (() => void) | null = null;
+  let cancelled = false;
+
+  (async () => {
+    await ensureFirebaseAuth().catch(() => false);
+    if (cancelled) return;
+    try {
+      const colRef = collection(db, 'plant_users');
+      unsub = onSnapshot(
+        colRef,
+        (snapshot) => {
+          const list: PlantUserAccount[] = [];
+          const docsToPatch: PlantUserAccount[] = [];
+          snapshot.forEach((d) => {
+            const rawUser = d.data() as PlantUserAccount;
+            const { account, changed } = enforceShiftInChargeAccount(rawUser);
+            list.push(account);
+            if (changed) docsToPatch.push(account);
+          });
+          if (docsToPatch.length > 0) {
+            Promise.all(
+              docsToPatch.map((u) =>
+                setDoc(doc(db, 'plant_users', u.uid), u, { merge: true }).catch(() => {})
+              )
+            ).catch(() => {});
           }
-          try {
-            localStorage.setItem('dt_plant_users', JSON.stringify(list));
-          } catch {}
-          onUpdate(list);
+          if (list.length > 0) {
+            // Merge with master admin if not in list
+            if (!list.some((u) => u.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase())) {
+              list.unshift({
+                uid: 'admin-master',
+                email: PRIMARY_ADMIN_EMAIL,
+                displayName: 'Plant Administrator',
+                role: 'Plant Administrator',
+                department: 'Management',
+                permissions: { ...FULL_ADMIN_PERMISSIONS },
+                createdBy: 'System Root',
+                createdAt: '2026-01-01T00:00:00.000Z',
+                status: 'active',
+              });
+            }
+            try {
+              localStorage.setItem('dt_plant_users', JSON.stringify(list));
+            } catch {}
+            onUpdate(list);
+          }
+        },
+        (err) => {
+          console.warn('plant_users Firestore subscription fallback:', err.message);
         }
-      },
-      (err) => {
-        console.warn('plant_users Firestore subscription fallback:', err.message);
-      }
-    );
-    return unsub;
-  } catch {
-    return () => {};
-  }
+      );
+    } catch {}
+  })();
+
+  return () => {
+    cancelled = true;
+    if (unsub) unsub();
+  };
 }
 
 /**

@@ -64,6 +64,7 @@ import { SyncAndMachinesView } from './components/SyncAndMachinesView';
 import polymerWatermarkImg from './assets/images/polymer_3d_watermark_1795109115357.jpg';
 import {
   auth,
+  canAccessFirestorePath,
   ensureFirebaseAuth,
   getActiveSessionUser,
   getLocalPlantUsers,
@@ -140,6 +141,7 @@ import {
 } from './services/specialOrderStore';
 import {
   getUnifiedPendingQueueBreakdown,
+  repairAllPendingSyncQueues,
   runFullCloudSyncNow,
 } from './services/cloudSyncService';
 import {
@@ -229,6 +231,7 @@ export default function App() {
     role?: string;
   } | null>(() => getActiveSessionUser());
   const [authLoading, setAuthLoading] = useState(true);
+  const [firebaseReady, setFirebaseReady] = useState(false);
   const [plantUsers, setPlantUsers] = useState<PlantUserAccount[]>(() => getLocalPlantUsers());
 
   // Active Navigation Tab & Sub-stage Navigation
@@ -320,9 +323,10 @@ export default function App() {
   // Firebase Sync Status & Pending Queue (Across ALL App Modules)
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('synced');
   const [syncStatusMsg, setSyncStatusMsg] = useState<string>('Sync initialized');
-  const [pendingSyncCount, setPendingSyncCount] = useState<number>(
-    () => getUnifiedPendingQueueBreakdown().totalPending
-  );
+  const [pendingSyncCount, setPendingSyncCount] = useState<number>(() => {
+    repairAllPendingSyncQueues();
+    return getUnifiedPendingQueueBreakdown().totalPending;
+  });
   const [isManualSyncing, setIsManualSyncing] = useState(false);
 
   // Modals
@@ -431,24 +435,47 @@ export default function App() {
 
   // Refresh machines and local entries
   const refreshLocalState = () => {
+    repairAllPendingSyncQueues();
     setMachines(getActiveMachines());
     setEntries(getStoredEntries());
     setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
     setSyncErrorMsg(getLastSyncError());
   };
 
-  // 1. Auth Initialization & Listener
+  // 1. Auth Initialization & Listener (completes auth hydration BEFORE opening Firestore WatchStreams)
   useEffect(() => {
-    testConnection();
+    let mounted = true;
 
-    const session = getActiveSessionUser();
-    if (session) {
-      setUser(session);
-      const namePart = session.displayName || session.email.split('@')[0].toUpperCase();
-      setCurrentReporter(namePart);
-      setCurrentReporterName(namePart);
-      ensureFirebaseAuth().catch(() => {});
-    }
+    const initFirebaseSession = async () => {
+      const session = getActiveSessionUser();
+      if (session) {
+        setUser(session);
+        const namePart = session.displayName || session.email.split('@')[0].toUpperCase();
+        setCurrentReporter(namePart);
+        setCurrentReporterName(namePart);
+        await ensureFirebaseAuth().catch(() => false);
+      } else {
+        await auth.authStateReady().catch(() => {});
+      }
+
+      if (!mounted) return;
+      if (session || auth.currentUser) {
+        await canAccessFirestorePath('sop_production_logs', false).catch(() => false);
+        if (mounted) {
+          repairAllPendingSyncQueues();
+          setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
+        }
+      }
+      await testConnection().catch(() => {});
+      if (mounted) {
+        repairAllPendingSyncQueues();
+        setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
+        setFirebaseReady(true);
+        setAuthLoading(false);
+      }
+    };
+
+    initFirebaseSession();
 
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
       const localSession = getActiveSessionUser();
@@ -480,6 +507,7 @@ export default function App() {
     });
 
     return () => {
+      mounted = false;
       unsubAuth();
     };
   }, []);
@@ -487,7 +515,7 @@ export default function App() {
   // 2. Real-time Firestore Subscriptions (Entries, Machinery, Plant Users RBAC, Dispatch)
   const isUserSignedIn = Boolean(user);
   useEffect(() => {
-    if (!isUserSignedIn) return;
+    if (!isUserSignedIn || !firebaseReady) return;
 
     const unsubEntries = subscribeFirebaseEntries(
       (newEntries) => {
@@ -578,8 +606,14 @@ export default function App() {
     }, 2500);
 
     // 24/7 Always-Live Keep-Alive Heartbeat & Server-First Cross-Device Reconciliation
+    let keepAliveInFlight = false;
+    let lastKeepAliveAt = 0;
+
     const runLiveKeepAlive = async () => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+      if (keepAliveInFlight) return;
+      keepAliveInFlight = true;
+      lastKeepAliveAt = Date.now();
       try {
         const res = await runFullCloudSyncNow();
         setEntries(res.data.entries);
@@ -619,17 +653,29 @@ export default function App() {
             regs.forEach((r) => r.update().catch(() => {}));
           }).catch(() => {});
         }
-      } catch {}
+      } catch {} finally {
+        keepAliveInFlight = false;
+      }
     };
 
-    // Immediately pull fresh server updates on login / opening a shared link
+    // Auto-repair stale queues and pull/flush server updates immediately after listeners stabilize
+    repairAllPendingSyncQueues();
+    setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
+    canAccessFirestorePath('sop_production_logs', false)
+      .then(() => {
+        repairAllPendingSyncQueues();
+        setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
+      })
+      .catch(() => {});
     const initialPullTimer = setTimeout(() => {
       runLiveKeepAlive();
-    }, 1000);
+    }, 50);
 
     const handleVisibilityOrOnline = () => {
       if (document.visibilityState === 'visible' || navigator.onLine) {
-        runLiveKeepAlive();
+        if (Date.now() - lastKeepAliveAt > 10000) {
+          runLiveKeepAlive();
+        }
       }
     };
 
@@ -667,7 +713,7 @@ export default function App() {
       window.removeEventListener('online', handleVisibilityOrOnline);
       window.removeEventListener('focus', handleVisibilityOrOnline);
     };
-  }, [isUserSignedIn]);
+  }, [isUserSignedIn, firebaseReady]);
 
   // Screen Wake Lock Manager (Keeps shop-floor tablets/phones awake & live when toggled)
   useEffect(() => {
@@ -1151,7 +1197,7 @@ export default function App() {
   const handleManualSyncNow = async () => {
     setIsManualSyncing(true);
     try {
-      const res = await runFullCloudSyncNow();
+      const res = await runFullCloudSyncNow(true);
       setEntries(res.data.entries);
       setMachines(res.data.machines);
       setDispatchEntries(res.data.dispatches);

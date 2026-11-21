@@ -6,7 +6,16 @@ import {
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { QC_CSV_SEED_VERSION, SEEDED_QC_RECORDS } from '../data/qcCsvSeed';
-import { db, deepSanitizeForFirestore, ensureFirebaseAuth, getCollectionDocsServerFirst } from '../firebase';
+import {
+  canAccessFirestorePath,
+  db,
+  deepSanitizeForFirestore,
+  ensureFirebaseAuth,
+  getCollectionDocsServerFirst,
+  isFirestorePathBlockedByRules,
+  isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
+} from '../firebase';
 import {
   DispatchEntry,
   normalizeMachineName,
@@ -125,6 +134,50 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
   const norm = (item: T): T => (normalizeFn ? normalizeFn(item) : item);
   const getLocal = () => readLocalList<T>(storageKey).map(norm);
 
+  const repair = (): number => {
+    try {
+      const raw = localStorage.getItem(pendingKey);
+      if (!raw) return 0;
+      const queue = JSON.parse(raw);
+      if (!Array.isArray(queue)) {
+        localStorage.removeItem(pendingKey);
+        return 0;
+      }
+      const local = getLocal();
+      const byId = new Map(local.map((x) => [x.id, x]));
+      const cleaned: string[] = [];
+      const seen = new Set<string>();
+      for (const id of queue) {
+        if (typeof id !== 'string' || !id || seen.has(id)) continue;
+        const found = byId.get(id);
+        if (!found) continue;
+        if (found.sy && (!found.upd || found.sy >= found.upd)) continue;
+        seen.add(id);
+        cleaned.push(id);
+      }
+      if (cleaned.length !== queue.length) {
+        localStorage.setItem(pendingKey, JSON.stringify(cleaned));
+      }
+      return cleaned.length;
+    } catch {
+      return 0;
+    }
+  };
+
+  const clearSyncedFromQueue = (local: T[], remote: T[]) => {
+    const pending = readPendingQueue(pendingKey);
+    if (!pending.length) return;
+    const localMap = new Map(local.map((x) => [x.id, x]));
+    const remoteMap = new Map(remote.map((x) => [x.id, x]));
+    pending.forEach((id) => {
+      const r = remoteMap.get(id);
+      const l = localMap.get(id);
+      if (r && (!l || (r.upd || 0) >= (l.upd || 0))) {
+        removePendingId(pendingKey, id);
+      }
+    });
+  };
+
   const save = async (
     item: T,
     options?: { preserveUpd?: boolean }
@@ -159,17 +212,24 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
       writeLocalList(storageKey, latest);
       return { ok: true };
     } catch (err: any) {
+      if (isPermissionDeniedError(err)) {
+        markFirestorePathBlockedByRules(collectionName);
+      }
       addPendingId(pendingKey, updatedItem.id);
       return { ok: false, error: err?.message || `Failed syncing ${collectionName}` };
     }
   };
 
   const flush = async (): Promise<number> => {
+    repair();
     const pendingIds = readPendingQueue(pendingKey);
     if (!pendingIds.length) return 0;
+    const allowed = await canAccessFirestorePath(collectionName, false);
+    if (!allowed) return 0;
     const local = getLocal();
     let count = 0;
     for (const id of pendingIds) {
+      if (isFirestorePathBlockedByRules(collectionName)) break;
       const found = local.find((x) => x.id === id);
       if (found) {
         const res = await save(found, { preserveUpd: true });
@@ -184,15 +244,24 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
   const poll = async (): Promise<T[]> => {
     try {
       await ensureFirebaseAuth();
+      if (!(await canAccessFirestorePath(collectionName, false))) {
+        return getLocal();
+      }
       const snap = await getCollectionDocsServerFirst(collection(db, collectionName));
       const remote: T[] = [];
       snap.forEach((d) => {
-        remote.push(norm(d.data() as T));
+        const raw = d.data() as T;
+        remote.push(norm({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 }));
       });
-      const merged = mergeRecords(getLocal(), remote, normalizeFn);
+      const local = getLocal();
+      const merged = mergeRecords(local, remote, normalizeFn);
       writeLocalList(storageKey, merged);
+      clearSyncedFromQueue(local, remote);
       return merged;
-    } catch {
+    } catch (err: any) {
+      if (isPermissionDeniedError(err)) {
+        markFirestorePathBlockedByRules(collectionName);
+      }
       return getLocal();
     }
   };
@@ -206,28 +275,38 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
     const start = async () => {
       await ensureFirebaseAuth();
       if (cancelled) return;
-      try {
-        unsub = onSnapshot(
-          collection(db, collectionName),
-          { includeMetadataChanges: true },
-          (snapshot) => {
-            const remote: T[] = [];
-            snapshot.forEach((d) => {
-              remote.push(norm(d.data() as T));
-            });
-            const merged = mergeRecords(getLocal(), remote, normalizeFn);
-            writeLocalList(storageKey, merged);
-            onUpdate(merged);
-            if (!snapshot.metadata.fromCache) {
-              flush().catch(() => {});
+      const canWatch = await canAccessFirestorePath(collectionName, false);
+      if (cancelled) return;
+      if (canWatch) {
+        try {
+          unsub = onSnapshot(
+            collection(db, collectionName),
+            { includeMetadataChanges: true },
+            (snapshot) => {
+              const remote: T[] = [];
+              snapshot.forEach((d) => {
+                const raw = d.data() as T;
+                remote.push(norm({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 }));
+              });
+              const local = getLocal();
+              const merged = mergeRecords(local, remote, normalizeFn);
+              writeLocalList(storageKey, merged);
+              clearSyncedFromQueue(local, remote);
+              onUpdate(merged);
+              if (!snapshot.metadata.fromCache) {
+                flush().catch(() => {});
+              }
+            },
+            (err) => {
+              if (isPermissionDeniedError(err)) {
+                markFirestorePathBlockedByRules(collectionName);
+              }
+              console.warn(`${collectionName} listener fallback:`, err.message);
             }
-          },
-          (err) => {
-            console.warn(`${collectionName} listener fallback:`, err.message);
-          }
-        );
-      } catch (e) {
-        console.warn(`${collectionName} subscribe error:`, e);
+          );
+        } catch (e) {
+          console.warn(`${collectionName} subscribe error:`, e);
+        }
       }
 
       poll()
@@ -254,7 +333,7 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
     };
   };
 
-  return { getLocal, save, flush, poll, subscribe };
+  return { getLocal, save, flush, poll, subscribe, repair };
 }
 
 const prodStore = createCollectionStore<SopProductionRecord>(PROD_KEY, PROD_PENDING_KEY, PROD_COLLECTION, (r) => ({
@@ -334,14 +413,36 @@ export const flushPendingSopHandovers = handoverStore.flush;
 export const pollSopHandovers = handoverStore.poll;
 export const subscribeSopHandovers = handoverStore.subscribe;
 
-export function getTotalPendingSopCount(): number {
+export function repairAllSopPendingQueues(): number {
   return (
-    readPendingQueue(PROD_PENDING_KEY).length +
-    readPendingQueue(QC_PENDING_KEY).length +
-    readPendingQueue(SCRAP_PENDING_KEY).length +
-    readPendingQueue(MIXING_PENDING_KEY).length +
-    readPendingQueue(HANDOVER_PENDING_KEY).length
+    prodStore.repair() +
+    qcStore.repair() +
+    scrapStore.repair() +
+    mixingStore.repair() +
+    handoverStore.repair()
   );
+}
+
+export function getSopPendingBreakdown(): { active: number; ruleBlocked: number } {
+  const buckets = [
+    { key: PROD_PENDING_KEY, col: PROD_COLLECTION },
+    { key: QC_PENDING_KEY, col: QC_COLLECTION },
+    { key: SCRAP_PENDING_KEY, col: SCRAP_COLLECTION },
+    { key: MIXING_PENDING_KEY, col: MIXING_COLLECTION },
+    { key: HANDOVER_PENDING_KEY, col: HANDOVER_COLLECTION },
+  ];
+  let active = 0;
+  let ruleBlocked = 0;
+  buckets.forEach(({ key, col }) => {
+    const len = readPendingQueue(key).length;
+    if (isFirestorePathBlockedByRules(col)) ruleBlocked += len;
+    else active += len;
+  });
+  return { active, ruleBlocked };
+}
+
+export function getTotalPendingSopCount(): number {
+  return getSopPendingBreakdown().active;
 }
 
 export async function flushAllPendingSopData(): Promise<number> {

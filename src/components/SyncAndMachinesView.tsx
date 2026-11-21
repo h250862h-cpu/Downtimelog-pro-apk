@@ -385,7 +385,7 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
     setIsSyncingNow(true);
     try {
       await syncAllLocalToFirebase(entries).catch(() => 0);
-      const diag = await runFullCloudSyncNow();
+      const diag = await runFullCloudSyncNow(true);
       setCloudDiag(diag);
       setPendingBreakdown(diag.pendingAfter);
       if (onFullCloudSync) {
@@ -1518,6 +1518,11 @@ git push -u origin main`}
             </div>
             <div className="text-[11px] font-mono text-slate-400">
               Device Outbox: <b className={pendingBreakdown.totalPending > 0 ? 'text-amber-300' : 'text-emerald-400'}>{pendingBreakdown.totalPending} pending</b>
+              {pendingBreakdown.ruleBlockedPending > 0 && (
+                <span className="ml-2 text-slate-500">
+                  ({pendingBreakdown.ruleBlockedPending} saved locally)
+                </span>
+              )}
             </div>
           </div>
 

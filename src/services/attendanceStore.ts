@@ -6,10 +6,14 @@ import {
 } from 'firebase/firestore';
 import historicalAttendanceRaw from '../data/historicalAttendance.json';
 import {
+  canAccessFirestorePath,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
+  isFirestorePathBlockedByRules,
+  isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
 } from '../firebase';
 import { normalizeMachineName } from '../types';
 import { AttendancePerson, ParsedAttendanceMessage, QCInspectionRecord } from '../types/attendance';
@@ -163,6 +167,39 @@ function removePendingAttendance(id: string) {
   savePendingAttendanceQueue(queue);
 }
 
+export function repairPendingAttendanceQueues(): number {
+  const queue = getPendingAttendanceQueue();
+  const seen = new Set<string>();
+  const cleaned = queue.filter((q) => {
+    if (!q || !q.id || !q.date || q.id === 'ATT-SAMPLE-01' || q.isHistorical || seen.has(q.id)) {
+      return false;
+    }
+    seen.add(q.id);
+    return true;
+  });
+  if (cleaned.length !== queue.length) {
+    savePendingAttendanceQueue(cleaned);
+  }
+  return cleaned.length;
+}
+
+function clearSyncedFromAttendanceQueue(remoteList: ParsedAttendanceMessage[]) {
+  const queue = getPendingAttendanceQueue();
+  if (!queue.length || !remoteList.length) return;
+  const byId = new Map(remoteList.map((r) => [r.id, r]));
+  const byKey = new Map(remoteList.map((r) => [batchKey(r), r]));
+  const remaining = queue.filter((pendingItem) => {
+    const match = byId.get(pendingItem.id) || byKey.get(batchKey(pendingItem));
+    if (match && (match.createdAt || 0) >= (pendingItem.createdAt || 0)) {
+      return false;
+    }
+    return true;
+  });
+  if (remaining.length !== queue.length) {
+    savePendingAttendanceQueue(remaining);
+  }
+}
+
 function getCustomLocalAttendanceBatches(): ParsedAttendanceMessage[] {
   const collected: ParsedAttendanceMessage[] = [];
   try {
@@ -275,6 +312,7 @@ export async function pollAttendanceBatches(): Promise<ParsedAttendanceMessage[]
     const pending = getPendingAttendanceQueue();
     const merged = mergeAttendanceBatches([...localCustom, ...remoteList, ...pending]);
     saveLocalAttendanceBatch(merged);
+    clearSyncedFromAttendanceQueue(remoteList);
     return merged;
   } catch {
     return getLocalAttendanceBatch();
@@ -291,6 +329,8 @@ export function subscribeAttendanceBatches(
 
   const start = async () => {
     await ensureFirebaseAuth().catch(() => false);
+    if (cancelled) return;
+    if (!(await canAccessFirestorePath('attendance_batches', false))) return;
     if (cancelled) return;
 
     const colRef = collection(db, 'attendance_batches');
@@ -312,6 +352,7 @@ export function subscribeAttendanceBatches(
         // Keep local un-synced/pending edits + all remote multi-device batches
         const merged = mergeAttendanceBatches([...localCustom, ...remoteList, ...pending]);
         saveLocalAttendanceBatch(merged);
+        clearSyncedFromAttendanceQueue(remoteList);
         onUpdate(merged);
 
         if (!snapshot.metadata.fromCache) {
@@ -344,6 +385,9 @@ export async function syncAttendanceBatchToFirebase(item: ParsedAttendanceMessag
     removePendingAttendance(id);
     return true;
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules('attendance_batches');
+    }
     console.warn('Attendance sync deferred locally:', err?.message || err);
     enqueuePendingAttendance(localItem);
     return false;
@@ -351,8 +395,10 @@ export async function syncAttendanceBatchToFirebase(item: ParsedAttendanceMessag
 }
 
 export async function flushPendingAttendanceBatches(): Promise<number> {
+  repairPendingAttendanceQueues();
   const pending = getPendingAttendanceQueue();
   if (!pending.length) return 0;
+  if (!(await canAccessFirestorePath('attendance_batches', false))) return 0;
   let flushed = 0;
   for (const item of pending) {
     const ok = await syncAttendanceBatchToFirebase(item);
@@ -361,8 +407,29 @@ export async function flushPendingAttendanceBatches(): Promise<number> {
   return flushed;
 }
 
+export function getAttendanceAndQcPendingBreakdown(): {
+  active: number;
+  ruleBlocked: number;
+} {
+  const attCount = getPendingAttendanceQueue().length;
+  const qcCount = getPendingQCLogsCount();
+  let active = 0;
+  let ruleBlocked = 0;
+  if (isFirestorePathBlockedByRules('attendance_batches')) {
+    ruleBlocked += attCount;
+  } else {
+    active += attCount;
+  }
+  if (isFirestorePathBlockedByRules('qc_inspections')) {
+    ruleBlocked += qcCount;
+  } else {
+    active += qcCount;
+  }
+  return { active, ruleBlocked };
+}
+
 export function getPendingAttendanceCount(): number {
-  return getPendingAttendanceQueue().length + getPendingQCLogsCount();
+  return getAttendanceAndQcPendingBreakdown().active;
 }
 
 export async function deleteAttendanceBatchFromFirebase(_id: string) {
@@ -493,6 +560,7 @@ export async function flushPendingQCLogs(): Promise<{ success: number; failed: n
   let success = 0;
   let failed = 0;
   if (!pending.length) return { success, failed };
+  if (!(await canAccessFirestorePath('qc_inspections', false))) return { success, failed };
 
   try {
     await ensureFirebaseAuth();
@@ -504,7 +572,12 @@ export async function flushPendingQCLogs(): Promise<{ success: number; failed: n
       await setDoc(docRef, deepSanitizeForFirestore({ ...item, synced: true }), { merge: true });
       item.synced = true;
       success++;
-    } catch {
+    } catch (err: any) {
+      if (isPermissionDeniedError(err)) {
+        markFirestorePathBlockedByRules('qc_inspections');
+        failed++;
+        break;
+      }
       failed++;
     }
   }
@@ -550,6 +623,8 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
 
   const start = async () => {
     await ensureFirebaseAuth().catch(() => false);
+    if (cancelled) return;
+    if (!(await canAccessFirestorePath('qc_inspections', false))) return;
     if (cancelled) return;
     const colRef = collection(db, 'qc_inspections');
     unsub = onSnapshot(
@@ -615,6 +690,9 @@ export async function syncQCLogToFirebase(rawItem: QCInspectionRecord): Promise<
     saveLocalQCLogs(current);
     return true;
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules('qc_inspections');
+    }
     console.warn('QC sync offline/deferred, queued locally:', err.message);
     item.synced = false;
     const current = getLocalQCLogs();

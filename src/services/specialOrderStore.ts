@@ -8,10 +8,14 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import {
+  canAccessFirestorePath,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
+  isFirestorePathBlockedByRules,
+  isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
 } from '../firebase';
 import {
   DispatchEntry,
@@ -120,6 +124,56 @@ function removePendingId(key: string, id: string) {
   saveLocalList(key, q);
 }
 
+function repairQueueForList<T extends { id: string; upd?: number; sy?: number }>(
+  pendingKey: string,
+  items: T[]
+): number {
+  try {
+    const raw = localStorage.getItem(pendingKey);
+    if (!raw) return 0;
+    const queue = JSON.parse(raw);
+    if (!Array.isArray(queue)) {
+      localStorage.removeItem(pendingKey);
+      return 0;
+    }
+    const byId = new Map(items.map((x) => [x.id, x]));
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const id of queue) {
+      if (typeof id !== 'string' || !id || seen.has(id)) continue;
+      const found = byId.get(id);
+      if (!found) continue;
+      if (found.sy && (!found.upd || found.sy >= found.upd)) continue;
+      seen.add(id);
+      cleaned.push(id);
+    }
+    if (cleaned.length !== queue.length) {
+      localStorage.setItem(pendingKey, JSON.stringify(cleaned));
+    }
+    return cleaned.length;
+  } catch {
+    return 0;
+  }
+}
+
+function clearSyncedIdsFromQueue<T extends { id: string; upd?: number }>(
+  pendingKey: string,
+  local: T[],
+  remote: T[]
+) {
+  const pending = readLocalList<string>(pendingKey);
+  if (!pending.length) return;
+  const localMap = new Map(local.map((x) => [x.id, x]));
+  const remoteMap = new Map(remote.map((x) => [x.id, x]));
+  pending.forEach((id) => {
+    const r = remoteMap.get(id);
+    const l = localMap.get(id);
+    if (r && (!l || (r.upd || 0) >= (l.upd || 0))) {
+      removePendingId(pendingKey, id);
+    }
+  });
+}
+
 function ensureDefaultGumBootOrder(orders: SpecialOrder[]): SpecialOrder[] {
   const hasDefault = orders.some((o) => o.id === DEFAULT_GUM_BOOT_SPECIAL_ORDER.id);
   if (hasDefault) return orders;
@@ -161,11 +215,19 @@ export async function saveSpecialOrderToFirebase(
 
   try {
     await ensureFirebaseAuth();
-    const payload = sanitizeForFirestore({ ...updated, sy: Date.now() });
+    const syncTs = Date.now();
+    const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
     await setDoc(doc(db, ORDERS_COL, updated.id), payload, { merge: true });
     removePendingId(ORDERS_PENDING_KEY, updated.id);
+    const latest = getLocalSpecialOrders().map((x) =>
+      x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrder) : x
+    );
+    saveLocalList(ORDERS_STORAGE_KEY, latest);
     return { ok: true };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(ORDERS_COL);
+    }
     addPendingId(ORDERS_PENDING_KEY, updated.id);
     return { ok: false, error: err?.message || 'Saved locally (offline)' };
   }
@@ -186,11 +248,19 @@ export async function saveSpecialOrderProductionToFirebase(
 
   try {
     await ensureFirebaseAuth();
-    const payload = sanitizeForFirestore({ ...updated, sy: Date.now() });
+    const syncTs = Date.now();
+    const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
     await setDoc(doc(db, PROD_COL, updated.id), payload, { merge: true });
     removePendingId(PROD_PENDING_KEY, updated.id);
+    const latest = getLocalSpecialOrderProductions().map((x) =>
+      x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrderFactoryProduction) : x
+    );
+    saveLocalList(PROD_STORAGE_KEY, latest);
     return { ok: true };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(PROD_COL);
+    }
     addPendingId(PROD_PENDING_KEY, updated.id);
     return { ok: false, error: err?.message || 'Saved locally (offline)' };
   }
@@ -211,59 +281,96 @@ export async function saveSpecialOrderWhDispatchToFirebase(
 
   try {
     await ensureFirebaseAuth();
-    const payload = sanitizeForFirestore({ ...updated, sy: Date.now() });
+    const syncTs = Date.now();
+    const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
     await setDoc(doc(db, WH_DISPATCH_COL, updated.id), payload, { merge: true });
     removePendingId(WH_DISPATCH_PENDING_KEY, updated.id);
+    const latest = getLocalSpecialOrderWhDispatches().map((x) =>
+      x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrderWhDispatch) : x
+    );
+    saveLocalList(WH_DISPATCH_STORAGE_KEY, latest);
     return { ok: true };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(WH_DISPATCH_COL);
+    }
     addPendingId(WH_DISPATCH_PENDING_KEY, updated.id);
     return { ok: false, error: err?.message || 'Saved locally (offline)' };
   }
 }
 
-export function getPendingSpecialOrderCount(): number {
+export function repairPendingSpecialOrderQueues(): number {
   return (
-    readLocalList<string>(ORDERS_PENDING_KEY).length +
-    readLocalList<string>(PROD_PENDING_KEY).length +
-    readLocalList<string>(WH_DISPATCH_PENDING_KEY).length
+    repairQueueForList(ORDERS_PENDING_KEY, getLocalSpecialOrders() as Array<SpecialOrder & { sy?: number }>) +
+    repairQueueForList(PROD_PENDING_KEY, getLocalSpecialOrderProductions() as Array<SpecialOrderFactoryProduction & { sy?: number }>) +
+    repairQueueForList(WH_DISPATCH_PENDING_KEY, getLocalSpecialOrderWhDispatches() as Array<SpecialOrderWhDispatch & { sy?: number }>)
   );
 }
 
+export function getSpecialOrderPendingBreakdown(): { active: number; ruleBlocked: number } {
+  const ordLen = readLocalList<string>(ORDERS_PENDING_KEY).length;
+  const prodLen = readLocalList<string>(PROD_PENDING_KEY).length;
+  const whLen = readLocalList<string>(WH_DISPATCH_PENDING_KEY).length;
+  let active = 0;
+  let ruleBlocked = 0;
+  if (isFirestorePathBlockedByRules(ORDERS_COL)) ruleBlocked += ordLen;
+  else active += ordLen;
+  if (isFirestorePathBlockedByRules(PROD_COL)) ruleBlocked += prodLen;
+  else active += prodLen;
+  if (isFirestorePathBlockedByRules(WH_DISPATCH_COL)) ruleBlocked += whLen;
+  else active += whLen;
+  return { active, ruleBlocked };
+}
+
+export function getPendingSpecialOrderCount(): number {
+  return getSpecialOrderPendingBreakdown().active;
+}
+
 export async function flushPendingSpecialOrderData(): Promise<number> {
+  repairPendingSpecialOrderQueues();
   let count = 0;
   const orderIds = readLocalList<string>(ORDERS_PENDING_KEY);
-  const localOrders = getLocalSpecialOrders();
-  for (const id of orderIds) {
-    const found = localOrders.find((x) => x.id === id);
-    if (found) {
-      const r = await saveSpecialOrderToFirebase(found, { preserveUpd: true });
-      if (r.ok) count++;
-    } else {
-      removePendingId(ORDERS_PENDING_KEY, id);
+  if (orderIds.length && (await canAccessFirestorePath(ORDERS_COL, false))) {
+    const localOrders = getLocalSpecialOrders();
+    for (const id of orderIds) {
+      if (isFirestorePathBlockedByRules(ORDERS_COL)) break;
+      const found = localOrders.find((x) => x.id === id);
+      if (found) {
+        const r = await saveSpecialOrderToFirebase(found, { preserveUpd: true });
+        if (r.ok) count++;
+      } else {
+        removePendingId(ORDERS_PENDING_KEY, id);
+      }
     }
   }
 
   const prodIds = readLocalList<string>(PROD_PENDING_KEY);
-  const localProd = getLocalSpecialOrderProductions();
-  for (const id of prodIds) {
-    const found = localProd.find((x) => x.id === id);
-    if (found) {
-      const r = await saveSpecialOrderProductionToFirebase(found, { preserveUpd: true });
-      if (r.ok) count++;
-    } else {
-      removePendingId(PROD_PENDING_KEY, id);
+  if (prodIds.length && (await canAccessFirestorePath(PROD_COL, false))) {
+    const localProd = getLocalSpecialOrderProductions();
+    for (const id of prodIds) {
+      if (isFirestorePathBlockedByRules(PROD_COL)) break;
+      const found = localProd.find((x) => x.id === id);
+      if (found) {
+        const r = await saveSpecialOrderProductionToFirebase(found, { preserveUpd: true });
+        if (r.ok) count++;
+      } else {
+        removePendingId(PROD_PENDING_KEY, id);
+      }
     }
   }
 
   const whIds = readLocalList<string>(WH_DISPATCH_PENDING_KEY);
-  const localWh = getLocalSpecialOrderWhDispatches();
-  for (const id of whIds) {
-    const found = localWh.find((x) => x.id === id);
-    if (found) {
-      const r = await saveSpecialOrderWhDispatchToFirebase(found, { preserveUpd: true });
-      if (r.ok) count++;
-    } else {
-      removePendingId(WH_DISPATCH_PENDING_KEY, id);
+  if (whIds.length && (await canAccessFirestorePath(WH_DISPATCH_COL, false))) {
+    const localWh = getLocalSpecialOrderWhDispatches();
+    for (const id of whIds) {
+      if (isFirestorePathBlockedByRules(WH_DISPATCH_COL)) break;
+      const found = localWh.find((x) => x.id === id);
+      if (found) {
+        const r = await saveSpecialOrderWhDispatchToFirebase(found, { preserveUpd: true });
+        if (r.ok) count++;
+      } else {
+        removePendingId(WH_DISPATCH_PENDING_KEY, id);
+      }
     }
   }
 
@@ -273,13 +380,24 @@ export async function flushPendingSpecialOrderData(): Promise<number> {
 export async function pollSpecialOrders(): Promise<SpecialOrder[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(ORDERS_COL, false))) {
+      return getLocalSpecialOrders();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, ORDERS_COL));
     const remote: SpecialOrder[] = [];
-    snap.forEach((d) => remote.push(d.data() as SpecialOrder));
-    const merged = ensureDefaultGumBootOrder(mergeById(getLocalSpecialOrders(), remote));
+    snap.forEach((d) => {
+      const raw = d.data() as SpecialOrder & { sy?: number };
+      remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrder);
+    });
+    const local = getLocalSpecialOrders();
+    const merged = ensureDefaultGumBootOrder(mergeById(local, remote));
     saveLocalList(ORDERS_STORAGE_KEY, merged);
+    clearSyncedIdsFromQueue(ORDERS_PENDING_KEY, local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(ORDERS_COL);
+    }
     return getLocalSpecialOrders();
   }
 }
@@ -287,13 +405,24 @@ export async function pollSpecialOrders(): Promise<SpecialOrder[]> {
 export async function pollSpecialOrderProductions(): Promise<SpecialOrderFactoryProduction[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(PROD_COL, false))) {
+      return getLocalSpecialOrderProductions();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, PROD_COL));
     const remote: SpecialOrderFactoryProduction[] = [];
-    snap.forEach((d) => remote.push(d.data() as SpecialOrderFactoryProduction));
-    const merged = mergeById(getLocalSpecialOrderProductions(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as SpecialOrderFactoryProduction & { sy?: number };
+      remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderFactoryProduction);
+    });
+    const local = getLocalSpecialOrderProductions();
+    const merged = mergeById(local, remote);
     saveLocalList(PROD_STORAGE_KEY, merged);
+    clearSyncedIdsFromQueue(PROD_PENDING_KEY, local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(PROD_COL);
+    }
     return getLocalSpecialOrderProductions();
   }
 }
@@ -301,13 +430,24 @@ export async function pollSpecialOrderProductions(): Promise<SpecialOrderFactory
 export async function pollSpecialOrderWhDispatches(): Promise<SpecialOrderWhDispatch[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(WH_DISPATCH_COL, false))) {
+      return getLocalSpecialOrderWhDispatches();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, WH_DISPATCH_COL));
     const remote: SpecialOrderWhDispatch[] = [];
-    snap.forEach((d) => remote.push(d.data() as SpecialOrderWhDispatch));
-    const merged = mergeById(getLocalSpecialOrderWhDispatches(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as SpecialOrderWhDispatch & { sy?: number };
+      remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderWhDispatch);
+    });
+    const local = getLocalSpecialOrderWhDispatches();
+    const merged = mergeById(local, remote);
     saveLocalList(WH_DISPATCH_STORAGE_KEY, merged);
+    clearSyncedIdsFromQueue(WH_DISPATCH_PENDING_KEY, local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(WH_DISPATCH_COL);
+    }
     return getLocalSpecialOrderWhDispatches();
   }
 }
@@ -319,21 +459,33 @@ export function subscribeSpecialOrders(onUpdate: (rows: SpecialOrder[]) => void)
   (async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(ORDERS_COL, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, ORDERS_COL),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: SpecialOrder[] = [];
-          snap.forEach((d) => remote.push(d.data() as SpecialOrder));
-          const merged = ensureDefaultGumBootOrder(mergeById(getLocalSpecialOrders(), remote));
+          snap.forEach((d) => {
+            const raw = d.data() as SpecialOrder & { sy?: number };
+            remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrder);
+          });
+          const local = getLocalSpecialOrders();
+          const merged = ensureDefaultGumBootOrder(mergeById(local, remote));
           saveLocalList(ORDERS_STORAGE_KEY, merged);
+          clearSyncedIdsFromQueue(ORDERS_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingSpecialOrderData().catch(() => {});
           }
         },
-        (err) => console.warn('SpecialOrders listener warning:', err.message)
+        (err) => {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(ORDERS_COL);
+          }
+          console.warn('SpecialOrders listener warning:', err.message);
+        }
       );
     } catch {}
   })();
@@ -352,21 +504,33 @@ export function subscribeSpecialOrderProductions(
   (async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(PROD_COL, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, PROD_COL),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: SpecialOrderFactoryProduction[] = [];
-          snap.forEach((d) => remote.push(d.data() as SpecialOrderFactoryProduction));
-          const merged = mergeById(getLocalSpecialOrderProductions(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as SpecialOrderFactoryProduction & { sy?: number };
+            remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderFactoryProduction);
+          });
+          const local = getLocalSpecialOrderProductions();
+          const merged = mergeById(local, remote);
           saveLocalList(PROD_STORAGE_KEY, merged);
+          clearSyncedIdsFromQueue(PROD_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingSpecialOrderData().catch(() => {});
           }
         },
-        (err) => console.warn('SpecialOrderProduction listener warning:', err.message)
+        (err) => {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(PROD_COL);
+          }
+          console.warn('SpecialOrderProduction listener warning:', err.message);
+        }
       );
     } catch {}
   })();
@@ -385,21 +549,33 @@ export function subscribeSpecialOrderWhDispatches(
   (async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(WH_DISPATCH_COL, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, WH_DISPATCH_COL),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: SpecialOrderWhDispatch[] = [];
-          snap.forEach((d) => remote.push(d.data() as SpecialOrderWhDispatch));
-          const merged = mergeById(getLocalSpecialOrderWhDispatches(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as SpecialOrderWhDispatch & { sy?: number };
+            remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderWhDispatch);
+          });
+          const local = getLocalSpecialOrderWhDispatches();
+          const merged = mergeById(local, remote);
           saveLocalList(WH_DISPATCH_STORAGE_KEY, merged);
+          clearSyncedIdsFromQueue(WH_DISPATCH_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingSpecialOrderData().catch(() => {});
           }
         },
-        (err) => console.warn('SpecialOrderWhDispatches listener warning:', err.message)
+        (err) => {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(WH_DISPATCH_COL);
+          }
+          console.warn('SpecialOrderWhDispatches listener warning:', err.message);
+        }
       );
     } catch {}
   })();

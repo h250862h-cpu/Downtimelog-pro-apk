@@ -6,10 +6,14 @@ import {
 } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import {
+  canAccessFirestorePath,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
+  isFirestorePathBlockedByRules,
+  isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
 } from '../firebase';
 import { QualityTrialReport, normalizeMachineName } from '../types';
 import { saveFileBlob, ymd } from './downtimeCalc';
@@ -63,6 +67,50 @@ function removePendingId(id: string) {
   } catch {}
 }
 
+export function repairPendingQualityTrialQueues(): number {
+  try {
+    const raw = localStorage.getItem(TRIAL_PENDING_KEY);
+    if (!raw) return 0;
+    const queue = JSON.parse(raw);
+    if (!Array.isArray(queue)) {
+      localStorage.removeItem(TRIAL_PENDING_KEY);
+      return 0;
+    }
+    const local = readLocalTrials() as Array<QualityTrialReport & { sy?: number }>;
+    const byId = new Map(local.map((t) => [t.id, t]));
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const id of queue) {
+      if (typeof id !== 'string' || !id || seen.has(id)) continue;
+      const found = byId.get(id);
+      if (!found) continue;
+      if (found.sy && (!found.upd || found.sy >= found.upd)) continue;
+      seen.add(id);
+      cleaned.push(id);
+    }
+    if (cleaned.length !== queue.length) {
+      localStorage.setItem(TRIAL_PENDING_KEY, JSON.stringify(cleaned));
+    }
+    return cleaned.length;
+  } catch {
+    return 0;
+  }
+}
+
+function clearSyncedTrialsFromQueue(local: QualityTrialReport[], remote: QualityTrialReport[]) {
+  const pending = getPendingIds();
+  if (!pending.length) return;
+  const localMap = new Map(local.map((t) => [t.id, t]));
+  const remoteMap = new Map(remote.map((t) => [t.id, t]));
+  pending.forEach((id) => {
+    const r = remoteMap.get(id);
+    const l = localMap.get(id);
+    if (r && (!l || (r.upd || 0) >= (l.upd || 0))) {
+      removePendingId(id);
+    }
+  });
+}
+
 function mergeTrials(
   local: QualityTrialReport[],
   remote: QualityTrialReport[]
@@ -100,26 +148,44 @@ export async function saveQualityTrialToFirebase(
 
   try {
     await ensureFirebaseAuth();
-    const payload = sanitizeForFirestore({ ...updated, sy: Date.now() });
+    const syncTs = Date.now();
+    const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
     await setDoc(doc(db, TRIAL_COLLECTION, updated.id), payload, { merge: true });
     removePendingId(updated.id);
+    const latest = readLocalTrials().map((t) =>
+      t.id === updated.id ? ({ ...t, sy: syncTs } as QualityTrialReport) : t
+    );
+    saveLocalTrials(latest);
     return { ok: true };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(TRIAL_COLLECTION);
+    }
     addPendingId(updated.id);
     return { ok: false, error: err?.message || 'Saved locally (offline)' };
   }
 }
 
+export function getQualityTrialsPendingBreakdown(): { active: number; ruleBlocked: number } {
+  const len = getPendingIds().length;
+  return isFirestorePathBlockedByRules(TRIAL_COLLECTION)
+    ? { active: 0, ruleBlocked: len }
+    : { active: len, ruleBlocked: 0 };
+}
+
 export function getPendingQualityTrialsCount(): number {
-  return getPendingIds().length;
+  return getQualityTrialsPendingBreakdown().active;
 }
 
 export async function flushPendingQualityTrials(): Promise<number> {
+  repairPendingQualityTrialQueues();
   const ids = getPendingIds();
   if (!ids.length) return 0;
+  if (!(await canAccessFirestorePath(TRIAL_COLLECTION, false))) return 0;
   const local = readLocalTrials();
   let flushed = 0;
   for (const id of ids) {
+    if (isFirestorePathBlockedByRules(TRIAL_COLLECTION)) break;
     const found = local.find((t) => t.id === id);
     if (found) {
       const r = await saveQualityTrialToFirebase(found, { preserveUpd: true });
@@ -134,13 +200,24 @@ export async function flushPendingQualityTrials(): Promise<number> {
 export async function pollQualityTrials(): Promise<QualityTrialReport[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(TRIAL_COLLECTION, false))) {
+      return readLocalTrials();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, TRIAL_COLLECTION));
     const remote: QualityTrialReport[] = [];
-    snap.forEach((d) => remote.push(d.data() as QualityTrialReport));
-    const merged = mergeTrials(readLocalTrials(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as QualityTrialReport & { sy?: number };
+      remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as QualityTrialReport);
+    });
+    const local = readLocalTrials();
+    const merged = mergeTrials(local, remote);
     saveLocalTrials(merged);
+    clearSyncedTrialsFromQueue(local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(TRIAL_COLLECTION);
+    }
     return readLocalTrials();
   }
 }
@@ -154,21 +231,33 @@ export function subscribeQualityTrials(
   (async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(TRIAL_COLLECTION, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, TRIAL_COLLECTION),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: QualityTrialReport[] = [];
-          snap.forEach((d) => remote.push(d.data() as QualityTrialReport));
-          const merged = mergeTrials(readLocalTrials(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as QualityTrialReport & { sy?: number };
+            remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as QualityTrialReport);
+          });
+          const local = readLocalTrials();
+          const merged = mergeTrials(local, remote);
           saveLocalTrials(merged);
+          clearSyncedTrialsFromQueue(local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingQualityTrials().catch(() => {});
           }
         },
-        (err) => console.warn('QualityTrials listener warning:', err.message)
+        (err) => {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(TRIAL_COLLECTION);
+          }
+          console.warn('QualityTrials listener warning:', err.message);
+        }
       );
     } catch {}
   })();

@@ -1,10 +1,14 @@
 import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import {
+  canAccessFirestorePath,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
+  isFirestorePathBlockedByRules,
+  isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
 } from '../firebase';
 import { DowntimeEntry, GeneratorLog, PowerCutLog } from '../types';
 import { dtl, fmtT, r2, saveFileBlob, toTimestamp } from './downtimeCalc';
@@ -95,6 +99,56 @@ function removeFromQueue(key: string, id: string) {
   } catch {}
 }
 
+function repairQueueForList<T extends { id: string; upd?: number; sy?: number }>(
+  pendingKey: string,
+  items: T[]
+): number {
+  try {
+    const raw = localStorage.getItem(pendingKey);
+    if (!raw) return 0;
+    const queue = JSON.parse(raw);
+    if (!Array.isArray(queue)) {
+      localStorage.removeItem(pendingKey);
+      return 0;
+    }
+    const byId = new Map(items.map((x) => [x.id, x]));
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const id of queue) {
+      if (typeof id !== 'string' || !id || seen.has(id)) continue;
+      const found = byId.get(id);
+      if (!found) continue;
+      if (found.sy && (!found.upd || found.sy >= found.upd)) continue;
+      seen.add(id);
+      cleaned.push(id);
+    }
+    if (cleaned.length !== queue.length) {
+      localStorage.setItem(pendingKey, JSON.stringify(cleaned));
+    }
+    return cleaned.length;
+  } catch {
+    return 0;
+  }
+}
+
+function clearSyncedIdsFromQueue<T extends { id: string; upd?: number }>(
+  pendingKey: string,
+  local: T[],
+  remote: T[]
+) {
+  const pending = readQueue(pendingKey);
+  if (!pending.length) return;
+  const localMap = new Map(local.map((x) => [x.id, x]));
+  const remoteMap = new Map(remote.map((x) => [x.id, x]));
+  pending.forEach((id) => {
+    const r = remoteMap.get(id);
+    const l = localMap.get(id);
+    if (r && (!l || (r.upd || 0) >= (l.upd || 0))) {
+      removeFromQueue(pendingKey, id);
+    }
+  });
+}
+
 function sanitizeObj<T extends Record<string, any>>(obj: T): Record<string, any> {
   return deepSanitizeForFirestore(obj);
 }
@@ -142,14 +196,18 @@ export async function savePowerCutLog(
 
   try {
     await ensureFirebaseAuth();
+    const syncTs = Date.now();
     await setDoc(
       doc(db, POWER_CUT_COLLECTION, saved.id),
-      sanitizeObj({ ...saved, sy: Date.now() }),
+      sanitizeObj({ ...saved, sy: syncTs }),
       { merge: true }
     );
     removeFromQueue(POWER_CUT_PENDING_KEY, saved.id);
-    return { ok: true, saved };
+    return { ok: true, saved: { ...saved, sy: syncTs } as PowerCutLog };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(POWER_CUT_COLLECTION);
+    }
     addToQueue(POWER_CUT_PENDING_KEY, saved.id);
     return {
       ok: false,
@@ -186,13 +244,24 @@ export async function closePowerCutLog(params: {
 export async function pollPowerCutLogs(): Promise<PowerCutLog[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(POWER_CUT_COLLECTION, false))) {
+      return getLocalPowerCutLogs();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, POWER_CUT_COLLECTION));
     const remote: PowerCutLog[] = [];
-    snap.forEach((d) => remote.push(d.data() as PowerCutLog));
-    const merged = mergeById(getLocalPowerCutLogs(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as PowerCutLog & { sy?: number };
+      remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as PowerCutLog);
+    });
+    const local = getLocalPowerCutLogs();
+    const merged = mergeById(local, remote);
     writeList(POWER_CUT_KEY, merged);
+    clearSyncedIdsFromQueue(POWER_CUT_PENDING_KEY, local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(POWER_CUT_COLLECTION);
+    }
     return getLocalPowerCutLogs();
   }
 }
@@ -205,15 +274,22 @@ export function subscribePowerCutLogs(onUpdate: (logs: PowerCutLog[]) => void) {
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(POWER_CUT_COLLECTION, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, POWER_CUT_COLLECTION),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: PowerCutLog[] = [];
-          snap.forEach((d) => remote.push(d.data() as PowerCutLog));
-          const merged = mergeById(getLocalPowerCutLogs(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as PowerCutLog & { sy?: number };
+            remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as PowerCutLog);
+          });
+          const local = getLocalPowerCutLogs();
+          const merged = mergeById(local, remote);
           writeList(POWER_CUT_KEY, merged);
+          clearSyncedIdsFromQueue(POWER_CUT_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingPowerGenData().catch(() => {});
@@ -266,14 +342,18 @@ export async function saveGeneratorLog(
 
   try {
     await ensureFirebaseAuth();
+    const syncTs = Date.now();
     await setDoc(
       doc(db, GENERATOR_LOG_COLLECTION, saved.id),
-      sanitizeObj({ ...saved, sy: Date.now() }),
+      sanitizeObj({ ...saved, sy: syncTs }),
       { merge: true }
     );
     removeFromQueue(GENERATOR_LOG_PENDING_KEY, saved.id);
-    return { ok: true, saved };
+    return { ok: true, saved: { ...saved, sy: syncTs } as GeneratorLog };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(GENERATOR_LOG_COLLECTION);
+    }
     addToQueue(GENERATOR_LOG_PENDING_KEY, saved.id);
     return {
       ok: false,
@@ -496,13 +576,24 @@ export async function syncMachineFormToGeneratorLog(entry: DowntimeEntry): Promi
 export async function pollGeneratorLogs(): Promise<GeneratorLog[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(GENERATOR_LOG_COLLECTION, false))) {
+      return getLocalGeneratorLogs();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, GENERATOR_LOG_COLLECTION));
     const remote: GeneratorLog[] = [];
-    snap.forEach((d) => remote.push(d.data() as GeneratorLog));
-    const merged = mergeById(getLocalGeneratorLogs(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as GeneratorLog & { sy?: number };
+      remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as GeneratorLog);
+    });
+    const local = getLocalGeneratorLogs();
+    const merged = mergeById(local, remote);
     writeList(GENERATOR_LOG_KEY, merged);
+    clearSyncedIdsFromQueue(GENERATOR_LOG_PENDING_KEY, local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(GENERATOR_LOG_COLLECTION);
+    }
     return getLocalGeneratorLogs();
   }
 }
@@ -515,15 +606,22 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(GENERATOR_LOG_COLLECTION, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, GENERATOR_LOG_COLLECTION),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: GeneratorLog[] = [];
-          snap.forEach((d) => remote.push(d.data() as GeneratorLog));
-          const merged = mergeById(getLocalGeneratorLogs(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as GeneratorLog & { sy?: number };
+            remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as GeneratorLog);
+          });
+          const local = getLocalGeneratorLogs();
+          const merged = mergeById(local, remote);
           writeList(GENERATOR_LOG_KEY, merged);
+          clearSyncedIdsFromQueue(GENERATOR_LOG_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingPowerGenData().catch(() => {});
@@ -541,16 +639,36 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
   };
 }
 
+export function repairPendingPowerGenQueues(): number {
+  return (
+    repairQueueForList(POWER_CUT_PENDING_KEY, getLocalPowerCutLogs() as Array<PowerCutLog & { sy?: number }>) +
+    repairQueueForList(GENERATOR_LOG_PENDING_KEY, getLocalGeneratorLogs() as Array<GeneratorLog & { sy?: number }>)
+  );
+}
+
+export function getPowerGenPendingBreakdown(): { active: number; ruleBlocked: number } {
+  const pwrLen = readQueue(POWER_CUT_PENDING_KEY).length;
+  const genLen = readQueue(GENERATOR_LOG_PENDING_KEY).length;
+  let active = 0;
+  let ruleBlocked = 0;
+  if (isFirestorePathBlockedByRules(POWER_CUT_COLLECTION)) ruleBlocked += pwrLen;
+  else active += pwrLen;
+  if (isFirestorePathBlockedByRules(GENERATOR_LOG_COLLECTION)) ruleBlocked += genLen;
+  else active += genLen;
+  return { active, ruleBlocked };
+}
+
 export function getPendingPowerGenCount(): number {
-  return readQueue(POWER_CUT_PENDING_KEY).length + readQueue(GENERATOR_LOG_PENDING_KEY).length;
+  return getPowerGenPendingBreakdown().active;
 }
 
 export async function flushPendingPowerGenData(): Promise<number> {
+  repairPendingPowerGenQueues();
   let flushed = 0;
   try {
     await ensureFirebaseAuth();
     const pwrQueue = readQueue(POWER_CUT_PENDING_KEY);
-    if (pwrQueue.length) {
+    if (pwrQueue.length && (await canAccessFirestorePath(POWER_CUT_COLLECTION, false))) {
       const allPwr = getLocalPowerCutLogs();
       for (const id of pwrQueue) {
         const found = allPwr.find((x) => x.id === id);
@@ -566,12 +684,17 @@ export async function flushPendingPowerGenData(): Promise<number> {
           );
           removeFromQueue(POWER_CUT_PENDING_KEY, found.id);
           flushed++;
-        } catch {}
+        } catch (err: any) {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(POWER_CUT_COLLECTION);
+            break;
+          }
+        }
       }
     }
 
     const genQueue = readQueue(GENERATOR_LOG_PENDING_KEY);
-    if (genQueue.length) {
+    if (genQueue.length && (await canAccessFirestorePath(GENERATOR_LOG_COLLECTION, false))) {
       const allGen = getLocalGeneratorLogs();
       for (const id of genQueue) {
         const found = allGen.find((x) => x.id === id);
@@ -587,7 +710,12 @@ export async function flushPendingPowerGenData(): Promise<number> {
           );
           removeFromQueue(GENERATOR_LOG_PENDING_KEY, found.id);
           flushed++;
-        } catch {}
+        } catch (err: any) {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(GENERATOR_LOG_COLLECTION);
+            break;
+          }
+        }
       }
     }
   } catch {}

@@ -6,11 +6,15 @@ import {
   SEEDED_DIESEL_REQUESTS,
 } from '../data/dieselCsvSeed';
 import {
+  canAccessFirestorePath,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
   getDocServerFirst,
+  isFirestorePathBlockedByRules,
+  isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
 } from '../firebase';
 import {
   DieselFuelRequest,
@@ -177,6 +181,56 @@ function removeFromQueue(key: string, id: string) {
   } catch {}
 }
 
+function repairQueueForList<T extends { id: string; upd?: number; sy?: number }>(
+  pendingKey: string,
+  items: T[]
+): number {
+  try {
+    const raw = localStorage.getItem(pendingKey);
+    if (!raw) return 0;
+    const queue = JSON.parse(raw);
+    if (!Array.isArray(queue)) {
+      localStorage.removeItem(pendingKey);
+      return 0;
+    }
+    const byId = new Map(items.map((x) => [x.id, x]));
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const id of queue) {
+      if (typeof id !== 'string' || !id || seen.has(id)) continue;
+      const found = byId.get(id);
+      if (!found) continue;
+      if (found.sy && (!found.upd || found.sy >= found.upd)) continue;
+      seen.add(id);
+      cleaned.push(id);
+    }
+    if (cleaned.length !== queue.length) {
+      localStorage.setItem(pendingKey, JSON.stringify(cleaned));
+    }
+    return cleaned.length;
+  } catch {
+    return 0;
+  }
+}
+
+function clearSyncedIdsFromQueue<T extends { id: string; upd?: number }>(
+  pendingKey: string,
+  local: T[],
+  remote: T[]
+) {
+  const pending = readQueue(pendingKey);
+  if (!pending.length) return;
+  const localMap = new Map(local.map((x) => [x.id, x]));
+  const remoteMap = new Map(remote.map((x) => [x.id, x]));
+  pending.forEach((id) => {
+    const r = remoteMap.get(id);
+    const l = localMap.get(id);
+    if (r && (!l || (r.upd || 0) >= (l.upd || 0))) {
+      removeFromQueue(pendingKey, id);
+    }
+  });
+}
+
 function sanitizeObj<T extends Record<string, any>>(obj: T): T {
   return deepSanitizeForFirestore(obj);
 }
@@ -236,12 +290,16 @@ export async function saveDieselTankConfig(
 
   try {
     await ensureFirebaseAuth();
-    await setDoc(doc(db, TANK_COLLECTION, 'main_bowser'), sanitizeObj({ ...next, sy: Date.now() }), {
+    const syncTs = Date.now();
+    await setDoc(doc(db, TANK_COLLECTION, 'main_bowser'), sanitizeObj({ ...next, sy: syncTs }), {
       merge: true,
     });
     localStorage.removeItem(TANK_PENDING_KEY);
     return { ok: true };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(TANK_COLLECTION);
+    }
     try {
       localStorage.setItem(TANK_PENDING_KEY, '1');
     } catch {}
@@ -253,15 +311,25 @@ export async function pollDieselTank(): Promise<DieselTankConfig> {
   const local = getLocalDieselTank();
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(`${TANK_COLLECTION}/main_bowser`, true))) {
+      return local;
+    }
     const snap = await getDocServerFirst(doc(db, TANK_COLLECTION, 'main_bowser'));
     if (snap.exists()) {
       const remote = snap.data() as DieselTankConfig;
       if ((remote.upd || 0) >= (local.upd || 0)) {
         saveLocalDieselTank(remote);
+        try {
+          localStorage.removeItem(TANK_PENDING_KEY);
+        } catch {}
         return remote;
       }
     }
-  } catch {}
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(TANK_COLLECTION);
+    }
+  }
   return local;
 }
 
@@ -273,6 +341,8 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(`${TANK_COLLECTION}/main_bowser`, true))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         doc(db, TANK_COLLECTION, 'main_bowser'),
@@ -283,6 +353,9 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
             const remote = snap.data() as DieselTankConfig;
             if ((remote.upd || 0) >= (local.upd || 0)) {
               saveLocalDieselTank(remote);
+              try {
+                localStorage.removeItem(TANK_PENDING_KEY);
+              } catch {}
               onUpdate(remote);
             } else {
               onUpdate(local);
@@ -325,12 +398,16 @@ export async function saveDieselRequest(
 
   try {
     await ensureFirebaseAuth();
-    await setDoc(doc(db, REQ_COLLECTION, updated.id), sanitizeObj({ ...updated, sy: Date.now() }), {
+    const syncTs = Date.now();
+    await setDoc(doc(db, REQ_COLLECTION, updated.id), sanitizeObj({ ...updated, sy: syncTs }), {
       merge: true,
     });
     removeFromQueue(REQ_PENDING_KEY, updated.id);
     return { ok: true };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(REQ_COLLECTION);
+    }
     addToQueue(REQ_PENDING_KEY, updated.id);
     return { ok: false, error: err?.message || 'Offline cached; queued for sync' };
   }
@@ -339,13 +416,24 @@ export async function saveDieselRequest(
 export async function pollDieselRequests(): Promise<DieselFuelRequest[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(REQ_COLLECTION, false))) {
+      return getLocalDieselRequests();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, REQ_COLLECTION));
     const remote: DieselFuelRequest[] = [];
-    snap.forEach((d) => remote.push(d.data() as DieselFuelRequest));
-    const merged = mergeById(getLocalDieselRequests(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as DieselFuelRequest & { sy?: number };
+      remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as DieselFuelRequest);
+    });
+    const local = getLocalDieselRequests();
+    const merged = mergeById(local, remote);
     writeLocalList(REQ_KEY, merged);
+    clearSyncedIdsFromQueue(REQ_PENDING_KEY, local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(REQ_COLLECTION);
+    }
     return getLocalDieselRequests();
   }
 }
@@ -358,15 +446,22 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(REQ_COLLECTION, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, REQ_COLLECTION),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: DieselFuelRequest[] = [];
-          snap.forEach((d) => remote.push(d.data() as DieselFuelRequest));
-          const merged = mergeById(getLocalDieselRequests(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as DieselFuelRequest & { sy?: number };
+            remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as DieselFuelRequest);
+          });
+          const local = getLocalDieselRequests();
+          const merged = mergeById(local, remote);
           writeLocalList(REQ_KEY, merged);
+          clearSyncedIdsFromQueue(REQ_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingDieselData().catch(() => {});
@@ -405,12 +500,16 @@ export async function saveDieselGrn(
 
   try {
     await ensureFirebaseAuth();
-    await setDoc(doc(db, GRN_COLLECTION, updated.id), sanitizeObj({ ...updated, sy: Date.now() }), {
+    const syncTs = Date.now();
+    await setDoc(doc(db, GRN_COLLECTION, updated.id), sanitizeObj({ ...updated, sy: syncTs }), {
       merge: true,
     });
     removeFromQueue(GRN_PENDING_KEY, updated.id);
     return { ok: true };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(GRN_COLLECTION);
+    }
     addToQueue(GRN_PENDING_KEY, updated.id);
     return { ok: false, error: err?.message || 'Offline cached; queued for sync' };
   }
@@ -419,13 +518,24 @@ export async function saveDieselGrn(
 export async function pollDieselGrns(): Promise<DieselGrnRecord[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(GRN_COLLECTION, false))) {
+      return getLocalDieselGrns();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, GRN_COLLECTION));
     const remote: DieselGrnRecord[] = [];
-    snap.forEach((d) => remote.push(d.data() as DieselGrnRecord));
-    const merged = mergeById(getLocalDieselGrns(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as DieselGrnRecord & { sy?: number };
+      remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as DieselGrnRecord);
+    });
+    const local = getLocalDieselGrns();
+    const merged = mergeById(local, remote);
     writeLocalList(GRN_KEY, merged);
+    clearSyncedIdsFromQueue(GRN_PENDING_KEY, local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(GRN_COLLECTION);
+    }
     return getLocalDieselGrns();
   }
 }
@@ -438,15 +548,22 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(GRN_COLLECTION, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, GRN_COLLECTION),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: DieselGrnRecord[] = [];
-          snap.forEach((d) => remote.push(d.data() as DieselGrnRecord));
-          const merged = mergeById(getLocalDieselGrns(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as DieselGrnRecord & { sy?: number };
+            remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as DieselGrnRecord);
+          });
+          const local = getLocalDieselGrns();
+          const merged = mergeById(local, remote);
           writeLocalList(GRN_KEY, merged);
+          clearSyncedIdsFromQueue(GRN_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingDieselData().catch(() => {});
@@ -464,7 +581,14 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
   };
 }
 
-export function getPendingDieselCount(): number {
+export function repairPendingDieselQueues(): number {
+  return (
+    repairQueueForList(REQ_PENDING_KEY, getLocalDieselRequests() as Array<DieselFuelRequest & { sy?: number }>) +
+    repairQueueForList(GRN_PENDING_KEY, getLocalDieselGrns() as Array<DieselGrnRecord & { sy?: number }>)
+  );
+}
+
+export function getDieselPendingBreakdown(): { active: number; ruleBlocked: number } {
   const tankPending = (() => {
     try {
       return localStorage.getItem(TANK_PENDING_KEY) === '1' ? 1 : 0;
@@ -472,24 +596,49 @@ export function getPendingDieselCount(): number {
       return 0;
     }
   })();
-  return tankPending + readQueue(REQ_PENDING_KEY).length + readQueue(GRN_PENDING_KEY).length;
+  const reqLen = readQueue(REQ_PENDING_KEY).length;
+  const grnLen = readQueue(GRN_PENDING_KEY).length;
+
+  let active = 0;
+  let ruleBlocked = 0;
+  if (isFirestorePathBlockedByRules(TANK_COLLECTION)) ruleBlocked += tankPending;
+  else active += tankPending;
+  if (isFirestorePathBlockedByRules(REQ_COLLECTION)) ruleBlocked += reqLen;
+  else active += reqLen;
+  if (isFirestorePathBlockedByRules(GRN_COLLECTION)) ruleBlocked += grnLen;
+  else active += grnLen;
+  return { active, ruleBlocked };
+}
+
+export function getPendingDieselCount(): number {
+  return getDieselPendingBreakdown().active;
 }
 
 export async function flushPendingDieselData(): Promise<number> {
+  repairPendingDieselQueues();
   let flushed = 0;
   try {
     await ensureFirebaseAuth();
-    if (localStorage.getItem(TANK_PENDING_KEY) === '1') {
+    if (
+      localStorage.getItem(TANK_PENDING_KEY) === '1' &&
+      (await canAccessFirestorePath(`${TANK_COLLECTION}/main_bowser`, true))
+    ) {
       const tank = getLocalDieselTank();
-      await setDoc(doc(db, TANK_COLLECTION, 'main_bowser'), sanitizeObj({ ...tank, sy: Date.now() }), {
-        merge: true,
-      });
-      localStorage.removeItem(TANK_PENDING_KEY);
-      flushed++;
+      try {
+        await setDoc(doc(db, TANK_COLLECTION, 'main_bowser'), sanitizeObj({ ...tank, sy: Date.now() }), {
+          merge: true,
+        });
+        localStorage.removeItem(TANK_PENDING_KEY);
+        flushed++;
+      } catch (err: any) {
+        if (isPermissionDeniedError(err)) {
+          markFirestorePathBlockedByRules(TANK_COLLECTION);
+        }
+      }
     }
 
     const reqQueue = readQueue(REQ_PENDING_KEY);
-    if (reqQueue.length) {
+    if (reqQueue.length && (await canAccessFirestorePath(REQ_COLLECTION, false))) {
       const allReqs = getLocalDieselRequests();
       for (const id of reqQueue) {
         const found = allReqs.find((r) => r.id === id);
@@ -503,12 +652,17 @@ export async function flushPendingDieselData(): Promise<number> {
           });
           removeFromQueue(REQ_PENDING_KEY, found.id);
           flushed++;
-        } catch {}
+        } catch (err: any) {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(REQ_COLLECTION);
+            break;
+          }
+        }
       }
     }
 
     const grnQueue = readQueue(GRN_PENDING_KEY);
-    if (grnQueue.length) {
+    if (grnQueue.length && (await canAccessFirestorePath(GRN_COLLECTION, false))) {
       const allGrns = getLocalDieselGrns();
       for (const id of grnQueue) {
         const found = allGrns.find((g) => g.id === id);
@@ -522,7 +676,12 @@ export async function flushPendingDieselData(): Promise<number> {
           });
           removeFromQueue(GRN_PENDING_KEY, found.id);
           flushed++;
-        } catch {}
+        } catch (err: any) {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(GRN_COLLECTION);
+            break;
+          }
+        }
       }
     }
   } catch {}

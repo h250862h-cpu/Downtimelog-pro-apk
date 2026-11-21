@@ -2,10 +2,14 @@ import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import historicalDispatchRaw from '../data/historicalDispatch.json';
 import {
+  canAccessFirestorePath,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
+  isFirestorePathBlockedByRules,
+  isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
 } from '../firebase';
 import {
   DieselFuelRequest,
@@ -165,6 +169,56 @@ function removeFromQueue(key: string, id: string) {
   } catch {}
 }
 
+function repairQueueForList<T extends { id: string; upd?: number; sy?: number }>(
+  pendingKey: string,
+  items: T[]
+): number {
+  try {
+    const raw = localStorage.getItem(pendingKey);
+    if (!raw) return 0;
+    const queue = JSON.parse(raw);
+    if (!Array.isArray(queue)) {
+      localStorage.removeItem(pendingKey);
+      return 0;
+    }
+    const byId = new Map(items.map((x) => [x.id, x]));
+    const cleaned: string[] = [];
+    const seen = new Set<string>();
+    for (const id of queue) {
+      if (typeof id !== 'string' || !id || seen.has(id)) continue;
+      const found = byId.get(id);
+      if (!found) continue;
+      if (found.sy && (!found.upd || found.sy >= found.upd)) continue;
+      seen.add(id);
+      cleaned.push(id);
+    }
+    if (cleaned.length !== queue.length) {
+      localStorage.setItem(pendingKey, JSON.stringify(cleaned));
+    }
+    return cleaned.length;
+  } catch {
+    return 0;
+  }
+}
+
+function clearSyncedIdsFromQueue<T extends { id: string; upd?: number }>(
+  pendingKey: string,
+  local: T[],
+  remote: T[]
+) {
+  const pending = readQueue(pendingKey);
+  if (!pending.length) return;
+  const localMap = new Map(local.map((x) => [x.id, x]));
+  const remoteMap = new Map(remote.map((x) => [x.id, x]));
+  pending.forEach((id) => {
+    const r = remoteMap.get(id);
+    const l = localMap.get(id);
+    if (r && (!l || (r.upd || 0) >= (l.upd || 0))) {
+      removeFromQueue(pendingKey, id);
+    }
+  });
+}
+
 function sanitizeObj<T extends Record<string, any>>(obj: T): T {
   return deepSanitizeForFirestore(obj);
 }
@@ -230,7 +284,10 @@ export async function saveUploadedBackgroundDispatchesBatch(
             await setDoc(doc(db, HIST_UPLOAD_COLLECTION, entry.id), payload, { merge: true });
             removeFromQueue(HIST_UPLOAD_PENDING_KEY, entry.id);
             return true;
-          } catch {
+          } catch (err: any) {
+            if (isPermissionDeniedError(err)) {
+              markFirestorePathBlockedByRules(HIST_UPLOAD_COLLECTION);
+            }
             addToQueue(HIST_UPLOAD_PENDING_KEY, entry.id);
             return false;
           }
@@ -246,8 +303,10 @@ export async function saveUploadedBackgroundDispatchesBatch(
 }
 
 export async function flushPendingUploadedBackgroundDispatches(): Promise<number> {
+  repairPendingPlanningQueues();
   const queue = readQueue(HIST_UPLOAD_PENDING_KEY);
   if (!queue.length) return 0;
+  if (!(await canAccessFirestorePath(HIST_UPLOAD_COLLECTION, false))) return 0;
   const all = getLocalUploadedBackgroundDispatches();
   let flushed = 0;
   try {
@@ -264,7 +323,12 @@ export async function flushPendingUploadedBackgroundDispatches(): Promise<number
         });
         removeFromQueue(HIST_UPLOAD_PENDING_KEY, found.id);
         flushed++;
-      } catch {}
+      } catch (err: any) {
+        if (isPermissionDeniedError(err)) {
+          markFirestorePathBlockedByRules(HIST_UPLOAD_COLLECTION);
+          break;
+        }
+      }
     }
   } catch {}
   return flushed;
@@ -273,13 +337,24 @@ export async function flushPendingUploadedBackgroundDispatches(): Promise<number
 export async function pollUploadedBackgroundDispatches(): Promise<DispatchEntry[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(HIST_UPLOAD_COLLECTION, false))) {
+      return getLocalUploadedBackgroundDispatches();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, HIST_UPLOAD_COLLECTION));
     const remote: DispatchEntry[] = [];
-    snap.forEach((d) => remote.push(normalizeUploadedHistoryEntry(d.data() as DispatchEntry)));
-    const merged = mergeById(getLocalUploadedBackgroundDispatches(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as DispatchEntry;
+      remote.push(normalizeUploadedHistoryEntry({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 }));
+    });
+    const local = getLocalUploadedBackgroundDispatches();
+    const merged = mergeById(local, remote);
     writeList(HIST_UPLOAD_KEY, merged);
+    clearSyncedIdsFromQueue(HIST_UPLOAD_PENDING_KEY, local, remote);
     return merged;
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(HIST_UPLOAD_COLLECTION);
+    }
     return getLocalUploadedBackgroundDispatches();
   }
 }
@@ -294,15 +369,22 @@ export function subscribeUploadedBackgroundDispatches(
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(HIST_UPLOAD_COLLECTION, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, HIST_UPLOAD_COLLECTION),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: DispatchEntry[] = [];
-          snap.forEach((d) => remote.push(normalizeUploadedHistoryEntry(d.data() as DispatchEntry)));
-          const merged = mergeById(getLocalUploadedBackgroundDispatches(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as DispatchEntry;
+            remote.push(normalizeUploadedHistoryEntry({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 }));
+          });
+          const local = getLocalUploadedBackgroundDispatches();
+          const merged = mergeById(local, remote);
           writeList(HIST_UPLOAD_KEY, merged);
+          clearSyncedIdsFromQueue(HIST_UPLOAD_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingUploadedBackgroundDispatches().catch(() => {});
@@ -391,6 +473,9 @@ export async function saveProductionPlanItem(
     removeFromQueue(PLAN_PENDING_KEY, updated.id);
     return { ok: true };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(PLAN_COLLECTION);
+    }
     addToQueue(PLAN_PENDING_KEY, updated.id);
     return { ok: false, error: err?.message || 'Offline cached; queued for cloud sync' };
   }
@@ -415,7 +500,10 @@ export async function saveProductionPlanBatch(
         });
         removeFromQueue(PLAN_PENDING_KEY, item.id);
         cloudSynced++;
-      } catch {
+      } catch (err: any) {
+        if (isPermissionDeniedError(err)) {
+          markFirestorePathBlockedByRules(PLAN_COLLECTION);
+        }
         addToQueue(PLAN_PENDING_KEY, item.id);
       }
     }
@@ -522,7 +610,10 @@ export async function replaceProductionPlanWithSignature(params: {
         });
         removeFromQueue(PLAN_PENDING_KEY, item.id);
         cloudSynced++;
-      } catch {
+      } catch (err: any) {
+        if (isPermissionDeniedError(err)) {
+          markFirestorePathBlockedByRules(PLAN_COLLECTION);
+        }
         addToQueue(PLAN_PENDING_KEY, item.id);
       }
     }
@@ -538,9 +629,30 @@ export async function replaceProductionPlanWithSignature(params: {
   };
 }
 
+export function repairPendingPlanningQueues(): number {
+  return (
+    repairQueueForList(HIST_UPLOAD_PENDING_KEY, getLocalUploadedBackgroundDispatches()) +
+    repairQueueForList(PLAN_PENDING_KEY, getAllRawLocalProductionPlans() as Array<ProductionPlanItem & { sy?: number }>)
+  );
+}
+
+export function getPlanningAndHistPendingBreakdown(): { active: number; ruleBlocked: number } {
+  const planLen = readQueue(PLAN_PENDING_KEY).length;
+  const histLen = readQueue(HIST_UPLOAD_PENDING_KEY).length;
+  let active = 0;
+  let ruleBlocked = 0;
+  if (isFirestorePathBlockedByRules(PLAN_COLLECTION)) ruleBlocked += planLen;
+  else active += planLen;
+  if (isFirestorePathBlockedByRules(HIST_UPLOAD_COLLECTION)) ruleBlocked += histLen;
+  else active += histLen;
+  return { active, ruleBlocked };
+}
+
 export async function flushPendingProductionPlans(): Promise<number> {
+  repairPendingPlanningQueues();
   const queue = readQueue(PLAN_PENDING_KEY);
   if (!queue.length) return 0;
+  if (!(await canAccessFirestorePath(PLAN_COLLECTION, false))) return 0;
   const all = getAllRawLocalProductionPlans();
   let flushed = 0;
   try {
@@ -557,26 +669,42 @@ export async function flushPendingProductionPlans(): Promise<number> {
         });
         removeFromQueue(PLAN_PENDING_KEY, found.id);
         flushed++;
-      } catch {}
+      } catch (err: any) {
+        if (isPermissionDeniedError(err)) {
+          markFirestorePathBlockedByRules(PLAN_COLLECTION);
+          break;
+        }
+      }
     }
   } catch {}
   return flushed;
 }
 
 export function getPendingPlanningAndHistCount(): number {
-  return readQueue(PLAN_PENDING_KEY).length + readQueue(HIST_UPLOAD_PENDING_KEY).length;
+  return getPlanningAndHistPendingBreakdown().active;
 }
 
 export async function pollProductionPlans(): Promise<ProductionPlanItem[]> {
   try {
     await ensureFirebaseAuth();
+    if (!(await canAccessFirestorePath(PLAN_COLLECTION, false))) {
+      return getLocalProductionPlans();
+    }
     const snap = await getCollectionDocsServerFirst(collection(db, PLAN_COLLECTION));
     const remote: ProductionPlanItem[] = [];
-    snap.forEach((d) => remote.push(normalizePlanItem(d.data() as ProductionPlanItem)));
-    const merged = mergeById(getAllRawLocalProductionPlans(), remote);
+    snap.forEach((d) => {
+      const raw = d.data() as ProductionPlanItem & { sy?: number };
+      remote.push(normalizePlanItem({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as ProductionPlanItem));
+    });
+    const local = getAllRawLocalProductionPlans();
+    const merged = mergeById(local, remote);
     writeList(PLAN_STORAGE_KEY, merged);
+    clearSyncedIdsFromQueue(PLAN_PENDING_KEY, local, remote);
     return merged.filter((p) => !p.superseded);
-  } catch {
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules(PLAN_COLLECTION);
+    }
     return getLocalProductionPlans();
   }
 }
@@ -589,15 +717,22 @@ export function subscribeProductionPlans(onUpdate: (items: ProductionPlanItem[])
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
+    if (!(await canAccessFirestorePath(PLAN_COLLECTION, false))) return;
+    if (cancelled) return;
     try {
       unsub = onSnapshot(
         collection(db, PLAN_COLLECTION),
         { includeMetadataChanges: true },
         (snap) => {
           const remote: ProductionPlanItem[] = [];
-          snap.forEach((d) => remote.push(normalizePlanItem(d.data() as ProductionPlanItem)));
-          const merged = mergeById(getAllRawLocalProductionPlans(), remote);
+          snap.forEach((d) => {
+            const raw = d.data() as ProductionPlanItem & { sy?: number };
+            remote.push(normalizePlanItem({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as ProductionPlanItem));
+          });
+          const local = getAllRawLocalProductionPlans();
+          const merged = mergeById(local, remote);
           writeList(PLAN_STORAGE_KEY, merged);
+          clearSyncedIdsFromQueue(PLAN_PENDING_KEY, local, remote);
           onUpdate(merged.filter((p) => !p.superseded));
           if (!snap.metadata.fromCache) {
             flushPendingProductionPlans().catch(() => {});

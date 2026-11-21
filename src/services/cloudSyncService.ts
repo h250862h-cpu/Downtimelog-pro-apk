@@ -1,7 +1,10 @@
 import {
+  canAccessFirestorePath,
   fetchPlantUsersDirectory,
+  isFirestorePathBlockedByRules,
   probeFirestoreCloudHealth,
   reconnectFirestoreNetwork,
+  resetFirestorePathAccessCache,
 } from '../firebase';
 import {
   DieselFuelRequest,
@@ -27,22 +30,25 @@ import { ParsedAttendanceMessage, QCInspectionRecord } from '../types/attendance
 import {
   flushPendingAttendanceBatches,
   flushPendingQCLogs,
-  getPendingAttendanceCount,
+  getAttendanceAndQcPendingBreakdown,
   pollAttendanceBatches,
   pollQCLogs,
+  repairPendingAttendanceQueues,
 } from './attendanceStore';
 import {
   flushPendingDieselData,
-  getPendingDieselCount,
+  getDieselPendingBreakdown,
   pollDieselGrns,
   pollDieselRequests,
   pollDieselTank,
+  repairPendingDieselQueues,
 } from './dieselStore';
 import {
   flushPendingDispatches,
   getLastDispatchSyncError,
   getPendingDispatchQueue,
   pollDispatchEntries,
+  repairPendingDispatchQueue,
 } from './dispatchStore';
 import {
   flushPendingSyncQueue,
@@ -50,40 +56,46 @@ import {
   getPendingSyncQueue,
   pollFirebaseEntries,
   pollMachineryConfig,
+  repairPendingSyncQueue,
 } from './downtimeStore';
 import {
   flushPendingPowerGenData,
-  getPendingPowerGenCount,
+  getPowerGenPendingBreakdown,
   pollGeneratorLogs,
   pollPowerCutLogs,
+  repairPendingPowerGenQueues,
 } from './powerGenStore';
 import {
   flushPendingProductionPlans,
   flushPendingUploadedBackgroundDispatches,
-  getPendingPlanningAndHistCount,
+  getPlanningAndHistPendingBreakdown,
   pollProductionPlans,
   pollUploadedBackgroundDispatches,
+  repairPendingPlanningQueues,
 } from './productionPlanStore';
 import {
   flushPendingQualityTrials,
-  getPendingQualityTrialsCount,
+  getQualityTrialsPendingBreakdown,
   pollQualityTrials,
+  repairPendingQualityTrialQueues,
 } from './qualityTrialStore';
 import {
   flushAllPendingSopData,
-  getTotalPendingSopCount,
+  getSopPendingBreakdown,
   pollSopHandovers,
   pollSopMixing,
   pollSopProduction,
   pollSopQc,
   pollSopScrap,
+  repairAllSopPendingQueues,
 } from './sopStore';
 import {
   flushPendingSpecialOrderData,
-  getPendingSpecialOrderCount,
+  getSpecialOrderPendingBreakdown,
   pollSpecialOrderProductions,
   pollSpecialOrders,
   pollSpecialOrderWhDispatches,
+  repairPendingSpecialOrderQueues,
 } from './specialOrderStore';
 
 export interface PendingSyncBreakdown {
@@ -96,6 +108,7 @@ export interface PendingSyncBreakdown {
   attendanceAndQc: number;
   specialOrders: number;
   qualityTrials: number;
+  ruleBlockedPending: number;
   totalPending: number;
 }
 
@@ -155,47 +168,87 @@ export interface CloudSyncDiagnosticsResult {
   };
 }
 
+/**
+ * Automatically heals stuck pending-sync queues on any device:
+ * removes SEED- entries, deleted/orphan IDs, duplicates, and items already marked synced.
+ */
+export function repairAllPendingSyncQueues(): number {
+  const repairedTotal =
+    repairPendingSyncQueue() +
+    repairPendingDispatchQueue() +
+    repairPendingAttendanceQueues() +
+    repairAllSopPendingQueues() +
+    repairPendingDieselQueues() +
+    repairPendingPowerGenQueues() +
+    repairPendingPlanningQueues() +
+    repairPendingSpecialOrderQueues() +
+    repairPendingQualityTrialQueues();
+  return repairedTotal;
+}
+
 export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
-  const downtime = getPendingSyncQueue().length;
-  const dispatch = getPendingDispatchQueue().length;
-  const sop = getTotalPendingSopCount();
-  const diesel = getPendingDieselCount();
-  const powerGen = getPendingPowerGenCount();
-  const planningAndHist = getPendingPlanningAndHistCount();
-  const attendanceAndQc = getPendingAttendanceCount();
-  const specialOrders = getPendingSpecialOrderCount();
-  const qualityTrials = getPendingQualityTrialsCount();
+  const downtimeRaw = getPendingSyncQueue().length;
+  const downtime = isFirestorePathBlockedByRules('downtime_entries') ? 0 : downtimeRaw;
+  const dispatchRaw = getPendingDispatchQueue().length;
+  const dispatch = isFirestorePathBlockedByRules('dispatch_entries') ? 0 : dispatchRaw;
+  const sopB = getSopPendingBreakdown();
+  const dieselB = getDieselPendingBreakdown();
+  const powerGenB = getPowerGenPendingBreakdown();
+  const planHistB = getPlanningAndHistPendingBreakdown();
+  const attQcB = getAttendanceAndQcPendingBreakdown();
+  const specialB = getSpecialOrderPendingBreakdown();
+  const trialsB = getQualityTrialsPendingBreakdown();
+
+  const ruleBlockedPending =
+    (isFirestorePathBlockedByRules('downtime_entries') ? downtimeRaw : 0) +
+    (isFirestorePathBlockedByRules('dispatch_entries') ? dispatchRaw : 0) +
+    sopB.ruleBlocked +
+    dieselB.ruleBlocked +
+    powerGenB.ruleBlocked +
+    planHistB.ruleBlocked +
+    attQcB.ruleBlocked +
+    specialB.ruleBlocked +
+    trialsB.ruleBlocked;
 
   return {
     downtime,
     dispatch,
-    sop,
-    diesel,
-    powerGen,
-    planningAndHist,
-    attendanceAndQc,
-    specialOrders,
-    qualityTrials,
+    sop: sopB.active,
+    diesel: dieselB.active,
+    powerGen: powerGenB.active,
+    planningAndHist: planHistB.active,
+    attendanceAndQc: attQcB.active,
+    specialOrders: specialB.active,
+    qualityTrials: trialsB.active,
+    ruleBlockedPending,
     totalPending:
       downtime +
       dispatch +
-      sop +
-      diesel +
-      powerGen +
-      planningAndHist +
-      attendanceAndQc +
-      specialOrders +
-      qualityTrials,
+      sopB.active +
+      dieselB.active +
+      powerGenB.active +
+      planHistB.active +
+      attQcB.active +
+      specialB.active +
+      trialsB.active,
   };
 }
 
 /**
- * Forces a full Firestore network wake-up, flushes all queued mobile/desktop offline writes
- * across every plant module, and pulls fresh server-side snapshots (`getDocsFromServer`).
+ * Forces a full Firestore network wake-up, auto-repairs stuck device outbox queues,
+ * flushes all queued mobile/desktop offline writes across every plant module,
+ * and pulls fresh server-side snapshots (`getDocsFromServer`).
  */
-export async function runFullCloudSyncNow(): Promise<CloudSyncDiagnosticsResult> {
+export async function runFullCloudSyncNow(
+  forceRefresh: boolean = false
+): Promise<CloudSyncDiagnosticsResult> {
+  if (forceRefresh) {
+    resetFirestorePathAccessCache();
+  }
+  repairAllPendingSyncQueues();
+  await canAccessFirestorePath('sop_production_logs', false).catch(() => false);
   const pendingBefore = getUnifiedPendingQueueBreakdown();
-  await reconnectFirestoreNetwork().catch(() => false);
+  await reconnectFirestoreNetwork(false).catch(() => false);
   const health = await probeFirestoreCloudHealth();
 
   const flushCounts = await Promise.all([
@@ -263,6 +316,7 @@ export async function runFullCloudSyncNow(): Promise<CloudSyncDiagnosticsResult>
     fetchPlantUsersDirectory(),
   ]);
 
+  repairAllPendingSyncQueues();
   const pendingAfter = getUnifiedPendingQueueBreakdown();
   const storeErr = getLastSyncError() || getLastDispatchSyncError();
   const combinedErr = !health.ok ? health.error || storeErr || 'Cloud server unreachable' : storeErr || undefined;
