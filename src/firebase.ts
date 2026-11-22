@@ -838,18 +838,28 @@ export async function loginWithEmail(identifier: string, pass: string) {
       }
     }
 
-    // Check if user is registered in plant staff directory (sync from Firestore first)
+    // Check if user is registered in plant staff directory (authenticate sync lookup first for secured rules)
+    let lookupAuthed = false;
+    if (!auth.currentUser) {
+      lookupAuthed = await signInOrProvisionAccount(
+        SYNC_SERVICE_EMAIL,
+        SYNC_SERVICE_PASS,
+        'Plant Directory Lookup'
+      );
+    }
     await fetchPlantUsersDirectory();
     const localStaff = getLocalPlantUsers();
     const staffMatch = localStaff.find((s) => s.email.toLowerCase() === normEmail);
 
-    if (isMasterAdminCred || staffMatch) {
+    if (isMasterAdminCred || (staffMatch && staffMatch.status !== 'suspended')) {
       // Ensure a real Firebase Auth token is active for Firestore sync
-      await signInOrProvisionAccount(
-        SYNC_SERVICE_EMAIL,
-        SYNC_SERVICE_PASS,
-        staffMatch?.displayName || 'PLANT ADMINISTRATOR'
-      );
+      if (!auth.currentUser) {
+        await signInOrProvisionAccount(
+          SYNC_SERVICE_EMAIL,
+          SYNC_SERVICE_PASS,
+          staffMatch?.displayName || 'PLANT ADMINISTRATOR'
+        );
+      }
 
       const resolvedDisplayName =
         staffMatch?.displayName ||
@@ -874,6 +884,9 @@ export async function loginWithEmail(identifier: string, pass: string) {
       return { user: sessionUser };
     }
 
+    if (lookupAuthed) {
+      await signOut(auth).catch(() => {});
+    }
     console.warn('Email Sign-In notice:', err);
     throw err;
   }

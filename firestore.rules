@@ -1,17 +1,226 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Posted plant logs can be created, updated (e.g. restored running), and read live across all devices,
-    // but NO ONE can delete posted information.
+    // Global default-deny safety net: unlisted collections/documents are strictly blocked
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidDocId(docId) {
+      return docId is string
+        && docId.size() >= 1
+        && docId.size() <= 160
+        && docId.matches('^[a-zA-Z0-9_.\\-]+$');
+    }
+
+    function isBoundedPayload() {
+      return incoming().keys().size() >= 1 && incoming().keys().size() <= 100;
+    }
+
+    // Connection health check (authenticated users only)
+    match /test/{docId} {
+      allow get: if isSignedIn() && docId == 'connection';
+      allow list, write: if false;
+    }
+
+    // Core Downtime Logs — authenticated only, no deletion or soft-delete allowed
     match /downtime_entries/{entryId} {
-      allow read: if true;
-      allow create: if !('del' in request.resource.data) || request.resource.data.del != 1;
-      allow update: if !('del' in request.resource.data) || request.resource.data.del != 1;
+      allow get: if isSignedIn() && isValidDocId(entryId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn()
+        && isValidDocId(entryId)
+        && isBoundedPayload()
+        && (!('del' in incoming()) || incoming().del != 1);
+      allow update: if isSignedIn()
+        && isValidDocId(entryId)
+        && isBoundedPayload()
+        && (!('del' in incoming()) || incoming().del != 1);
       allow delete: if false;
     }
 
-    match /{document=**} {
-      allow read, create, update: if true;
+    // Plant User Directory — authenticated only, schema-validated, never hard-deleted
+    match /plant_users/{userId} {
+      allow get: if isSignedIn() && isValidDocId(userId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && isValidDocId(userId)
+        && isBoundedPayload()
+        && incoming().email is string
+        && incoming().email.size() <= 160
+        && incoming().role is string
+        && incoming().role.size() <= 80
+        && incoming().displayName is string
+        && incoming().displayName.size() <= 160;
+      allow delete: if false;
+    }
+
+    // Special Order Factory Production (Gumboots) — confirmed factory stock is locked against deletion
+    match /special_order_production/{entryId} {
+      allow get: if isSignedIn() && isValidDocId(entryId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidDocId(entryId) && isBoundedPayload();
+      allow update: if isSignedIn()
+        && isValidDocId(entryId)
+        && isBoundedPayload()
+        && !(existing().status == 'CONFIRMED_IN_FACTORY' && ('deleted' in incoming()) && incoming().deleted == true);
+      allow delete: if false;
+    }
+
+    // Special Order WH Dispatches (Gumboots) — confirmed dispatches are locked against deletion
+    match /special_order_wh_dispatches/{entryId} {
+      allow get: if isSignedIn() && isValidDocId(entryId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidDocId(entryId) && isBoundedPayload();
+      allow update: if isSignedIn()
+        && isValidDocId(entryId)
+        && isBoundedPayload()
+        && !(existing().status == 'CONFIRMED' && ('deleted' in incoming()) && incoming().deleted == true);
+      allow delete: if false;
+    }
+
+    // Explicit allowlisted operational collections (authenticated staff only, no deletions)
+    match /app_config/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /dispatch_entries/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /historical_dispatch_uploads/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /monthly_production_plans/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /diesel_tank_config/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /diesel_fuel_requests/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /diesel_grn_records/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /power_cut_logs/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /generator_logs/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /sop_production_logs/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /sop_qc_checks/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /sop_scrap_pipeline/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /sop_mixing_reports/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /sop_shift_handovers/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /special_orders/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /quality_trial_reports/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /maintenance_job_cards/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /attendance_batches/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /qc_inspections/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
   }

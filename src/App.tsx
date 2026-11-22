@@ -521,12 +521,12 @@ export default function App() {
       if (!mounted) return;
       if (session || auth.currentUser) {
         await canAccessFirestorePath('sop_production_logs', false).catch(() => false);
+        await testConnection().catch(() => {});
         if (mounted) {
           repairAllPendingSyncQueues();
           setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
         }
       }
-      await testConnection().catch(() => {});
       if (mounted) {
         repairAllPendingSyncQueues();
         setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);

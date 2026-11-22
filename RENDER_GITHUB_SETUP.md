@@ -25,7 +25,7 @@ Render **Static Sites** run on a global CDN and **never sleep** (unlike free Web
    - **Repository**: Select your `lgplast-apk` GitHub repo
    - **Branch**: `main`
    - **Build Command**: `npm install && npm run build`
-   - **Publish Directory**: `dist`
+   - **Publish Directory**: `dist` *(Important: type `dist` — **not** `dict`, otherwise Render fails with `Publish directory ./dict does not exist!`)*
    - **Redirect / Rewrite Rule** (if creating manually instead of Blueprint):
      - Source: `/*` → Destination: `/index.html` → Action: `Rewrite`
 3. Click **Create Static Site / Apply**.

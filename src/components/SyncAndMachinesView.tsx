@@ -668,7 +668,8 @@ git push -u origin main`}
                 Build Command: <code className="bg-slate-900 px-1.5 py-0.5 rounded text-emerald-300">npm install &amp;&amp; npm run build</code>
               </li>
               <li>
-                Publish Directory: <code className="bg-slate-900 px-1.5 py-0.5 rounded text-emerald-300">dist</code>
+                Publish Directory: <code className="bg-slate-900 px-1.5 py-0.5 rounded text-emerald-300">dist</code>{' '}
+                <span className="text-amber-300 font-semibold">(type <code>dist</code>, NOT <code>dict</code>)</span>
               </li>
               <li>
                 Add your <code className="text-amber-300">.onrender.com</code> domain inside{' '}
