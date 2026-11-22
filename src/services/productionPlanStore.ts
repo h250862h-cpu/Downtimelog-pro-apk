@@ -1,5 +1,5 @@
 import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
+import * as XLSX from '../utils/xlsxCompat';
 import historicalDispatchRaw from '../data/historicalDispatch.json';
 import {
   canAccessFirestorePath,

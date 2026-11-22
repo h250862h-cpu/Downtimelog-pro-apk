@@ -4,7 +4,7 @@ import {
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
+import * as XLSX from '../utils/xlsxCompat';
 import { QC_CSV_SEED_VERSION, SEEDED_QC_RECORDS } from '../data/qcCsvSeed';
 import {
   canAccessFirestorePath,
@@ -178,6 +178,27 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
     });
   };
 
+  const isSeededId = (id: string) =>
+    id.startsWith('SEED-') || id.startsWith('QC-CSV-');
+
+  const queueMissingFromRemote = (merged: T[], remote: T[]): T[] => {
+    const remoteMap = new Map(remote.map((r) => [r.id, r]));
+    let mutated = false;
+    const next = merged.map((item) => {
+      if (!item?.id || isSeededId(item.id)) return item;
+      const r = remoteMap.get(item.id);
+      if (!r || (item.upd || 0) > (r.upd || 0)) {
+        addPendingId(pendingKey, item.id);
+        if (item.sy !== 0) {
+          mutated = true;
+          return { ...item, sy: 0 };
+        }
+      }
+      return item;
+    });
+    return mutated ? next : merged;
+  };
+
   const save = async (
     item: T,
     options?: { preserveUpd?: boolean }
@@ -185,6 +206,7 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
     const updatedItem: T = norm({
       ...item,
       upd: options?.preserveUpd && item.upd ? item.upd : Date.now(),
+      sy: 0,
     });
 
     const local = getLocal();
@@ -196,12 +218,13 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
       nextLocal.unshift(updatedItem);
     }
     writeLocalList(storageKey, nextLocal);
+    addPendingId(pendingKey, updatedItem.id);
 
     try {
       await ensureFirebaseAuth();
       const payload = sanitizeForFirestore({
         ...updatedItem,
-        sy: Date.now(),
+        sy: Math.max(Date.now(), updatedItem.upd || 0),
       });
       await setDoc(doc(db, collectionName, updatedItem.id), payload, { merge: true });
       removePendingId(pendingKey, updatedItem.id);
@@ -254,7 +277,7 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
         remote.push(norm({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 }));
       });
       const local = getLocal();
-      const merged = mergeRecords(local, remote, normalizeFn);
+      const merged = queueMissingFromRemote(mergeRecords(local, remote, normalizeFn), remote);
       writeLocalList(storageKey, merged);
       clearSyncedFromQueue(local, remote);
       return merged;
@@ -270,65 +293,92 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
     onUpdate(getLocal());
     let unsub: () => void = () => {};
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let listenerActive = false;
     let cancelled = false;
 
-    const start = async () => {
+    const scheduleAttachRetry = () => {
+      if (cancelled || retryTimer) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (!cancelled && !listenerActive) {
+          attachListener();
+        }
+      }, 15000);
+    };
+
+    const attachListener = async () => {
+      if (cancelled || listenerActive) return;
       await ensureFirebaseAuth();
       if (cancelled) return;
       const canWatch = await canAccessFirestorePath(collectionName, false);
       if (cancelled) return;
-      if (canWatch) {
-        try {
-          unsub = onSnapshot(
-            collection(db, collectionName),
-            { includeMetadataChanges: true },
-            (snapshot) => {
-              const remote: T[] = [];
-              snapshot.forEach((d) => {
-                const raw = d.data() as T;
-                remote.push(norm({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 }));
-              });
-              const local = getLocal();
-              const merged = mergeRecords(local, remote, normalizeFn);
-              writeLocalList(storageKey, merged);
-              clearSyncedFromQueue(local, remote);
-              onUpdate(merged);
-              if (!snapshot.metadata.fromCache) {
-                flush().catch(() => {});
-              }
-            },
-            (err) => {
-              if (isPermissionDeniedError(err)) {
-                markFirestorePathBlockedByRules(collectionName);
-              }
-              console.warn(`${collectionName} listener fallback:`, err.message);
-            }
-          );
-        } catch (e) {
-          console.warn(`${collectionName} subscribe error:`, e);
-        }
+      if (!canWatch) {
+        scheduleAttachRetry();
+        return;
       }
+      try {
+        listenerActive = true;
+        unsub();
+        unsub = onSnapshot(
+          collection(db, collectionName),
+          { includeMetadataChanges: true },
+          (snapshot) => {
+            const remote: T[] = [];
+            snapshot.forEach((d) => {
+              const raw = d.data() as T;
+              remote.push(norm({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 }));
+            });
+            const local = getLocal();
+            const mergedRaw = mergeRecords(local, remote, normalizeFn);
+            const merged = !snapshot.metadata.fromCache
+              ? queueMissingFromRemote(mergedRaw, remote)
+              : mergedRaw;
+            writeLocalList(storageKey, merged);
+            clearSyncedFromQueue(local, remote);
+            onUpdate(merged);
+            if (!snapshot.metadata.fromCache) {
+              flush().catch(() => {});
+            }
+          },
+          (err) => {
+            listenerActive = false;
+            if (isPermissionDeniedError(err)) {
+              markFirestorePathBlockedByRules(collectionName);
+            }
+            console.warn(`${collectionName} listener fallback:`, err.message);
+            scheduleAttachRetry();
+          }
+        );
+      } catch (e) {
+        listenerActive = false;
+        console.warn(`${collectionName} subscribe error:`, e);
+        scheduleAttachRetry();
+      }
+    };
 
+    attachListener();
+
+    poll()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+
+    pollTimer = setInterval(() => {
       poll()
         .then((merged) => {
           if (!cancelled) onUpdate(merged);
+          if (!listenerActive) attachListener();
         })
         .catch(() => {});
-
-      pollTimer = setInterval(() => {
-        poll()
-          .then((merged) => {
-            if (!cancelled) onUpdate(merged);
-          })
-          .catch(() => {});
-      }, 20000);
-    };
-
-    start();
+    }, 15000);
 
     return () => {
       cancelled = true;
+      listenerActive = false;
       unsub();
+      if (retryTimer) clearTimeout(retryTimer);
       if (pollTimer) clearInterval(pollTimer);
     };
   };

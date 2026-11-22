@@ -7,6 +7,19 @@ export const CURRENT_APP_BUILT_AT: string =
 const APPLIED_BUILD_KEY = 'lgplast_applied_build_v1';
 const SW_RELOADED_KEY = 'lgplast_sw_reloaded_build_v1';
 
+export const OFFICIAL_APK_URL = 'https://downtimelog-pro-apk.onrender.com';
+
+export function getCanonicalSharedAppUrl(): string {
+  if (typeof window === 'undefined' || !window.location?.origin) {
+    return OFFICIAL_APK_URL;
+  }
+  const host = window.location.hostname.toLowerCase();
+  if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.onrender.com')) {
+    return window.location.origin;
+  }
+  return OFFICIAL_APK_URL;
+}
+
 export interface ServerVersionInfo {
   buildId: string;
   builtAt?: string;
@@ -215,7 +228,7 @@ export function initProductionServiceWorkerAndUpdates(
   let lastCheckAt = 0;
   const runMidSessionCheck = () => {
     const now = Date.now();
-    if (now - lastCheckAt < 60000) return;
+    if (now - lastCheckAt < 45000) return;
     lastCheckAt = now;
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
@@ -223,7 +236,7 @@ export function initProductionServiceWorkerAndUpdates(
         .then((regs) => regs.forEach((r) => r.update().catch(() => {})))
         .catch(() => {});
     }
-    checkForLiveServerUpdate({ autoReloadIfDifferent: false }).then((res) => {
+    checkForLiveServerUpdate({ autoReloadIfDifferent: true }).then((res) => {
       if (res.updateAvailable && res.serverBuildId && onUpdateDetected) {
         onUpdateDetected(res.serverBuildId);
       }
@@ -236,7 +249,7 @@ export function initProductionServiceWorkerAndUpdates(
     }
   };
 
-  const pollTimer = setInterval(runMidSessionCheck, 180000);
+  const pollTimer = setInterval(runMidSessionCheck, 60000);
   window.addEventListener('focus', runMidSessionCheck);
   window.addEventListener('online', runMidSessionCheck);
   document.addEventListener('visibilitychange', handleVis);

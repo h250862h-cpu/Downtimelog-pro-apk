@@ -338,6 +338,30 @@ export async function runFullCloudSyncNow(
   ]);
 
   repairAllPendingSyncQueues();
+  const pendingMid = getUnifiedPendingQueueBreakdown();
+  let extraFlushed = 0;
+  if (pendingMid.totalPending > 0 && health.ok) {
+    const flushPass2 = await Promise.all([
+      flushPendingSyncQueue().catch(() => 0),
+      flushPendingDispatches().catch(() => 0),
+      flushPendingAttendanceBatches().catch(() => 0),
+      flushPendingQCLogs()
+        .then((r) => r.success)
+        .catch(() => 0),
+      flushAllPendingSopData().catch(() => 0),
+      flushPendingUploadedBackgroundDispatches().catch(() => 0),
+      flushPendingProductionPlans().catch(() => 0),
+      flushPendingDieselData().catch(() => 0),
+      flushPendingPowerGenData().catch(() => 0),
+      flushPendingSpecialOrderData().catch(() => 0),
+      flushPendingQualityTrials().catch(() => 0),
+      flushPendingMaintenanceJobCards().catch(() => 0),
+    ]);
+    extraFlushed = flushPass2.reduce((s, n) => s + (Number(n) || 0), 0);
+    repairAllPendingSyncQueues();
+  }
+
+  const totalFlushed = flushedTotal + extraFlushed;
   const pendingAfter = getUnifiedPendingQueueBreakdown();
   const storeErr = getLastSyncError() || getLastDispatchSyncError();
   const combinedErr = !health.ok ? health.error || storeErr || 'Cloud server unreachable' : storeErr || undefined;
@@ -348,7 +372,7 @@ export async function runFullCloudSyncNow(
     latencyMs: health.latencyMs,
     authEmail: health.authEmail,
     error: combinedErr,
-    flushedTotal,
+    flushedTotal: totalFlushed,
     pendingBefore,
     pendingAfter,
     counts: {

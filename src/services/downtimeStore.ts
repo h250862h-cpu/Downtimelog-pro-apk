@@ -696,12 +696,16 @@ export async function flushPendingSyncQueue(): Promise<number> {
     } catch (err: any) {
       const msg = err?.message || String(err);
       const code = String(err?.code || '').toLowerCase();
-      if (isPermissionDeniedError(err) || code.includes('invalid-argument')) {
-        // Specific malformed/soft-deleted entry rejected by server rules — prevent infinite queue spin
+      if (code.includes('invalid-argument')) {
+        // Malformed payload rejected by schema validator — prevent infinite queue spin
         removeFromPendingSyncQueue(entry.id);
         entry.sy = entry.upd || Date.now();
         updatedLocalMetadata = true;
       } else {
+        // Never mark sy = upd on permission/network errors; keep entry queued so it uploads once auth/rules allow
+        entry.sy = 0;
+        updatedLocalMetadata = true;
+        addToPendingSyncQueue(entry.id);
         lastSyncError = msg;
       }
       console.warn(`Auto-sync retry note for ${entry.id}:`, msg);
@@ -728,44 +732,46 @@ export async function pollFirebaseEntries(
     const colRef = collection(db, 'downtime_entries');
     const snapshot = await getCollectionDocsServerFirst(colRef);
     lastSyncError = null;
-    if (!snapshot.empty) {
-      const remoteMap: Record<string, DowntimeEntry> = {};
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data() as DowntimeEntry;
-        remoteMap[docSnap.id] = normalizeDowntimeEntry({
-          ...data,
-          id: docSnap.id,
-          sy: data.sy || data.upd || 1,
-        });
+    const remoteMap: Record<string, DowntimeEntry> = {};
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as DowntimeEntry;
+      remoteMap[docSnap.id] = normalizeDowntimeEntry({
+        ...data,
+        id: docSnap.id,
+        sy: data.sy || data.upd || 1,
       });
+    });
 
-      const currentLocal = getStoredEntries();
-      const mergedMap: Record<string, DowntimeEntry> = { ...remoteMap };
+    const currentLocal = getStoredEntries();
+    const mergedMap: Record<string, DowntimeEntry> = { ...remoteMap };
 
-      currentLocal.forEach((e) => {
-        if (e.id.startsWith('SEED-') && Object.keys(remoteMap).length > 0) {
-          if (!mergedMap[e.id]) return;
+    currentLocal.forEach((e) => {
+      if (e.id.startsWith('SEED-')) {
+        if (Object.keys(remoteMap).length === 0 || mergedMap[e.id]) {
+          mergedMap[e.id] = mergedMap[e.id] || e;
         }
-        if (e.del === 1) {
-          removeFromPendingSyncQueue(e.id);
-          return;
-        }
-        if (!mergedMap[e.id]) {
-          mergedMap[e.id] = e;
-          addToPendingSyncQueue(e.id);
-        } else if ((e.upd || 0) > (mergedMap[e.id].upd || 0)) {
-          mergedMap[e.id] = e;
-          addToPendingSyncQueue(e.id);
-        } else {
-          removeFromPendingSyncQueue(e.id);
-        }
-      });
+        return;
+      }
+      if (e.del === 1) {
+        removeFromPendingSyncQueue(e.id);
+        return;
+      }
+      if (!mergedMap[e.id]) {
+        // Local non-seed entry missing on server -> reset sy = 0 so it uploads cleanly
+        mergedMap[e.id] = { ...e, sy: 0 };
+        addToPendingSyncQueue(e.id);
+      } else if ((e.upd || 0) > (mergedMap[e.id].upd || 0)) {
+        mergedMap[e.id] = { ...e, sy: 0 };
+        addToPendingSyncQueue(e.id);
+      } else {
+        removeFromPendingSyncQueue(e.id);
+      }
+    });
 
-      const mergedList = Object.values(mergedMap).sort((a, b) => (b.upd || 0) - (a.upd || 0));
-      saveStoredEntries(mergedList);
-      if (onUpdate) onUpdate(mergedList);
-      return mergedList;
-    }
+    const mergedList = Object.values(mergedMap).sort((a, b) => (b.upd || 0) - (a.upd || 0));
+    saveStoredEntries(mergedList);
+    if (onUpdate) onUpdate(mergedList);
+    return mergedList;
   } catch (err: any) {
     lastSyncError = err?.message || String(err);
     console.warn('Backup poll note:', lastSyncError);
@@ -843,10 +849,10 @@ export function subscribeFirebaseEntries(
               return;
             }
             if (!mergedMap[e.id]) {
-              mergedMap[e.id] = e;
+              mergedMap[e.id] = !snapshot.metadata.fromCache ? { ...e, sy: 0 } : e;
               addToPendingSyncQueue(e.id);
             } else if ((e.upd || 0) > (mergedMap[e.id].upd || 0)) {
-              mergedMap[e.id] = e;
+              mergedMap[e.id] = !snapshot.metadata.fromCache ? { ...e, sy: 0 } : e;
               addToPendingSyncQueue(e.id);
             } else {
               removeFromPendingSyncQueue(e.id);
@@ -860,6 +866,7 @@ export function subscribeFirebaseEntries(
             onSyncStatus('syncing', `Loaded local cache (${snapshot.size}); reaching Firestore server...`);
           } else {
             onSyncStatus('synced', `Live synced with Firestore server (${snapshot.size} records)`);
+            flushPendingSyncQueue().catch(() => {});
           }
         },
         (error) => {
@@ -893,7 +900,7 @@ export function subscribeFirebaseEntries(
   const pollInterval = setInterval(() => {
     pollFirebaseEntries(onUpdate)
       .then(() => {
-        if (!listenerActive && !lastSyncError) {
+        if (!listenerActive) {
           startLiveSync();
         }
       })

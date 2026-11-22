@@ -4,16 +4,14 @@ import {
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
+import * as XLSX from '../utils/xlsxCompat';
 import {
   canAccessFirestorePath,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
-  isFirestorePathBlockedByRules,
   isPermissionDeniedError,
-  markFirestorePathBlockedByRules,
 } from '../firebase';
 import { DispatchEntry, normalizeMachineName, SopProductionRecord } from '../types';
 import { FACTORY_STAFF_ROSTER } from '../types/factoryStaff';
@@ -232,7 +230,6 @@ export function repairPendingDispatchQueue(): number {
 
 function clearSyncedFromDispatchQueue(local: DispatchEntry[], remote: DispatchEntry[]) {
   const pending = getPendingDispatchQueue();
-  if (!pending.length) return;
   const localMap = new Map(local.map((e) => [e.id, e]));
   const remoteMap = new Map(remote.map((e) => [e.id, e]));
   pending.forEach((id) => {
@@ -242,6 +239,28 @@ function clearSyncedFromDispatchQueue(local: DispatchEntry[], remote: DispatchEn
       removePendingDispatchId(id);
     }
   });
+}
+
+function queueLocalDispatchesMissingFromRemote(
+  merged: DispatchEntry[],
+  remote: DispatchEntry[]
+): DispatchEntry[] {
+  const remoteMap = new Map(remote.map((e) => [e.id, e]));
+  let mutated = false;
+  const next = merged.map((item) => {
+    if (!item?.id || item.id.startsWith('SEED-')) return item;
+    const r = remoteMap.get(item.id);
+    const needsUpload = !r || (item.upd || 0) > (r.upd || 0);
+    if (needsUpload) {
+      addPendingDispatchId(item.id);
+      if (item.sy !== 0) {
+        mutated = true;
+        return { ...item, sy: 0 };
+      }
+    }
+    return item;
+  });
+  return mutated ? next : merged;
 }
 
 function sanitizeDispatchForFirestore<T extends Record<string, any>>(obj: T): T {
@@ -279,9 +298,10 @@ export async function saveDispatchEntryToFirebase(
   const updatedEntry: DispatchEntry = {
     ...normEntry,
     upd: options?.preserveUpd && normEntry.upd ? normEntry.upd : Date.now(),
+    sy: 0,
   };
 
-  // Persist locally immediately
+  // Persist locally immediately and queue for upload
   const local = readRawStoredDispatches();
   const idx = local.findIndex((x) => x.id === updatedEntry.id);
   const nextLocal = [...local];
@@ -291,36 +311,44 @@ export async function saveDispatchEntryToFirebase(
     nextLocal.unshift(updatedEntry);
   }
   saveStoredDispatches(nextLocal);
+  addPendingDispatchId(updatedEntry.id);
 
   try {
     await ensureFirebaseAuth();
+    const syncTs = Math.max(Date.now(), updatedEntry.upd || 0);
     const payload = sanitizeDispatchForFirestore({
       ...updatedEntry,
-      sy: Date.now(),
+      sy: syncTs,
     });
     const docRef = doc(db, DISPATCH_COLLECTION, updatedEntry.id);
-    await setDoc(docRef, payload, { merge: true });
+    const writePromise = setDoc(docRef, payload, { merge: true }).then(() => ({ ok: true as const }));
+    const timeoutPromise = new Promise<{ ok: false; error: string }>((resolve) =>
+      setTimeout(() => resolve({ ok: false, error: 'Saved locally — queued for cloud sync' }), 5000)
+    );
+    const race = await Promise.race([writePromise, timeoutPromise]);
+    if (!race.ok) {
+      lastDispatchSyncError = race.error;
+      return race;
+    }
 
     removePendingDispatchId(updatedEntry.id);
     lastDispatchSyncError = null;
 
     // Update sync timestamp in local cache
     const latest = readRawStoredDispatches().map((x) =>
-      x.id === updatedEntry.id ? { ...x, sy: payload.sy } : x
+      x.id === updatedEntry.id ? { ...x, sy: syncTs } : x
     );
     saveStoredDispatches(latest);
 
     return { ok: true };
   } catch (err: any) {
     const code = String(err?.code || '').toLowerCase();
-    const msg = err?.message || 'Failed syncing dispatch entry to cloud';
-    if (isPermissionDeniedError(err)) {
-      markFirestorePathBlockedByRules(DISPATCH_COLLECTION);
-      addPendingDispatchId(updatedEntry.id);
-      lastDispatchSyncError = null;
-    } else if (code.includes('invalid-argument')) {
+    const msg = isPermissionDeniedError(err)
+      ? 'Cloud permission denied on dispatch_entries — verify Firestore Rules are published.'
+      : err?.message || 'Failed syncing dispatch entry to cloud';
+    if (code.includes('invalid-argument')) {
       removePendingDispatchId(updatedEntry.id);
-      lastDispatchSyncError = null;
+      lastDispatchSyncError = msg;
     } else {
       lastDispatchSyncError = msg;
       addPendingDispatchId(updatedEntry.id);
@@ -349,14 +377,20 @@ export async function softDeleteDispatchEntryById(
 
 export async function flushPendingDispatches(): Promise<number> {
   repairPendingDispatchQueue();
-  const pendingIds = getPendingDispatchQueue();
-  if (!pendingIds.length) return 0;
+  await ensureFirebaseAuth().catch(() => false);
   if (!(await canAccessFirestorePath(DISPATCH_COLLECTION, false))) return 0;
 
   const local = readRawStoredDispatches();
+  const pendingSet = new Set<string>(getPendingDispatchQueue());
+  local.forEach((e) => {
+    if (e?.id && !e.id.startsWith('SEED-') && (!e.sy || (e.upd && e.upd > e.sy))) {
+      pendingSet.add(e.id);
+    }
+  });
+  if (pendingSet.size === 0) return 0;
+
   let flushed = 0;
-  for (const id of pendingIds) {
-    if (isFirestorePathBlockedByRules(DISPATCH_COLLECTION)) break;
+  for (const id of Array.from(pendingSet)) {
     const found = local.find((e) => e.id === id);
     if (found) {
       const res = await saveDispatchEntryToFirebase(found, { preserveUpd: true });
@@ -374,12 +408,14 @@ export async function pollDispatchEntries(): Promise<DispatchEntry[]> {
     const snap = await getCollectionDocsServerFirst(collection(db, DISPATCH_COLLECTION));
     const remote: DispatchEntry[] = [];
     snap.forEach((d) => {
-      remote.push(d.data() as DispatchEntry);
+      const data = d.data() as DispatchEntry;
+      remote.push({ ...data, id: data.id || d.id, sy: data.sy || data.upd || 1 });
     });
     const local = readRawStoredDispatches();
-    const merged = mergeDispatches(local, remote);
-    saveStoredDispatches(merged);
+    const mergedRaw = mergeDispatches(local, remote);
     clearSyncedFromDispatchQueue(local, remote);
+    const merged = queueLocalDispatchesMissingFromRemote(mergedRaw, remote);
+    saveStoredDispatches(merged);
     lastDispatchSyncError = null;
     return merged.filter((e) => !e.deleted);
   } catch (err: any) {
@@ -396,9 +432,11 @@ export function subscribeDispatchEntries(
 
   let unsub: () => void = () => {};
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let cancelled = false;
 
-  const start = async () => {
+  const attachSnapshot = async () => {
+    if (cancelled) return;
     await ensureFirebaseAuth();
     if (cancelled) return;
 
@@ -410,12 +448,16 @@ export function subscribeDispatchEntries(
         (snapshot) => {
           const remote: DispatchEntry[] = [];
           snapshot.forEach((d) => {
-            remote.push(d.data() as DispatchEntry);
+            const data = d.data() as DispatchEntry;
+            remote.push({ ...data, id: data.id || d.id, sy: data.sy || data.upd || 1 });
           });
           const local = readRawStoredDispatches();
-          const merged = mergeDispatches(local, remote);
-          saveStoredDispatches(merged);
+          const mergedRaw = mergeDispatches(local, remote);
           clearSyncedFromDispatchQueue(local, remote);
+          const merged = !snapshot.metadata.fromCache
+            ? queueLocalDispatchesMissingFromRemote(mergedRaw, remote)
+            : mergedRaw;
+          saveStoredDispatches(merged);
           lastDispatchSyncError = null;
           onSyncError?.(null);
           onUpdate(merged.filter((e) => !e.deleted));
@@ -427,30 +469,38 @@ export function subscribeDispatchEntries(
           console.warn('Dispatch Firestore listener warning:', err.message);
           lastDispatchSyncError = err.message;
           onSyncError?.(err.message);
+          unsub = () => {};
+          if (!cancelled && !retryTimer) {
+            retryTimer = setTimeout(() => {
+              retryTimer = null;
+              if (!cancelled) attachSnapshot().catch(() => {});
+            }, 12000);
+          }
         }
       );
     } catch (e: any) {
       lastDispatchSyncError = e?.message || 'Dispatch subscription failed';
       onSyncError?.(lastDispatchSyncError);
     }
+  };
 
+  attachSnapshot();
+
+  pollDispatchEntries()
+    .then((merged) => onUpdate(merged))
+    .catch(() => {});
+
+  pollTimer = setInterval(() => {
     pollDispatchEntries()
       .then((merged) => onUpdate(merged))
       .catch(() => {});
-
-    pollTimer = setInterval(() => {
-      pollDispatchEntries()
-        .then((merged) => onUpdate(merged))
-        .catch(() => {});
-    }, 20000);
-  };
-
-  start();
+  }, 15000);
 
   return () => {
     cancelled = true;
     unsub();
     if (pollTimer) clearInterval(pollTimer);
+    if (retryTimer) clearTimeout(retryTimer);
   };
 }
 

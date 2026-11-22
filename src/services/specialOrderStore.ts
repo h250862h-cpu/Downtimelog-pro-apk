@@ -6,7 +6,7 @@ import {
 } from 'firebase/firestore';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import * as XLSX from 'xlsx';
+import * as XLSX from '../utils/xlsxCompat';
 import {
   canAccessFirestorePath,
   db,
@@ -224,6 +224,30 @@ function clearSyncedIdsFromQueue<T extends { id: string; upd?: number }>(
       removePendingId(pendingKey, id);
     }
   });
+}
+
+function queueMissingSpecialOrderRecords<T extends { id: string; upd?: number; sy?: number }>(
+  pendingKey: string,
+  merged: T[],
+  remote: T[],
+  shouldSkip?: (item: T) => boolean
+): T[] {
+  const remoteMap = new Map(remote.map((r) => [r.id, r]));
+  let mutated = false;
+  const next = merged.map((item) => {
+    if (!item?.id) return item;
+    if (shouldSkip && shouldSkip(item)) return item;
+    const r = remoteMap.get(item.id);
+    if (!r || (item.upd || 0) > (r.upd || 0)) {
+      addPendingId(pendingKey, item.id);
+      if (item.sy !== 0) {
+        mutated = true;
+        return { ...item, sy: 0 };
+      }
+    }
+    return item;
+  });
+  return mutated ? next : merged;
 }
 
 function ensureDefaultGumBootOrder(orders: SpecialOrder[]): SpecialOrder[] {
@@ -513,6 +537,11 @@ export async function flushPendingSpecialOrderData(): Promise<number> {
   return count;
 }
 
+const isUnmodifiedDefaultSpecialOrder = (o: SpecialOrder) =>
+  o.id === DEFAULT_GUM_BOOT_SPECIAL_ORDER.id &&
+  !o.planningUpdatedAt &&
+  (o.upd || 0) === DEFAULT_GUM_BOOT_SPECIAL_ORDER.upd;
+
 export async function pollSpecialOrders(): Promise<SpecialOrder[]> {
   try {
     await ensureFirebaseAuth();
@@ -526,7 +555,13 @@ export async function pollSpecialOrders(): Promise<SpecialOrder[]> {
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrder);
     });
     const local = getLocalSpecialOrders();
-    const merged = ensureDefaultGumBootOrder(mergeById(local, remote));
+    const mergedRaw = ensureDefaultGumBootOrder(mergeById(local, remote));
+    const merged = queueMissingSpecialOrderRecords(
+      ORDERS_PENDING_KEY,
+      mergedRaw,
+      remote,
+      isUnmodifiedDefaultSpecialOrder
+    );
     saveLocalList(ORDERS_STORAGE_KEY, merged);
     clearSyncedIdsFromQueue(ORDERS_PENDING_KEY, local, remote);
     return merged;
@@ -551,7 +586,8 @@ export async function pollSpecialOrderProductions(): Promise<SpecialOrderFactory
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderFactoryProduction);
     });
     const local = readRawSpecialOrderProductions();
-    const merged = mergeById(local, remote, true, true);
+    const mergedRaw = mergeById(local, remote, true, true);
+    const merged = queueMissingSpecialOrderRecords(PROD_PENDING_KEY, mergedRaw, remote);
     saveLocalList(PROD_STORAGE_KEY, merged);
     clearSyncedIdsFromQueue(PROD_PENDING_KEY, local, remote);
     return filterActiveRecords(merged);
@@ -576,7 +612,8 @@ export async function pollSpecialOrderWhDispatches(): Promise<SpecialOrderWhDisp
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderWhDispatch);
     });
     const local = readRawSpecialOrderWhDispatches();
-    const merged = mergeById(local, remote, true, true);
+    const mergedRaw = mergeById(local, remote, true, true);
+    const merged = queueMissingSpecialOrderRecords(WH_DISPATCH_PENDING_KEY, mergedRaw, remote);
     saveLocalList(WH_DISPATCH_STORAGE_KEY, merged);
     clearSyncedIdsFromQueue(WH_DISPATCH_PENDING_KEY, local, remote);
     return filterActiveRecords(merged);
@@ -592,12 +629,26 @@ export function subscribeSpecialOrders(onUpdate: (rows: SpecialOrder[]) => void)
   onUpdate(getLocalSpecialOrders());
   let unsub = () => {};
   let cancelled = false;
-  (async () => {
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) attach();
+    }, 15000);
+  };
+
+  const attach = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(ORDERS_COL, false))) return;
+    if (!(await canAccessFirestorePath(ORDERS_COL, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, ORDERS_COL),
         { includeMetadataChanges: true },
@@ -608,7 +659,15 @@ export function subscribeSpecialOrders(onUpdate: (rows: SpecialOrder[]) => void)
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrder);
           });
           const local = getLocalSpecialOrders();
-          const merged = ensureDefaultGumBootOrder(mergeById(local, remote));
+          const mergedRaw = ensureDefaultGumBootOrder(mergeById(local, remote));
+          const merged = !snap.metadata.fromCache
+            ? queueMissingSpecialOrderRecords(
+                ORDERS_PENDING_KEY,
+                mergedRaw,
+                remote,
+                isUnmodifiedDefaultSpecialOrder
+              )
+            : mergedRaw;
           saveLocalList(ORDERS_STORAGE_KEY, merged);
           clearSyncedIdsFromQueue(ORDERS_PENDING_KEY, local, remote);
           onUpdate(merged);
@@ -621,12 +680,18 @@ export function subscribeSpecialOrders(onUpdate: (rows: SpecialOrder[]) => void)
             markFirestorePathBlockedByRules(ORDERS_COL);
           }
           console.warn('SpecialOrders listener warning:', err.message);
+          scheduleRetry();
         }
       );
-    } catch {}
-  })();
+    } catch {
+      scheduleRetry();
+    }
+  };
+
+  attach();
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }
@@ -637,12 +702,26 @@ export function subscribeSpecialOrderProductions(
   onUpdate(getLocalSpecialOrderProductions());
   let unsub = () => {};
   let cancelled = false;
-  (async () => {
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) attach();
+    }, 15000);
+  };
+
+  const attach = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(PROD_COL, false))) return;
+    if (!(await canAccessFirestorePath(PROD_COL, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, PROD_COL),
         { includeMetadataChanges: true },
@@ -653,7 +732,10 @@ export function subscribeSpecialOrderProductions(
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderFactoryProduction);
           });
           const local = readRawSpecialOrderProductions();
-          const merged = mergeById(local, remote, true, true);
+          const mergedRaw = mergeById(local, remote, true, true);
+          const merged = !snap.metadata.fromCache
+            ? queueMissingSpecialOrderRecords(PROD_PENDING_KEY, mergedRaw, remote)
+            : mergedRaw;
           saveLocalList(PROD_STORAGE_KEY, merged);
           clearSyncedIdsFromQueue(PROD_PENDING_KEY, local, remote);
           onUpdate(filterActiveRecords(merged));
@@ -666,12 +748,18 @@ export function subscribeSpecialOrderProductions(
             markFirestorePathBlockedByRules(PROD_COL);
           }
           console.warn('SpecialOrderProduction listener warning:', err.message);
+          scheduleRetry();
         }
       );
-    } catch {}
-  })();
+    } catch {
+      scheduleRetry();
+    }
+  };
+
+  attach();
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }
@@ -682,12 +770,26 @@ export function subscribeSpecialOrderWhDispatches(
   onUpdate(getLocalSpecialOrderWhDispatches());
   let unsub = () => {};
   let cancelled = false;
-  (async () => {
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) attach();
+    }, 15000);
+  };
+
+  const attach = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(WH_DISPATCH_COL, false))) return;
+    if (!(await canAccessFirestorePath(WH_DISPATCH_COL, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, WH_DISPATCH_COL),
         { includeMetadataChanges: true },
@@ -698,7 +800,10 @@ export function subscribeSpecialOrderWhDispatches(
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as SpecialOrderWhDispatch);
           });
           const local = readRawSpecialOrderWhDispatches();
-          const merged = mergeById(local, remote, true, true);
+          const mergedRaw = mergeById(local, remote, true, true);
+          const merged = !snap.metadata.fromCache
+            ? queueMissingSpecialOrderRecords(WH_DISPATCH_PENDING_KEY, mergedRaw, remote)
+            : mergedRaw;
           saveLocalList(WH_DISPATCH_STORAGE_KEY, merged);
           clearSyncedIdsFromQueue(WH_DISPATCH_PENDING_KEY, local, remote);
           onUpdate(filterActiveRecords(merged));
@@ -711,12 +816,18 @@ export function subscribeSpecialOrderWhDispatches(
             markFirestorePathBlockedByRules(WH_DISPATCH_COL);
           }
           console.warn('SpecialOrderWhDispatches listener warning:', err.message);
+          scheduleRetry();
         }
       );
-    } catch {}
-  })();
+    } catch {
+      scheduleRetry();
+    }
+  };
+
+  attach();
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }

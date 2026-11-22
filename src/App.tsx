@@ -186,7 +186,7 @@ import {
   repairAllPendingSyncQueues,
   runFullCloudSyncNow,
 } from './services/cloudSyncService';
-import { applyLiveAppUpdate } from './services/appUpdateChecker';
+import { applyLiveAppUpdate, getCanonicalSharedAppUrl } from './services/appUpdateChecker';
 import {
   ensurePushServiceWorkerRegistration,
   evaluateAndDispatchPushNotifications,
@@ -488,10 +488,7 @@ export default function App() {
   const activeDisplayTheme =
     DISPLAY_THEMES.find((t) => t.id === displayTheme) || DISPLAY_THEMES[0];
 
-  const directAppUrl =
-    typeof window !== 'undefined' && window.location.origin
-      ? window.location.origin
-      : 'https://ais-pre-4lub2q7zy24orxc7ww4y2p-197466423672.europe-west2.run.app';
+  const directAppUrl = getCanonicalSharedAppUrl();
 
   // Refresh machines and local entries
   const refreshLocalState = () => {
@@ -743,7 +740,7 @@ export default function App() {
       }
     };
 
-    const keepAliveTimer = setInterval(runLiveKeepAlive, 25000);
+    const keepAliveTimer = setInterval(runLiveKeepAlive, 15000);
     document.addEventListener('visibilitychange', handleVisibilityOrOnline);
     window.addEventListener('online', handleVisibilityOrOnline);
     window.addEventListener('focus', handleVisibilityOrOnline);

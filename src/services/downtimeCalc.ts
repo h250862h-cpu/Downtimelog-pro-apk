@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import * as XLSX from '../utils/xlsxCompat';
 import { DowntimeEntry, MachineDayStats, normalizeMachineName, PeriodSummaryRow } from '../types';
 
 export function pad2(n: number): string {

@@ -1,5 +1,5 @@
 import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
+import * as XLSX from '../utils/xlsxCompat';
 import {
   canAccessFirestorePath,
   db,
@@ -149,6 +149,28 @@ function clearSyncedIdsFromQueue<T extends { id: string; upd?: number }>(
   });
 }
 
+function queueMissingPowerGenRecords<T extends { id: string; upd?: number; sy?: number }>(
+  pendingKey: string,
+  merged: T[],
+  remote: T[]
+): T[] {
+  const remoteMap = new Map(remote.map((r) => [r.id, r]));
+  let mutated = false;
+  const next = merged.map((item) => {
+    if (!item?.id) return item;
+    const r = remoteMap.get(item.id);
+    if (!r || (item.upd || 0) > (r.upd || 0)) {
+      addToQueue(pendingKey, item.id);
+      if (item.sy !== 0) {
+        mutated = true;
+        return { ...item, sy: 0 };
+      }
+    }
+    return item;
+  });
+  return mutated ? next : merged;
+}
+
 function sanitizeObj<T extends Record<string, any>>(obj: T): Record<string, any> {
   return deepSanitizeForFirestore(obj);
 }
@@ -254,7 +276,7 @@ export async function pollPowerCutLogs(): Promise<PowerCutLog[]> {
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as PowerCutLog);
     });
     const local = getLocalPowerCutLogs();
-    const merged = mergeById(local, remote);
+    const merged = queueMissingPowerGenRecords(POWER_CUT_PENDING_KEY, mergeById(local, remote), remote);
     writeList(POWER_CUT_KEY, merged);
     clearSyncedIdsFromQueue(POWER_CUT_PENDING_KEY, local, remote);
     return merged;
@@ -270,13 +292,26 @@ export function subscribePowerCutLogs(onUpdate: (logs: PowerCutLog[]) => void) {
   onUpdate(getLocalPowerCutLogs());
   let unsub: () => void = () => {};
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(POWER_CUT_COLLECTION, false))) return;
+    if (!(await canAccessFirestorePath(POWER_CUT_COLLECTION, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, POWER_CUT_COLLECTION),
         { includeMetadataChanges: true },
@@ -287,7 +322,10 @@ export function subscribePowerCutLogs(onUpdate: (logs: PowerCutLog[]) => void) {
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as PowerCutLog);
           });
           const local = getLocalPowerCutLogs();
-          const merged = mergeById(local, remote);
+          const mergedRaw = mergeById(local, remote);
+          const merged = !snap.metadata.fromCache
+            ? queueMissingPowerGenRecords(POWER_CUT_PENDING_KEY, mergedRaw, remote)
+            : mergedRaw;
           writeList(POWER_CUT_KEY, merged);
           clearSyncedIdsFromQueue(POWER_CUT_PENDING_KEY, local, remote);
           onUpdate(merged);
@@ -295,14 +333,17 @@ export function subscribePowerCutLogs(onUpdate: (logs: PowerCutLog[]) => void) {
             flushPendingPowerGenData().catch(() => {});
           }
         },
-        () => {}
+        () => scheduleRetry()
       );
-    } catch {}
+    } catch {
+      scheduleRetry();
+    }
   };
   start();
 
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }
@@ -586,7 +627,7 @@ export async function pollGeneratorLogs(): Promise<GeneratorLog[]> {
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as GeneratorLog);
     });
     const local = getLocalGeneratorLogs();
-    const merged = mergeById(local, remote);
+    const merged = queueMissingPowerGenRecords(GENERATOR_LOG_PENDING_KEY, mergeById(local, remote), remote);
     writeList(GENERATOR_LOG_KEY, merged);
     clearSyncedIdsFromQueue(GENERATOR_LOG_PENDING_KEY, local, remote);
     return merged;
@@ -602,13 +643,26 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
   onUpdate(getLocalGeneratorLogs());
   let unsub: () => void = () => {};
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(GENERATOR_LOG_COLLECTION, false))) return;
+    if (!(await canAccessFirestorePath(GENERATOR_LOG_COLLECTION, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, GENERATOR_LOG_COLLECTION),
         { includeMetadataChanges: true },
@@ -619,7 +673,10 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as GeneratorLog);
           });
           const local = getLocalGeneratorLogs();
-          const merged = mergeById(local, remote);
+          const mergedRaw = mergeById(local, remote);
+          const merged = !snap.metadata.fromCache
+            ? queueMissingPowerGenRecords(GENERATOR_LOG_PENDING_KEY, mergedRaw, remote)
+            : mergedRaw;
           writeList(GENERATOR_LOG_KEY, merged);
           clearSyncedIdsFromQueue(GENERATOR_LOG_PENDING_KEY, local, remote);
           onUpdate(merged);
@@ -627,14 +684,17 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
             flushPendingPowerGenData().catch(() => {});
           }
         },
-        () => {}
+        () => scheduleRetry()
       );
-    } catch {}
+    } catch {
+      scheduleRetry();
+    }
   };
   start();
 
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }

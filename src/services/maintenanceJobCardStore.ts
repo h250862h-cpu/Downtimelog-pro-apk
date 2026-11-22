@@ -120,6 +120,27 @@ function clearSyncedCardsFromQueue(
   });
 }
 
+function queueMissingCardsFromRemote(
+  merged: MaintenanceJobCard[],
+  remote: MaintenanceJobCard[]
+): MaintenanceJobCard[] {
+  const remoteMap = new Map(remote.map((r) => [r.id, r]));
+  let mutated = false;
+  const next = merged.map((card) => {
+    if (!card?.id) return card;
+    const r = remoteMap.get(card.id);
+    if (!r || (card.upd || 0) > (r.upd || 0)) {
+      addPendingId(card.id);
+      if (card.sy !== 0) {
+        mutated = true;
+        return { ...card, sy: 0 };
+      }
+    }
+    return card;
+  });
+  return mutated ? next : merged;
+}
+
 function mergeCards(
   local: MaintenanceJobCard[],
   remote: MaintenanceJobCard[]
@@ -258,7 +279,7 @@ export async function pollMaintenanceJobCards(
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 });
     });
     const local = readLocalCards();
-    const merged = mergeCards(local, remote);
+    const merged = queueMissingCardsFromRemote(mergeCards(local, remote), remote);
     saveLocalCards(merged);
     clearSyncedCardsFromQueue(local, remote);
     lastMaintenanceSyncError = null;
@@ -283,6 +304,16 @@ export function subscribeMaintenanceJobCards(
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) {
+        attachListener().catch(() => {});
+      }
+    }, 15000);
+  };
+
   const attachListener = async () => {
     if (cancelled) return;
     await ensureFirebaseAuth();
@@ -290,14 +321,11 @@ export function subscribeMaintenanceJobCards(
     const allowed = await canAccessFirestorePath(MNT_COLLECTION, false);
     if (cancelled) return;
     if (!allowed) {
-      retryTimer = setTimeout(() => {
-        if (!cancelled) {
-          attachListener().catch(() => {});
-        }
-      }, 15000);
+      scheduleRetry();
       return;
     }
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, MNT_COLLECTION),
         { includeMetadataChanges: true },
@@ -308,7 +336,10 @@ export function subscribeMaintenanceJobCards(
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 });
           });
           const local = readLocalCards();
-          const merged = mergeCards(local, remote);
+          const mergedRaw = mergeCards(local, remote);
+          const merged = !snap.metadata.fromCache
+            ? queueMissingCardsFromRemote(mergedRaw, remote)
+            : mergedRaw;
           saveLocalCards(merged);
           clearSyncedCardsFromQueue(local, remote);
           lastMaintenanceSyncError = null;
@@ -324,9 +355,12 @@ export function subscribeMaintenanceJobCards(
               'Cloud permission denied on maintenance_job_cards — verify updated Firestore Rules are published.';
           }
           console.warn('MaintenanceJobCards listener warning:', err.message);
+          scheduleRetry();
         }
       );
-    } catch {}
+    } catch {
+      scheduleRetry();
+    }
   };
 
   attachListener().catch(() => {});

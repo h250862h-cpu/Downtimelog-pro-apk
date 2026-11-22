@@ -13,6 +13,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { getCanonicalSharedAppUrl } from '../services/appUpdateChecker';
 import { LgplastLogo } from './LgplastLogo';
 
 interface PWAInstallModalProps {
@@ -25,10 +26,7 @@ interface PWAInstallModalProps {
   isAndroid: boolean;
 }
 
-export const DIRECT_APP_URL =
-  typeof window !== 'undefined' && window.location.origin
-    ? window.location.origin
-    : 'https://ais-pre-4lub2q7zy24orxc7ww4y2p-197466423672.europe-west2.run.app';
+export const DIRECT_APP_URL = getCanonicalSharedAppUrl();
 
 export const PWAInstallModal: React.FC<PWAInstallModalProps> = ({
   isOpen,

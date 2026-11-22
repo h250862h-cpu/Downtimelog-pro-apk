@@ -1,5 +1,5 @@
 import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
+import * as XLSX from '../utils/xlsxCompat';
 import {
   DIESEL_CSV_SEED_VERSION,
   SEEDED_DIESEL_GRNS,
@@ -231,6 +231,26 @@ function clearSyncedIdsFromQueue<T extends { id: string; upd?: number }>(
   });
 }
 
+function queueMissingDieselRecords<
+  T extends { id: string; upd?: number; sy?: number; isHistoricalCsv?: boolean }
+>(pendingKey: string, merged: T[], remote: T[]): T[] {
+  const remoteMap = new Map(remote.map((r) => [r.id, r]));
+  let mutated = false;
+  const next = merged.map((item) => {
+    if (!item?.id || item.isHistoricalCsv) return item;
+    const r = remoteMap.get(item.id);
+    if (!r || (item.upd || 0) > (r.upd || 0)) {
+      addToQueue(pendingKey, item.id);
+      if (item.sy !== 0) {
+        mutated = true;
+        return { ...item, sy: 0 };
+      }
+    }
+    return item;
+  });
+  return mutated ? next : merged;
+}
+
 function sanitizeObj<T extends Record<string, any>>(obj: T): T {
   return deepSanitizeForFirestore(obj);
 }
@@ -426,7 +446,7 @@ export async function pollDieselRequests(): Promise<DieselFuelRequest[]> {
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as DieselFuelRequest);
     });
     const local = getLocalDieselRequests();
-    const merged = mergeById(local, remote);
+    const merged = queueMissingDieselRecords(REQ_PENDING_KEY, mergeById(local, remote), remote);
     writeLocalList(REQ_KEY, merged);
     clearSyncedIdsFromQueue(REQ_PENDING_KEY, local, remote);
     return merged;
@@ -442,13 +462,26 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
   onUpdate(getLocalDieselRequests());
   let unsub: () => void = () => {};
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(REQ_COLLECTION, false))) return;
+    if (!(await canAccessFirestorePath(REQ_COLLECTION, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, REQ_COLLECTION),
         { includeMetadataChanges: true },
@@ -459,7 +492,10 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as DieselFuelRequest);
           });
           const local = getLocalDieselRequests();
-          const merged = mergeById(local, remote);
+          const mergedRaw = mergeById(local, remote);
+          const merged = !snap.metadata.fromCache
+            ? queueMissingDieselRecords(REQ_PENDING_KEY, mergedRaw, remote)
+            : mergedRaw;
           writeLocalList(REQ_KEY, merged);
           clearSyncedIdsFromQueue(REQ_PENDING_KEY, local, remote);
           onUpdate(merged);
@@ -467,14 +503,17 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
             flushPendingDieselData().catch(() => {});
           }
         },
-        () => {}
+        () => scheduleRetry()
       );
-    } catch {}
+    } catch {
+      scheduleRetry();
+    }
   };
   start();
 
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }
@@ -497,10 +536,11 @@ export async function saveDieselGrn(
   };
   const merged = mergeById(getLocalDieselGrns(), [updated]);
   writeLocalList(GRN_KEY, merged);
+  addToQueue(GRN_PENDING_KEY, updated.id);
 
   try {
     await ensureFirebaseAuth();
-    const syncTs = Date.now();
+    const syncTs = Math.max(Date.now(), updated.upd || 0);
     await setDoc(doc(db, GRN_COLLECTION, updated.id), sanitizeObj({ ...updated, sy: syncTs }), {
       merge: true,
     });
@@ -528,7 +568,7 @@ export async function pollDieselGrns(): Promise<DieselGrnRecord[]> {
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as DieselGrnRecord);
     });
     const local = getLocalDieselGrns();
-    const merged = mergeById(local, remote);
+    const merged = queueMissingDieselRecords(GRN_PENDING_KEY, mergeById(local, remote), remote);
     writeLocalList(GRN_KEY, merged);
     clearSyncedIdsFromQueue(GRN_PENDING_KEY, local, remote);
     return merged;
@@ -544,13 +584,26 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
   onUpdate(getLocalDieselGrns());
   let unsub: () => void = () => {};
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(GRN_COLLECTION, false))) return;
+    if (!(await canAccessFirestorePath(GRN_COLLECTION, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, GRN_COLLECTION),
         { includeMetadataChanges: true },
@@ -561,7 +614,10 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as DieselGrnRecord);
           });
           const local = getLocalDieselGrns();
-          const merged = mergeById(local, remote);
+          const mergedRaw = mergeById(local, remote);
+          const merged = !snap.metadata.fromCache
+            ? queueMissingDieselRecords(GRN_PENDING_KEY, mergedRaw, remote)
+            : mergedRaw;
           writeLocalList(GRN_KEY, merged);
           clearSyncedIdsFromQueue(GRN_PENDING_KEY, local, remote);
           onUpdate(merged);
@@ -569,14 +625,17 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
             flushPendingDieselData().catch(() => {});
           }
         },
-        () => {}
+        () => scheduleRetry()
       );
-    } catch {}
+    } catch {
+      scheduleRetry();
+    }
   };
   start();
 
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }

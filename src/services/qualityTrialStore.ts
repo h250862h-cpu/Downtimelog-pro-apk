@@ -4,7 +4,7 @@ import {
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
+import * as XLSX from '../utils/xlsxCompat';
 import {
   canAccessFirestorePath,
   db,
@@ -133,6 +133,27 @@ export function getLocalQualityTrials(): QualityTrialReport[] {
   return readLocalTrials();
 }
 
+function queueMissingTrialsFromRemote(
+  merged: QualityTrialReport[],
+  remote: QualityTrialReport[]
+): QualityTrialReport[] {
+  const remoteMap = new Map(remote.map((r) => [r.id, r]));
+  let mutated = false;
+  const next = merged.map((t) => {
+    if (!t?.id) return t;
+    const r = remoteMap.get(t.id);
+    if (!r || (t.upd || 0) > (r.upd || 0)) {
+      addPendingId(t.id);
+      if (t.sy !== 0) {
+        mutated = true;
+        return { ...t, sy: 0 };
+      }
+    }
+    return t;
+  });
+  return mutated ? next : merged;
+}
+
 export async function saveQualityTrialToFirebase(
   trial: QualityTrialReport,
   options?: { preserveUpd?: boolean }
@@ -141,14 +162,16 @@ export async function saveQualityTrialToFirebase(
     ...trial,
     machine: normalizeMachineName(trial.machine),
     upd: options?.preserveUpd && trial.upd ? trial.upd : Date.now(),
+    sy: 0,
   };
 
   const mergedLocal = mergeTrials(readLocalTrials(), [updated]);
   saveLocalTrials(mergedLocal);
+  addPendingId(updated.id);
 
   try {
     await ensureFirebaseAuth();
-    const syncTs = Date.now();
+    const syncTs = Math.max(Date.now(), updated.upd || 0);
     const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
     await setDoc(doc(db, TRIAL_COLLECTION, updated.id), payload, { merge: true });
     removePendingId(updated.id);
@@ -210,7 +233,7 @@ export async function pollQualityTrials(): Promise<QualityTrialReport[]> {
       remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as QualityTrialReport);
     });
     const local = readLocalTrials();
-    const merged = mergeTrials(local, remote);
+    const merged = queueMissingTrialsFromRemote(mergeTrials(local, remote), remote);
     saveLocalTrials(merged);
     clearSyncedTrialsFromQueue(local, remote);
     return merged;
@@ -228,12 +251,26 @@ export function subscribeQualityTrials(
   onUpdate(readLocalTrials());
   let unsub = () => {};
   let cancelled = false;
-  (async () => {
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) attach();
+    }, 15000);
+  };
+
+  const attach = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(TRIAL_COLLECTION, false))) return;
+    if (!(await canAccessFirestorePath(TRIAL_COLLECTION, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, TRIAL_COLLECTION),
         { includeMetadataChanges: true },
@@ -244,7 +281,10 @@ export function subscribeQualityTrials(
             remote.push({ ...raw, id: d.id, sy: raw.sy || raw.upd || 1 } as QualityTrialReport);
           });
           const local = readLocalTrials();
-          const merged = mergeTrials(local, remote);
+          const mergedRaw = mergeTrials(local, remote);
+          const merged = !snap.metadata.fromCache
+            ? queueMissingTrialsFromRemote(mergedRaw, remote)
+            : mergedRaw;
           saveLocalTrials(merged);
           clearSyncedTrialsFromQueue(local, remote);
           onUpdate(merged);
@@ -257,12 +297,18 @@ export function subscribeQualityTrials(
             markFirestorePathBlockedByRules(TRIAL_COLLECTION);
           }
           console.warn('QualityTrials listener warning:', err.message);
+          scheduleRetry();
         }
       );
-    } catch {}
-  })();
+    } catch {
+      scheduleRetry();
+    }
+  };
+
+  attach();
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }

@@ -119,8 +119,8 @@ export default defineConfig(() => {
                 priority: 30,
               },
               {
-                name: 'vendor-xlsx',
-                test: /[\\/]node_modules[\\/]xlsx[\\/]/,
+                name: 'vendor-fflate',
+                test: /[\\/]node_modules[\\/]fflate[\\/]/,
                 priority: 30,
               },
               {

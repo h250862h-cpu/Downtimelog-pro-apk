@@ -62,6 +62,7 @@ import {
   applyLiveAppUpdate,
   checkForLiveServerUpdate,
   CURRENT_APP_BUILD_ID,
+  getCanonicalSharedAppUrl,
 } from '../services/appUpdateChecker';
 import {
   DEFAULT_REPORTERS,
@@ -148,10 +149,7 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const goneMachines = getStoredGoneMachines();
-  const directAppUrl =
-    typeof window !== 'undefined' && window.location.origin
-      ? window.location.origin
-      : 'https://ais-pre-4lub2q7zy24orxc7ww4y2p-197466423672.europe-west2.run.app';
+  const directAppUrl = getCanonicalSharedAppUrl();
 
   // Admin Check (supports active session user and Firebase auth email)
   const currentUserEmail = getActiveSessionUser()?.email || auth.currentUser?.email;
@@ -574,11 +572,16 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
               </h3>
             </div>
             <p className="text-xs text-slate-300">
-              When this link is shared with any operator or supervisor, they will be required to authenticate with their login email/password or Google account before accessing the logs:
+              All shared APK links route to this unified plant address and share the same live Firestore cloud database — any entry or update on one device appears automatically across all links:
             </p>
             <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950 p-2 font-mono text-xs text-emerald-400 break-all select-all">
               <span>{directAppUrl}</span>
             </div>
+            {typeof window !== 'undefined' && window.location.origin !== directAppUrl && (
+              <p className="text-[11px] text-sky-300 mt-1">
+                Active preview mirror ({window.location.origin}) is connected to the exact same live cloud database as {directAppUrl}.
+              </p>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
