@@ -1,25 +1,39 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import {defineConfig, type Plugin} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
+
+const BUILD_ID = (process.env.RENDER_GIT_COMMIT || '').slice(0, 12) || String(Date.now());
+const BUILT_AT = new Date().toISOString();
+
+function lgplastBuildVersionPlugin(): Plugin {
+  return {
+    name: 'lgplast-build-version-manifest',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'version.json',
+        source: JSON.stringify({ buildId: BUILD_ID, builtAt: BUILT_AT }, null, 2),
+      });
+    },
+  };
+}
 
 export default defineConfig(() => {
   return {
+    define: {
+      __APP_BUILD_ID__: JSON.stringify(BUILD_ID),
+      __APP_BUILT_AT__: JSON.stringify(BUILT_AT),
+    },
     plugins: [
       react(),
       tailwindcss(),
+      lgplastBuildVersionPlugin(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: [
-          'icon.svg',
-          'apple-touch-icon.png',
-          'pwa-192x192.png',
-          'pwa-512x512.png',
-          'pwa-maskable-512x512.png',
-          'push-sw.js',
-          'assets/aistudio/image_65f70fd7.png',
-        ],
+        injectRegister: false,
+        includeAssets: [],
         manifest: {
           id: '/',
           name: 'LG PLAST PlantOps - Live Operations APK',
@@ -53,7 +67,21 @@ export default defineConfig(() => {
         },
         workbox: {
           importScripts: ['/push-sw.js'],
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: [
+            'index.html',
+            'icon.svg',
+            'apple-touch-icon.png',
+            'push-sw.js',
+            'assets/*.{js,css,png,jpg,jpeg,webp,svg,woff,woff2}',
+            'assets/aistudio/image_65f70fd7.png',
+          ],
+          globIgnores: [
+            '**/node_modules/**/*',
+            'assets/aistudio/*.html',
+            'assets/aistudio/*.csv',
+            'assets/aistudio/*.zip',
+          ],
+          dontCacheBustURLsMatching: /^assets\/[^/]+-[A-Za-z0-9_-]{8,}\./,
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
           skipWaiting: true,
           clientsClaim: true,

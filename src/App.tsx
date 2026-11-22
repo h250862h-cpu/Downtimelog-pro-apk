@@ -186,6 +186,7 @@ import {
   repairAllPendingSyncQueues,
   runFullCloudSyncNow,
 } from './services/cloudSyncService';
+import { applyLiveAppUpdate } from './services/appUpdateChecker';
 import {
   ensurePushServiceWorkerRegistration,
   evaluateAndDispatchPushNotifications,
@@ -375,6 +376,18 @@ export default function App() {
     return getUnifiedPendingQueueBreakdown().totalPending;
   });
   const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [availableUpdateBuildId, setAvailableUpdateBuildId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onAppUpdate = (ev: Event) => {
+      const customEv = ev as CustomEvent<string>;
+      if (customEv.detail) {
+        setAvailableUpdateBuildId(customEv.detail);
+      }
+    };
+    window.addEventListener('lgplast-app-update-available', onAppUpdate);
+    return () => window.removeEventListener('lgplast-app-update-available', onAppUpdate);
+  }, []);
 
   // Modals
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -1585,6 +1598,18 @@ export default function App() {
 
           {/* Right Header Utility Controls */}
           <div className="flex items-center gap-1.5 sm:gap-2">
+            {availableUpdateBuildId && (
+              <button
+                type="button"
+                onClick={() => applyLiveAppUpdate(availableUpdateBuildId)}
+                className="flex items-center gap-1.5 rounded-lg border border-sky-400 bg-sky-600 hover:bg-sky-500 px-2.5 py-1.5 text-xs font-bold text-white transition shadow-2xs"
+                title="A new Render deployment is live — tap to load the latest version"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Update Live · Refresh</span>
+              </button>
+            )}
+
             {actionableDispatchCount > 0 && hasDispatchAccess && (
               <button
                 type="button"

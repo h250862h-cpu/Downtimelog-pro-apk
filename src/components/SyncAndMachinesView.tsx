@@ -59,6 +59,11 @@ import {
   runFullCloudSyncNow,
 } from '../services/cloudSyncService';
 import {
+  applyLiveAppUpdate,
+  checkForLiveServerUpdate,
+  CURRENT_APP_BUILD_ID,
+} from '../services/appUpdateChecker';
+import {
   DEFAULT_REPORTERS,
   DowntimeEntry,
   getDefaultPermissionsForRole,
@@ -411,23 +416,24 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
 
   // Check for Latest Published App / Service Worker Update
   const handleCheckAppVersionUpdate = async () => {
-    setSwUpdateNote('Checking for latest app build...');
+    setSwUpdateNote('Checking live server for latest Render build...');
     try {
-      if ('serviceWorker' in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map((r) => r.update().catch(() => {})));
-        const hasWaiting = regs.some((r) => r.waiting);
-        if (hasWaiting) {
-          regs.forEach((r) => {
-            if (r.waiting) r.waiting.postMessage({ type: 'SKIP_WAITING' });
-          });
-          setSwUpdateNote('New version ready — reloading now...');
-          setTimeout(() => window.location.reload(), 600);
-          return;
-        }
+      const check = await checkForLiveServerUpdate({ autoReloadIfDifferent: false });
+      if (check.updateAvailable && check.serverBuildId) {
+        setSwUpdateNote(
+          `New build (${check.serverBuildId}) found on server — clearing cache & reloading...`
+        );
+        setTimeout(() => {
+          applyLiveAppUpdate(check.serverBuildId || undefined);
+        }, 400);
+        return;
       }
-      setSwUpdateNote('Reloading live web link to clear browser cache...');
-      setTimeout(() => window.location.reload(), 500);
+      setSwUpdateNote(
+        `Force refreshing browser cache (Build ${CURRENT_APP_BUILD_ID})...`
+      );
+      setTimeout(() => {
+        applyLiveAppUpdate(check.serverBuildId || undefined);
+      }, 400);
     } catch {
       window.location.reload();
     }
@@ -1607,7 +1613,7 @@ git push -u origin main`}
           <div className="rounded-lg border border-blue-500/20 bg-blue-950/20 p-2.5 text-[11px] text-slate-300 flex items-start gap-2">
             <Info className="h-4 w-4 text-blue-400 shrink-0 mt-0.5" />
             <span>
-              <b>Note on Shared Link &amp; Live Data:</b> Both the Dev preview (<code className="text-sky-300">ais-dev</code>) and Shared App Link (<code className="text-emerald-300">ais-pre</code>) read &amp; write the exact same live Firebase <code className="text-slate-200">(default)</code> database for plant logs. If new app screens/features were updated in your workspace, remember to click <b>Publish / Share</b> once so the phone&apos;s <code className="text-emerald-300">ais-pre</code> link receives the latest UI build, or tap <b>Reload App Version</b> above.
+              <b>Note on Render, Shared Link &amp; Live Data (Build {CURRENT_APP_BUILD_ID}):</b> Render Blueprint (<code className="text-sky-300">render.yaml</code>) deploys via <code className="text-slate-200">npm install &amp;&amp; npm run build</code> with no-cache headers on <code className="text-slate-200">index.html</code>, <code className="text-slate-200">sw.js</code>, and <code className="text-slate-200">version.json</code> so new updates appear automatically on phones. Tap <b>Reload App Version</b> above anytime to force-clear older PWA cache.
             </span>
           </div>
         </div>

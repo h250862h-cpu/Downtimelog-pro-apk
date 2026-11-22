@@ -97,7 +97,11 @@ export async function ensurePushServiceWorkerRegistration(): Promise<ServiceWork
     if (existing) {
       return existing;
     }
-    const registered = await navigator.serviceWorker.register('/push-sw.js', { scope: '/' });
+    const swUrl = import.meta.env.PROD ? '/sw.js' : '/push-sw.js';
+    const registered = await navigator.serviceWorker.register(swUrl, {
+      scope: '/',
+      updateViaCache: 'none',
+    });
     return registered;
   } catch {
     return null;
