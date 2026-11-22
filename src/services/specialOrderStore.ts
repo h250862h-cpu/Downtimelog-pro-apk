@@ -1052,6 +1052,12 @@ export async function hodDeleteSpecialOrderFactoryBatch(params: {
   hodName: string;
   hodEmail: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  if (params.entry.status === 'CONFIRMED_IN_FACTORY') {
+    return {
+      ok: false,
+      error: 'Confirmed Factory Stock batches are locked and cannot be deleted.',
+    };
+  }
   markIdsDeletedLocally([params.entry.id]);
   const tombstoned: SpecialOrderFactoryProduction = {
     ...params.entry,
@@ -1065,14 +1071,20 @@ export async function hodDeleteSpecialOrderFactoryBatch(params: {
 }
 
 /**
- * Permanently soft-deletes a Shift In Charge raised WH dispatch order as HOD/Admin
- * (and any linked regular dispatch rows if it was already posted) via tombstones.
+ * Permanently soft-deletes an unconfirmed Shift In Charge raised WH dispatch order as HOD/Admin
+ * via tombstones. Once CONFIRMED, orders are permanently locked and cannot be deleted.
  */
 export async function hodDeleteSpecialOrderWhDispatch(params: {
   entry: SpecialOrderWhDispatch;
   hodName: string;
   hodEmail: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  if (params.entry.status === 'CONFIRMED') {
+    return {
+      ok: false,
+      error: 'Confirmed WH Dispatches are locked and cannot be deleted.',
+    };
+  }
   markIdsDeletedLocally([params.entry.id]);
   if (params.entry.linkedRegularDispatchIds && params.entry.linkedRegularDispatchIds.length > 0) {
     for (const linkedId of params.entry.linkedRegularDispatchIds) {

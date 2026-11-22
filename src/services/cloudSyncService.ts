@@ -13,6 +13,7 @@ import {
   DispatchEntry,
   DowntimeEntry,
   GeneratorLog,
+  MaintenanceJobCard,
   PlantUserAccount,
   PowerCutLog,
   ProductionPlanItem,
@@ -80,6 +81,12 @@ import {
   repairPendingQualityTrialQueues,
 } from './qualityTrialStore';
 import {
+  flushPendingMaintenanceJobCards,
+  getMaintenanceJobCardsPendingBreakdown,
+  pollMaintenanceJobCards,
+  repairPendingMaintenanceJobCardQueues,
+} from './maintenanceJobCardStore';
+import {
   flushAllPendingSopData,
   getSopPendingBreakdown,
   pollSopHandovers,
@@ -108,6 +115,7 @@ export interface PendingSyncBreakdown {
   attendanceAndQc: number;
   specialOrders: number;
   qualityTrials: number;
+  maintenanceJobCards: number;
   ruleBlockedPending: number;
   totalPending: number;
 }
@@ -129,6 +137,7 @@ export interface CloudSyncDiagnosticsResult {
     specialOrderProd: number;
     specialOrderWh: number;
     trials: number;
+    maintenanceJobCards: number;
     sopProd: number;
     sopQc: number;
     sopScrap: number;
@@ -162,6 +171,7 @@ export interface CloudSyncDiagnosticsResult {
     specialOrderProductions: SpecialOrderFactoryProduction[];
     specialOrderWhDispatches: SpecialOrderWhDispatch[];
     qualityTrials: QualityTrialReport[];
+    maintenanceJobCards: MaintenanceJobCard[];
     attendanceBatches: ParsedAttendanceMessage[];
     qcLogs: QCInspectionRecord[];
     plantUsers: PlantUserAccount[];
@@ -182,7 +192,8 @@ export function repairAllPendingSyncQueues(): number {
     repairPendingPowerGenQueues() +
     repairPendingPlanningQueues() +
     repairPendingSpecialOrderQueues() +
-    repairPendingQualityTrialQueues();
+    repairPendingQualityTrialQueues() +
+    repairPendingMaintenanceJobCardQueues();
   return repairedTotal;
 }
 
@@ -198,6 +209,7 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
   const attQcB = getAttendanceAndQcPendingBreakdown();
   const specialB = getSpecialOrderPendingBreakdown();
   const trialsB = getQualityTrialsPendingBreakdown();
+  const mntCardsB = getMaintenanceJobCardsPendingBreakdown();
 
   const ruleBlockedPending =
     (isFirestorePathBlockedByRules('downtime_entries') ? downtimeRaw : 0) +
@@ -208,7 +220,8 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
     planHistB.ruleBlocked +
     attQcB.ruleBlocked +
     specialB.ruleBlocked +
-    trialsB.ruleBlocked;
+    trialsB.ruleBlocked +
+    mntCardsB.ruleBlocked;
 
   return {
     downtime,
@@ -220,6 +233,7 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
     attendanceAndQc: attQcB.active,
     specialOrders: specialB.active,
     qualityTrials: trialsB.active,
+    maintenanceJobCards: mntCardsB.active,
     ruleBlockedPending,
     totalPending:
       downtime +
@@ -230,7 +244,8 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
       planHistB.active +
       attQcB.active +
       specialB.active +
-      trialsB.active,
+      trialsB.active +
+      mntCardsB.active,
   };
 }
 
@@ -265,6 +280,7 @@ export async function runFullCloudSyncNow(
     flushPendingPowerGenData().catch(() => 0),
     flushPendingSpecialOrderData().catch(() => 0),
     flushPendingQualityTrials().catch(() => 0),
+    flushPendingMaintenanceJobCards().catch(() => 0),
   ]);
   const flushedTotal = flushCounts.reduce((s, n) => s + (Number(n) || 0), 0);
 
@@ -288,6 +304,7 @@ export async function runFullCloudSyncNow(
     specialOrderProductions,
     specialOrderWhDispatches,
     qualityTrials,
+    maintenanceJobCards,
     attendanceBatches,
     qcLogs,
     plantUsers,
@@ -311,6 +328,7 @@ export async function runFullCloudSyncNow(
     pollSpecialOrderProductions(),
     pollSpecialOrderWhDispatches(),
     pollQualityTrials(),
+    pollMaintenanceJobCards(),
     pollAttendanceBatches(),
     pollQCLogs(),
     fetchPlantUsersDirectory(),
@@ -338,6 +356,7 @@ export async function runFullCloudSyncNow(
       specialOrderProd: specialOrderProductions.length,
       specialOrderWh: specialOrderWhDispatches.length,
       trials: qualityTrials.length,
+      maintenanceJobCards: maintenanceJobCards.length,
       sopProd: sopProduction.length,
       sopQc: sopQc.length,
       sopScrap: sopScrap.length,
@@ -371,6 +390,7 @@ export async function runFullCloudSyncNow(
       specialOrderProductions,
       specialOrderWhDispatches,
       qualityTrials,
+      maintenanceJobCards,
       attendanceBatches,
       qcLogs,
       plantUsers,

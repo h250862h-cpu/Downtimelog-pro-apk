@@ -208,6 +208,7 @@ const SECONDARY_COLLECTIONS = [
   'special_order_production',
   'special_order_wh_dispatches',
   'quality_trial_reports',
+  'maintenance_job_cards',
 ];
 
 function getPathCacheScope(): string {

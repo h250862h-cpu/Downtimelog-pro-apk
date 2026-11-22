@@ -396,6 +396,14 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
 
   const handleConfirmDeleteRaisedOrder = async () => {
     if (!deleteTarget || !canHodConfirm) return;
+    if (
+      (deleteTarget.kind === 'factory' && deleteTarget.entry.status === 'CONFIRMED_IN_FACTORY') ||
+      (deleteTarget.kind === 'wh' && deleteTarget.entry.status === 'CONFIRMED')
+    ) {
+      setDeleteTarget(null);
+      flashMsg('Confirmed stock cannot be deleted once locked.', true);
+      return;
+    }
     setDeletingRecord(true);
     if (deleteTarget.kind === 'factory') {
       const res = await hodDeleteSpecialOrderFactoryBatch({
@@ -409,7 +417,8 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
       flashMsg(
         res.ok
           ? `Deleted raised factory batch ${deleteTarget.entry.batchNo} permanently across synced devices.`
-          : `Deleted locally (${res.error || 'pending cloud tombstone sync'}).`
+          : res.error || 'Delete failed.',
+        !res.ok
       );
     } else {
       const res = await hodDeleteSpecialOrderWhDispatch({
@@ -423,7 +432,8 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
       flashMsg(
         res.ok
           ? `Deleted raised WH dispatch ${deleteTarget.entry.dispatchRef} permanently across synced devices.`
-          : `Deleted locally (${res.error || 'pending cloud tombstone sync'}).`
+          : res.error || 'Delete failed.',
+        !res.ok
       );
     }
   };
@@ -1355,16 +1365,25 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                           <span>HOD Confirm Factory Stock</span>
                         </button>
                       )}
-                      {canHodConfirm && (
+                      {canHodConfirm && batch.status === 'PENDING_HOD_FACTORY' && (
                         <button
                           type="button"
                           onClick={() => setDeleteTarget({ kind: 'factory', entry: batch })}
                           className="flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 px-3 py-2 text-xs font-bold text-rose-700 transition"
-                          title="Delete Shift In Charge raised batch permanently as HOD"
+                          title="Delete unconfirmed Shift In Charge raised batch permanently as HOD"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           <span>Delete</span>
                         </button>
+                      )}
+                      {batch.status === 'CONFIRMED_IN_FACTORY' && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-800"
+                          title="Confirmed stock is locked and cannot be deleted"
+                        >
+                          <Lock className="h-3 w-3" />
+                          <span>Confirmed · Locked</span>
+                        </span>
                       )}
                     </div>
                   </div>
@@ -1669,16 +1688,25 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                           </button>
                         )}
 
-                        {canHodConfirm && (
+                        {canHodConfirm && dsp.status !== 'CONFIRMED' && (
                           <button
                             type="button"
                             onClick={() => setDeleteTarget({ kind: 'wh', entry: dsp })}
                             className="flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 transition"
-                            title="Delete Shift In Charge raised WH dispatch permanently as HOD"
+                            title="Delete unconfirmed Shift In Charge raised WH dispatch permanently as HOD"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                             <span>Delete</span>
                           </button>
+                        )}
+                        {dsp.status === 'CONFIRMED' && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[10px] font-bold text-emerald-800"
+                            title="Confirmed WH dispatch is locked and cannot be deleted"
+                          >
+                            <Lock className="h-3 w-3" />
+                            <span>Confirmed · Locked</span>
+                          </span>
                         )}
                       </div>
                     </div>

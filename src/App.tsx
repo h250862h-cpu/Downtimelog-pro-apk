@@ -29,6 +29,7 @@ import {
   Users,
   Volume2,
   VolumeX,
+  Wrench,
   X,
   Zap,
 } from 'lucide-react';
@@ -65,6 +66,11 @@ const DispatchSystemView = lazy(() =>
 );
 const LogDowntimeView = lazy(() =>
   import('./components/LogDowntimeView').then((m) => ({ default: m.LogDowntimeView }))
+);
+const MaintenanceJobCardsView = lazy(() =>
+  import('./components/MaintenanceJobCardsView').then((m) => ({
+    default: m.MaintenanceJobCardsView,
+  }))
 );
 const PeriodProductionReportView = lazy(() =>
   import('./components/PeriodProductionReportView').then((m) => ({
@@ -164,6 +170,10 @@ import {
   subscribeQualityTrials,
 } from './services/qualityTrialStore';
 import {
+  getLocalMaintenanceJobCards,
+  subscribeMaintenanceJobCards,
+} from './services/maintenanceJobCardStore';
+import {
   getLocalSpecialOrderProductions,
   getLocalSpecialOrders,
   getLocalSpecialOrderWhDispatches,
@@ -194,6 +204,7 @@ import {
   DispatchEntry,
   DowntimeEntry,
   GeneratorLog,
+  MaintenanceJobCard,
   PlantUserAccount,
   PowerCutLog,
   ProductionPlanItem,
@@ -218,6 +229,7 @@ export type DowntimeTab =
   | 'prod_planning'
   | 'diesel'
   | 'power_gen'
+  | 'maintenance_job_cards'
   | 'sop_overview'
   | 'sop_production'
   | 'sop_qc'
@@ -296,6 +308,9 @@ export default function App() {
   >(() => getLocalSpecialOrderWhDispatches());
   const [qualityTrials, setQualityTrials] = useState<QualityTrialReport[]>(() =>
     getLocalQualityTrials()
+  );
+  const [maintenanceJobCards, setMaintenanceJobCards] = useState<MaintenanceJobCard[]>(() =>
+    getLocalMaintenanceJobCards()
   );
   const [dieselTank, setDieselTank] = useState<DieselTankConfig>(() => getLocalDieselTank());
   const [dieselRequests, setDieselRequests] = useState<DieselFuelRequest[]>(() =>
@@ -627,6 +642,9 @@ export default function App() {
     const unsubQualityTrials = subscribeQualityTrials((rows) => {
       setQualityTrials(rows);
     });
+    const unsubMaintenanceJobCards = subscribeMaintenanceJobCards((rows) => {
+      setMaintenanceJobCards(rows);
+    });
 
     const pendingTimer = setInterval(() => {
       setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
@@ -667,6 +685,7 @@ export default function App() {
         setSpecialOrderProductions(res.data.specialOrderProductions);
         setSpecialOrderWhDispatches(res.data.specialOrderWhDispatches);
         setQualityTrials(res.data.qualityTrials);
+        setMaintenanceJobCards(res.data.maintenanceJobCards);
         setAttendanceBatch(res.data.attendanceBatches);
         setPlantUsers(res.data.plantUsers);
         setPendingSyncCount(res.pendingAfter.totalPending);
@@ -738,6 +757,7 @@ export default function App() {
       unsubSpecialOrderProd();
       unsubSpecialOrderWh();
       unsubQualityTrials();
+      unsubMaintenanceJobCards();
       clearTimeout(initialPullTimer);
       clearInterval(pendingTimer);
       clearInterval(keepAliveTimer);
@@ -912,6 +932,7 @@ export default function App() {
         'prod_planning',
         'diesel',
         'power_gen',
+        'maintenance_job_cards',
         'sop_overview',
         'sop_production',
         'sop_qc',
@@ -1087,6 +1108,12 @@ export default function App() {
     Boolean(effectivePermissions.qualityTrialsAccess) ||
     Boolean(effectivePermissions.sopFloorAccess);
 
+  const hasMaintenanceJobCardAccess =
+    isAdmin ||
+    Boolean(effectivePermissions.maintenanceJobCardsAccess) ||
+    effectivePermissions.dispatchShiftEntry ||
+    effectivePermissions.logDowntime;
+
   // Compute allowed sidebar navigation tabs strictly from effectivePermissions & Admin-only report policy
   const allowedTabs = useMemo<DowntimeTab[]>(() => {
     const tabs: DowntimeTab[] = [];
@@ -1106,6 +1133,7 @@ export default function App() {
     if (isAdmin || effectivePermissions.logDowntime || effectivePermissions.viewMachineStatus) {
       tabs.push('power_gen');
     }
+    if (hasMaintenanceJobCardAccess) tabs.push('maintenance_job_cards');
     if (isAdmin || effectivePermissions.sopFloorAccess) {
       tabs.push('sop_overview', 'sop_production', 'sop_qc');
     }
@@ -1131,6 +1159,7 @@ export default function App() {
     hasDispatchAccess,
     hasSpecialOrderAccess,
     hasQualityTrialAccess,
+    hasMaintenanceJobCardAccess,
     hasDieselAccess,
     isAdmin,
   ]);
@@ -1249,6 +1278,7 @@ export default function App() {
       setSpecialOrderProductions(res.data.specialOrderProductions);
       setSpecialOrderWhDispatches(res.data.specialOrderWhDispatches);
       setQualityTrials(res.data.qualityTrials);
+      setMaintenanceJobCards(res.data.maintenanceJobCards);
       setAttendanceBatch(res.data.attendanceBatches);
       setPlantUsers(res.data.plantUsers);
       setPendingSyncCount(res.pendingAfter.totalPending);
@@ -1376,6 +1406,14 @@ export default function App() {
       subtitle: 'Outages · Gen Fuel (L)',
       icon: <Zap className="h-4 w-4" />,
       badge: powerCutLogs.filter((p) => p.status === 'ONGOING' || !p.timeBack).length,
+    },
+    {
+      id: 'maintenance_job_cards',
+      group: '1. Live Floor Operations',
+      label: 'Maintenance Job Cards',
+      subtitle: 'Mntce · Die & Mould PDF',
+      icon: <Wrench className="h-4 w-4" />,
+      badge: maintenanceJobCards.filter((c) => c.status !== 'COMPLETED').length,
     },
     // Priority 2: Daily SOP Floor APKs
     {
@@ -2089,6 +2127,19 @@ export default function App() {
                       }}
                     />
                   )}
+
+                {activeDowntimeTab === 'maintenance_job_cards' && hasMaintenanceJobCardAccess && (
+                  <MaintenanceJobCardsView
+                    machines={machines}
+                    jobCards={maintenanceJobCards}
+                    currentUserName={user.displayName || currentReporter}
+                    currentUserEmail={user.email || ''}
+                    canIssueOrEdit={hasMaintenanceJobCardAccess}
+                    onDataChanged={() => {
+                      setMaintenanceJobCards(getLocalMaintenanceJobCards());
+                    }}
+                  />
+                )}
 
                 {activeDowntimeTab === 'quality_trials' && hasQualityTrialAccess && (
                   <QualityTrialView
