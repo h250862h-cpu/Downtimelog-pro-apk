@@ -179,7 +179,7 @@ const pathAccessCache = new Map<string, { allowed: boolean; checkedAt: number }>
 const pathAccessInFlight = new Map<string, Promise<boolean>>();
 let pathAccessCacheScope: string | null = null;
 const PATH_ACCESS_TTL_MS = 15 * 60 * 1000;
-const PATH_ACCESS_STORAGE_KEY = 'dt_fs_path_access_v1';
+const PATH_ACCESS_STORAGE_KEY = 'dt_fs_path_access_v2';
 
 const CORE_FIRESTORE_COLLECTIONS = new Set([
   'downtime_entries',
@@ -188,6 +188,11 @@ const CORE_FIRESTORE_COLLECTIONS = new Set([
   'dispatch_entries',
   'attendance_batches',
   'qc_inspections',
+  'maintenance_job_cards',
+  'quality_trial_reports',
+  'special_orders',
+  'special_order_production',
+  'special_order_wh_dispatches',
 ]);
 
 const SECONDARY_SENTINEL_COLLECTION = 'sop_production_logs';
@@ -204,11 +209,6 @@ const SECONDARY_COLLECTIONS = [
   'diesel_grn_records',
   'power_cut_logs',
   'generator_logs',
-  'special_orders',
-  'special_order_production',
-  'special_order_wh_dispatches',
-  'quality_trial_reports',
-  'maintenance_job_cards',
 ];
 
 function getPathCacheScope(): string {
@@ -301,14 +301,27 @@ async function probeCollectionRootAccess(collectionRoot: string): Promise<boolea
       return false;
     }
     await ensureFirebaseAuth().catch(() => false);
-    const token = auth.currentUser ? await auth.currentUser.getIdToken().catch(() => null) : null;
     const encodedDb = encodeURIComponent(dbId);
     const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${encodedDb}/documents/${collectionRoot}?pageSize=1`;
-    const headers: Record<string, string> = {};
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+
+    const doProbeFetch = async (forceRefreshToken: boolean) => {
+      const token = auth.currentUser
+        ? await auth.currentUser.getIdToken(forceRefreshToken).catch(() => null)
+        : null;
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      return fetch(url, { method: 'GET', headers });
+    };
+
+    let res = await doProbeFetch(false);
+    if (res.status === 401) {
+      // Refresh Firebase Auth token once before concluding unauthorized
+      await ensureFirebaseAuth().catch(() => false);
+      res = await doProbeFetch(true);
     }
-    const res = await fetch(url, { method: 'GET', headers });
+
     if (res.status === 403 || res.status === 401) {
       pathAccessCache.set(collectionRoot, { allowed: false, checkedAt: Date.now() });
       persistPathAccessToStorage();

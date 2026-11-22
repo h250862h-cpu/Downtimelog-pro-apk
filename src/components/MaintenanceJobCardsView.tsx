@@ -9,6 +9,7 @@ import {
   FileDown,
   Layers,
   Plus,
+  RefreshCw,
   Save,
   Search,
   ShieldAlert,
@@ -26,7 +27,12 @@ import {
 } from '../types';
 import { ymd } from '../services/downtimeCalc';
 import { generateMaintenanceJobCardPdf } from '../services/maintenanceJobCardPdf';
-import { saveMaintenanceJobCardToFirebase } from '../services/maintenanceJobCardStore';
+import {
+  flushPendingMaintenanceJobCards,
+  getLastMaintenanceSyncError,
+  pollMaintenanceJobCards,
+  saveMaintenanceJobCardToFirebase,
+} from '../services/maintenanceJobCardStore';
 import {
   ENGINEER_REPLACEMENT_POLICY_TEXT,
   buildDefaultStagesForCardType,
@@ -161,6 +167,7 @@ export const MaintenanceJobCardsView: React.FC<MaintenanceJobCardsViewProps> = (
   );
   const [saving, setSaving] = useState(false);
   const [issuingPdf, setIssuingPdf] = useState(false);
+  const [syncingCards, setSyncingCards] = useState(false);
   const [toast, setToast] = useState<{ text: string; isError?: boolean } | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -169,7 +176,28 @@ export const MaintenanceJobCardsView: React.FC<MaintenanceJobCardsViewProps> = (
 
   const flashMsg = (text: string, isError = false) => {
     setToast({ text, isError });
-    setTimeout(() => setToast(null), 5500);
+    setTimeout(() => setToast(null), 6500);
+  };
+
+  const handleManualSyncCards = async () => {
+    setSyncingCards(true);
+    try {
+      const flushed = await flushPendingMaintenanceJobCards();
+      const latest = await pollMaintenanceJobCards(true);
+      onDataChanged?.();
+      const syncErr = getLastMaintenanceSyncError();
+      if (syncErr) {
+        flashMsg(`Cloud Sync Warning: ${syncErr}`, true);
+      } else {
+        flashMsg(
+          `Synced ${latest.length} Maintenance Job Card(s) with Cloud${flushed > 0 ? ` (${flushed} uploaded from device)` : ''}.`
+        );
+      }
+    } catch (err: any) {
+      flashMsg(err?.message || 'Failed to sync Maintenance Job Cards.', true);
+    } finally {
+      setSyncingCards(false);
+    }
   };
 
   const isToolingCard =
@@ -324,14 +352,16 @@ export const MaintenanceJobCardsView: React.FC<MaintenanceJobCardsViewProps> = (
       flashMsg(
         res.ok
           ? `Job Card ${prepared.jobCardNo} saved & issued to Maintenance Team as PDF.`
-          : `Job Card ${prepared.jobCardNo} PDF generated (${res.error || 'offline queue'}).`
+          : `Job Card ${prepared.jobCardNo} PDF generated (${res.error || 'offline queue'}).`,
+        !res.ok
       );
     } else {
       setSaving(false);
       flashMsg(
         res.ok
           ? `Job Card ${prepared.jobCardNo} saved & synced across devices.`
-          : `Saved locally (${res.error || 'offline queue'}).`
+          : `Saved locally (${res.error || 'offline queue'}).`,
+        !res.ok
       );
     }
   };
@@ -403,6 +433,16 @@ export const MaintenanceJobCardsView: React.FC<MaintenanceJobCardsViewProps> = (
             >
               <ClipboardList className="h-3.5 w-3.5" />
               <span>Issued Job Cards Log ({jobCards.length})</span>
+            </button>
+            <button
+              type="button"
+              disabled={syncingCards}
+              onClick={handleManualSyncCards}
+              className="flex items-center gap-1.5 rounded-lg border border-sky-300 bg-sky-50 hover:bg-sky-100 px-3 py-2 text-xs font-bold text-sky-900 transition disabled:opacity-50"
+              title="Pull latest Maintenance Job Cards from Cloud & push unsent local cards"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${syncingCards ? 'animate-spin' : ''}`} />
+              <span>{syncingCards ? 'Syncing...' : 'Sync Cards'}</span>
             </button>
           </div>
         </div>

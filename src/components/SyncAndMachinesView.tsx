@@ -1542,6 +1542,7 @@ git push -u origin main`}
               {pendingBreakdown.dispatch > 0 && <span>Dispatch: {pendingBreakdown.dispatch}</span>}
               {pendingBreakdown.specialOrders > 0 && <span>Special Orders: {pendingBreakdown.specialOrders}</span>}
               {pendingBreakdown.qualityTrials > 0 && <span>Trials: {pendingBreakdown.qualityTrials}</span>}
+              {pendingBreakdown.maintenanceJobCards > 0 && <span>Maint Job Cards: {pendingBreakdown.maintenanceJobCards}</span>}
               {pendingBreakdown.sop > 0 && <span>SOP Logs: {pendingBreakdown.sop}</span>}
               {pendingBreakdown.diesel > 0 && <span>Diesel: {pendingBreakdown.diesel}</span>}
               {pendingBreakdown.powerGen > 0 && <span>Power/Gen: {pendingBreakdown.powerGen}</span>}
@@ -1551,7 +1552,7 @@ git push -u origin main`}
           )}
 
           {cloudDiag && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 text-[11px]">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-[11px]">
               <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
                 <div className="text-slate-400">Downtime Logs</div>
                 <div className="font-bold text-white">{cloudDiag.counts.downtime}</div>
@@ -1569,6 +1570,10 @@ git push -u origin main`}
               <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
                 <div className="text-slate-400">Quality Trials</div>
                 <div className="font-bold text-white">{cloudDiag.counts.trials}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Maint Job Cards</div>
+                <div className="font-bold text-white">{cloudDiag.counts.maintenanceJobCards}</div>
               </div>
               <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
                 <div className="text-slate-400">SOP Floor / QC</div>

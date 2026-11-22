@@ -13,13 +13,20 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  resetFirestorePathAccessCache,
 } from '../firebase';
 import { MaintenanceJobCard, normalizeMachineName } from '../types';
 
 const MNT_STORAGE_KEY = 'lgplast_maintenance_job_cards_v1';
 const MNT_PENDING_KEY = 'lgplast_maintenance_job_cards_pending_v1';
 const MNT_COLLECTION = 'maintenance_job_cards';
-const FIRESTORE_WRITE_TIMEOUT_MS = 3500;
+const FIRESTORE_WRITE_TIMEOUT_MS = 4500;
+
+let lastMaintenanceSyncError: string | null = null;
+
+export function getLastMaintenanceSyncError(): string | null {
+  return lastMaintenanceSyncError;
+}
 
 function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
   return deepSanitizeForFirestore(obj);
@@ -158,6 +165,7 @@ export async function saveMaintenanceJobCardToFirebase(
       await setDoc(doc(db, MNT_COLLECTION, updated.id), payload, { merge: true });
     })().then(
       () => {
+        lastMaintenanceSyncError = null;
         removePendingId(updated.id);
         const latest = readLocalCards().map((c) =>
           c.id === updated.id ? ({ ...c, sy: syncTs } as MaintenanceJobCard) : c
@@ -166,11 +174,15 @@ export async function saveMaintenanceJobCardToFirebase(
         return { ok: true as const };
       },
       (err: any) => {
+        const errMsg = isPermissionDeniedError(err)
+          ? 'Firestore rejected maintenance_job_cards write (publish updated firestore.rules in Firebase Console).'
+          : err?.message || 'Saved locally (offline)';
         if (isPermissionDeniedError(err)) {
           markFirestorePathBlockedByRules(MNT_COLLECTION);
         }
+        lastMaintenanceSyncError = errMsg;
         addPendingId(updated.id);
-        return { ok: false as const, error: err?.message || 'Saved locally (offline)' };
+        return { ok: false as const, error: errMsg };
       }
     );
 
@@ -182,11 +194,15 @@ export async function saveMaintenanceJobCardToFirebase(
 
     return await Promise.race([writePromise, timeoutPromise]);
   } catch (err: any) {
+    const errMsg = isPermissionDeniedError(err)
+      ? 'Firestore rejected maintenance_job_cards write (publish updated firestore.rules in Firebase Console).'
+      : err?.message || 'Saved locally (offline)';
     if (isPermissionDeniedError(err)) {
       markFirestorePathBlockedByRules(MNT_COLLECTION);
     }
+    lastMaintenanceSyncError = errMsg;
     addPendingId(updated.id);
-    return { ok: false, error: err?.message || 'Saved locally (offline)' };
+    return { ok: false, error: errMsg };
   }
 }
 
@@ -220,10 +236,19 @@ export async function flushPendingMaintenanceJobCards(): Promise<number> {
   return flushed;
 }
 
-export async function pollMaintenanceJobCards(): Promise<MaintenanceJobCard[]> {
+export async function pollMaintenanceJobCards(
+  forceFresh: boolean = false
+): Promise<MaintenanceJobCard[]> {
   try {
+    if (forceFresh) {
+      resetFirestorePathAccessCache();
+    }
     await ensureFirebaseAuth();
     if (!(await canAccessFirestorePath(MNT_COLLECTION, false))) {
+      lastMaintenanceSyncError =
+        typeof navigator !== 'undefined' && navigator.onLine === false
+          ? 'Device is offline.'
+          : 'Cloud permission blocked maintenance_job_cards — verify updated Firestore Rules are published in Firebase Console.';
       return readLocalCards();
     }
     const snap = await getCollectionDocsServerFirst(collection(db, MNT_COLLECTION));
@@ -236,10 +261,15 @@ export async function pollMaintenanceJobCards(): Promise<MaintenanceJobCard[]> {
     const merged = mergeCards(local, remote);
     saveLocalCards(merged);
     clearSyncedCardsFromQueue(local, remote);
+    lastMaintenanceSyncError = null;
     return merged;
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
       markFirestorePathBlockedByRules(MNT_COLLECTION);
+      lastMaintenanceSyncError =
+        'Cloud permission denied on maintenance_job_cards — verify updated Firestore Rules are published in Firebase Console.';
+    } else {
+      lastMaintenanceSyncError = err?.message || 'Failed to sync maintenance job cards.';
     }
     return readLocalCards();
   }
@@ -251,11 +281,22 @@ export function subscribeMaintenanceJobCards(
   onUpdate(readLocalCards());
   let unsub = () => {};
   let cancelled = false;
-  (async () => {
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const attachListener = async () => {
+    if (cancelled) return;
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(MNT_COLLECTION, false))) return;
+    const allowed = await canAccessFirestorePath(MNT_COLLECTION, false);
     if (cancelled) return;
+    if (!allowed) {
+      retryTimer = setTimeout(() => {
+        if (!cancelled) {
+          attachListener().catch(() => {});
+        }
+      }, 15000);
+      return;
+    }
     try {
       unsub = onSnapshot(
         collection(db, MNT_COLLECTION),
@@ -270,6 +311,7 @@ export function subscribeMaintenanceJobCards(
           const merged = mergeCards(local, remote);
           saveLocalCards(merged);
           clearSyncedCardsFromQueue(local, remote);
+          lastMaintenanceSyncError = null;
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingMaintenanceJobCards().catch(() => {});
@@ -278,14 +320,20 @@ export function subscribeMaintenanceJobCards(
         (err) => {
           if (isPermissionDeniedError(err)) {
             markFirestorePathBlockedByRules(MNT_COLLECTION);
+            lastMaintenanceSyncError =
+              'Cloud permission denied on maintenance_job_cards — verify updated Firestore Rules are published.';
           }
           console.warn('MaintenanceJobCards listener warning:', err.message);
         }
       );
     } catch {}
-  })();
+  };
+
+  attachListener().catch(() => {});
+
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
     unsub();
   };
 }

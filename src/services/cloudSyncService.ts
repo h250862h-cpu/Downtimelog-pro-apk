@@ -261,7 +261,10 @@ export async function runFullCloudSyncNow(
     resetFirestorePathAccessCache();
   }
   repairAllPendingSyncQueues();
-  await canAccessFirestorePath('sop_production_logs', false).catch(() => false);
+  await Promise.all([
+    canAccessFirestorePath('sop_production_logs', false).catch(() => false),
+    canAccessFirestorePath('maintenance_job_cards', false).catch(() => false),
+  ]);
   const pendingBefore = getUnifiedPendingQueueBreakdown();
   await reconnectFirestoreNetwork(false).catch(() => false);
   const health = await probeFirestoreCloudHealth();
