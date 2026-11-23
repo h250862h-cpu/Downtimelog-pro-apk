@@ -11,7 +11,6 @@ import {
 import {
   CollectionReference,
   collection,
-  deleteDoc,
   doc,
   DocumentData,
   DocumentReference,
@@ -36,6 +35,7 @@ import {
   PlantRole,
   PlantUserAccount,
   UserPermissions,
+  ZERO_PERMISSIONS,
 } from './types';
 
 const app = initializeApp(firebaseConfig);
@@ -175,231 +175,68 @@ export function deepSanitizeForFirestore<T>(val: T): T {
   return val;
 }
 
-const pathAccessCache = new Map<string, { allowed: boolean; checkedAt: number }>();
-const pathAccessInFlight = new Map<string, Promise<boolean>>();
-let pathAccessCacheScope: string | null = null;
-const PATH_ACCESS_TTL_MS = 15 * 60 * 1000;
-const PATH_ACCESS_STORAGE_KEY = 'dt_fs_path_access_v2';
+// Clear any legacy persisted path-access blocklist from earlier builds
+try {
+  localStorage.removeItem('dt_fs_path_access_v2');
+} catch {}
 
-const CORE_FIRESTORE_COLLECTIONS = new Set([
-  'downtime_entries',
-  'app_config',
-  'plant_users',
-  'dispatch_entries',
-  'attendance_batches',
-  'qc_inspections',
-  'maintenance_job_cards',
-  'quality_trial_reports',
-  'special_orders',
-  'special_order_production',
-  'special_order_wh_dispatches',
-]);
-
-const SECONDARY_SENTINEL_COLLECTION = 'sop_production_logs';
-const SECONDARY_COLLECTIONS = [
-  'sop_production_logs',
-  'sop_qc_checks',
-  'sop_scrap_pipeline',
-  'sop_mixing_reports',
-  'sop_shift_handovers',
-  'historical_dispatch_uploads',
-  'monthly_production_plans',
-  'diesel_tank_config',
-  'diesel_fuel_requests',
-  'diesel_grn_records',
-  'power_cut_logs',
-  'generator_logs',
-];
-
-function getPathCacheScope(): string {
-  return `${firebaseConfig.projectId}:${auth.currentUser?.uid || 'anon'}`;
-}
-
-function hydratePathAccessFromStorage() {
-  const activeScope = getPathCacheScope();
-  if (pathAccessCacheScope === activeScope && pathAccessCache.size > 0) return;
-  if (pathAccessCacheScope !== activeScope) {
-    pathAccessCache.clear();
-    pathAccessCacheScope = activeScope;
-  }
-  try {
-    const raw = localStorage.getItem(PATH_ACCESS_STORAGE_KEY);
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as {
-      scope?: string;
-      entries?: Record<string, { allowed: boolean; checkedAt: number }>;
-    };
-    const isSameProject =
-      typeof parsed?.scope === 'string' && parsed.scope.startsWith(`${firebaseConfig.projectId}:`);
-    const scopeMatches =
-      parsed?.scope === activeScope || (activeScope.endsWith(':anon') && isSameProject);
-    if (!scopeMatches || !parsed.entries) return;
-    const now = Date.now();
-    Object.entries(parsed.entries).forEach(([k, v]) => {
-      if (v && typeof v.checkedAt === 'number' && now - v.checkedAt < PATH_ACCESS_TTL_MS) {
-        pathAccessCache.set(k, v);
-      }
-    });
-  } catch {}
-}
-
-function persistPathAccessToStorage() {
-  try {
-    const activeScope = getPathCacheScope();
-    pathAccessCacheScope = activeScope;
-    const entries: Record<string, { allowed: boolean; checkedAt: number }> = {};
-    pathAccessCache.forEach((v, k) => {
-      entries[k] = v;
-    });
-    localStorage.setItem(
-      PATH_ACCESS_STORAGE_KEY,
-      JSON.stringify({ scope: activeScope, entries })
-    );
-  } catch {}
-}
+// Short in-memory cooldown ONLY when a live, authenticated online Firestore SDK call throws permission-denied.
+// Never persists to localStorage and never cross-blocks unrelated collections.
+const pathBlockedUntil = new Map<string, number>();
+let lastAuthUidForCooldown: string | null = null;
+const PERMISSION_COOLDOWN_MS = 20 * 1000;
 
 export function resetFirestorePathAccessCache() {
-  pathAccessCache.clear();
-  pathAccessCacheScope = null;
-  try {
-    localStorage.removeItem(PATH_ACCESS_STORAGE_KEY);
-  } catch {}
+  pathBlockedUntil.clear();
+  lastAuthUidForCooldown = auth.currentUser?.uid || null;
 }
 
 export function isPermissionDeniedError(err: any): boolean {
   const code = String(err?.code || '').toLowerCase();
   const msg = String(err?.message || err || '').toLowerCase();
-  return code.includes('permission-denied') || msg.includes('missing or insufficient permissions') || msg.includes('permission_denied');
+  return (
+    code.includes('permission-denied') ||
+    msg.includes('missing or insufficient permissions') ||
+    msg.includes('permission_denied')
+  );
 }
 
 export function isFirestorePathBlockedByRules(firestorePath: string): boolean {
+  const currentUid = auth.currentUser?.uid || null;
+  if (lastAuthUidForCooldown !== currentUid) {
+    pathBlockedUntil.clear();
+    lastAuthUidForCooldown = currentUid;
+  }
   const collectionRoot = firestorePath.replace(/^\/+/, '').split('/')[0];
   if (!collectionRoot) return false;
-  hydratePathAccessFromStorage();
-  const cached = pathAccessCache.get(collectionRoot);
-  if (!cached) return false;
-  if (Date.now() - cached.checkedAt >= PATH_ACCESS_TTL_MS) return false;
-  return cached.allowed === false;
+  const blockedUntil = pathBlockedUntil.get(collectionRoot);
+  if (!blockedUntil) return false;
+  if (Date.now() >= blockedUntil) {
+    pathBlockedUntil.delete(collectionRoot);
+    return false;
+  }
+  return true;
 }
 
 export function markFirestorePathBlockedByRules(firestorePath: string) {
+  if (!auth.currentUser) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
   const collectionRoot = firestorePath.replace(/^\/+/, '').split('/')[0];
   if (!collectionRoot) return;
-  const ts = Date.now();
-  pathAccessCache.set(collectionRoot, { allowed: false, checkedAt: ts });
-  if (!CORE_FIRESTORE_COLLECTIONS.has(collectionRoot)) {
-    SECONDARY_COLLECTIONS.forEach((col) => {
-      pathAccessCache.set(col, { allowed: false, checkedAt: ts });
-    });
-  }
-  persistPathAccessToStorage();
-}
-
-async function probeCollectionRootAccess(collectionRoot: string): Promise<boolean> {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      return false;
-    }
-    await ensureFirebaseAuth().catch(() => false);
-    const encodedDb = encodeURIComponent(dbId);
-    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${encodedDb}/documents/${collectionRoot}?pageSize=1`;
-
-    const doProbeFetch = async (forceRefreshToken: boolean) => {
-      const token = auth.currentUser
-        ? await auth.currentUser.getIdToken(forceRefreshToken).catch(() => null)
-        : null;
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-      return fetch(url, { method: 'GET', headers });
-    };
-
-    let res = await doProbeFetch(false);
-    if (res.status === 401) {
-      // Refresh Firebase Auth token once before concluding unauthorized
-      await ensureFirebaseAuth().catch(() => false);
-      res = await doProbeFetch(true);
-    }
-
-    if (res.status === 403 || res.status === 401) {
-      pathAccessCache.set(collectionRoot, { allowed: false, checkedAt: Date.now() });
-      persistPathAccessToStorage();
-      return false;
-    }
-    if (res.ok || res.status === 404) {
-      pathAccessCache.set(collectionRoot, { allowed: true, checkedAt: Date.now() });
-      persistPathAccessToStorage();
-      return true;
-    }
-    return true;
-  } catch {
-    return true;
-  }
+  lastAuthUidForCooldown = auth.currentUser.uid;
+  pathBlockedUntil.set(collectionRoot, Date.now() + PERMISSION_COOLDOWN_MS);
 }
 
 /**
- * Lightweight REST check for whether the active Firestore security rules allow reading
- * a given collection or document path. Keeps Firestore SDK's internal WatchStream free
- * from concurrent PERMISSION_DENIED target cancellations when optional modules are gated.
+ * Ensures Firebase Auth is ready before opening a Firestore WatchStream or query,
+ * and checks only whether this specific collection is in a brief 20s permission cooldown.
  */
 export async function canAccessFirestorePath(
   firestorePath: string,
   _isDocument: boolean = false
 ): Promise<boolean> {
-  const cleanPath = firestorePath.replace(/^\/+/, '');
-  const collectionRoot = cleanPath.split('/')[0];
-  if (!collectionRoot) return true;
-
   await ensureFirebaseAuth().catch(() => false);
-  hydratePathAccessFromStorage();
-
-  const now = Date.now();
-  const cached = pathAccessCache.get(collectionRoot);
-  if (cached && now - cached.checkedAt < PATH_ACCESS_TTL_MS) {
-    return cached.allowed;
-  }
-
-  const inFlightKey = `${getPathCacheScope()}:${collectionRoot}`;
-  const existing = pathAccessInFlight.get(inFlightKey);
-  if (existing) return existing;
-
-  const probePromise = (async () => {
-    try {
-      // If probing a secondary module collection, check sentinel first so we do not emit 16 parallel 403 requests
-      if (!CORE_FIRESTORE_COLLECTIONS.has(collectionRoot)) {
-        const sentinelCached = pathAccessCache.get(SECONDARY_SENTINEL_COLLECTION);
-        let sentinelAllowed: boolean;
-        if (sentinelCached && Date.now() - sentinelCached.checkedAt < PATH_ACCESS_TTL_MS) {
-          sentinelAllowed = sentinelCached.allowed;
-        } else if (collectionRoot !== SECONDARY_SENTINEL_COLLECTION) {
-          sentinelAllowed = await canAccessFirestorePath(SECONDARY_SENTINEL_COLLECTION, false);
-        } else {
-          sentinelAllowed = await probeCollectionRootAccess(SECONDARY_SENTINEL_COLLECTION);
-        }
-
-        if (!sentinelAllowed) {
-          const ts = Date.now();
-          SECONDARY_COLLECTIONS.forEach((col) => {
-            pathAccessCache.set(col, { allowed: false, checkedAt: ts });
-          });
-          pathAccessCache.set(collectionRoot, { allowed: false, checkedAt: ts });
-          persistPathAccessToStorage();
-          return false;
-        }
-        if (collectionRoot === SECONDARY_SENTINEL_COLLECTION) {
-          return true;
-        }
-      }
-
-      return await probeCollectionRootAccess(collectionRoot);
-    } finally {
-      pathAccessInFlight.delete(inFlightKey);
-    }
-  })();
-
-  pathAccessInFlight.set(inFlightKey, probePromise);
-  return probePromise;
+  return !isFirestorePathBlockedByRules(firestorePath);
 }
 
 /**
@@ -411,15 +248,17 @@ export async function getCollectionDocsServerFirst<T = DocumentData>(
 ): Promise<QuerySnapshot<T>> {
   const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
   if (isBrowserOnline) {
+    await ensureFirebaseAuth().catch(() => false);
     const refPath = (colOrQuery as any)?.path;
-    if (typeof refPath === 'string' && !(await canAccessFirestorePath(refPath, false))) {
-      throw new Error(`Missing or insufficient permissions for ${refPath}`);
-    }
     try {
       return await getDocsFromServer(colOrQuery);
     } catch (err: any) {
-      const msg = (err?.message || '').toLowerCase();
-      if (msg.includes('permission')) throw err;
+      if (isPermissionDeniedError(err)) {
+        if (typeof refPath === 'string') {
+          markFirestorePathBlockedByRules(refPath);
+        }
+        throw err;
+      }
     }
   }
   return await getDocs(colOrQuery);
@@ -433,15 +272,17 @@ export async function getDocServerFirst<T = DocumentData>(
 ): Promise<DocumentSnapshot<T>> {
   const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
   if (isBrowserOnline) {
+    await ensureFirebaseAuth().catch(() => false);
     const refPath = (docRef as any)?.path;
-    if (typeof refPath === 'string' && !(await canAccessFirestorePath(refPath, true))) {
-      throw new Error(`Missing or insufficient permissions for ${refPath}`);
-    }
     try {
       return await getDocFromServer(docRef);
     } catch (err: any) {
-      const msg = (err?.message || '').toLowerCase();
-      if (msg.includes('permission')) throw err;
+      if (isPermissionDeniedError(err)) {
+        if (typeof refPath === 'string') {
+          markFirestorePathBlockedByRules(refPath);
+        }
+        throw err;
+      }
     }
   }
   return await getDoc(docRef);
@@ -607,6 +448,11 @@ export async function loginWithGoogle() {
       const email = cred.user.email || '';
       const isMaster = email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase();
       const matched = getLocalPlantUsers().find((u) => u.email.toLowerCase() === email.toLowerCase());
+      if (!isMaster && matched?.status === 'suspended') {
+        setActiveSessionUser(null);
+        await signOut(auth).catch(() => {});
+        throw new Error('This account has been suspended or revoked by the Plant Administrator.');
+      }
       const resolvedDisplayName =
         matched?.displayName || cred.user.displayName || email.split('@')[0].toUpperCase();
       const isRestrictedSIC = isRestrictedShiftInChargeAccount(email, resolvedDisplayName);
@@ -615,6 +461,7 @@ export async function loginWithGoogle() {
         : isRestrictedSIC
         ? 'Shift In Charge'
         : matched?.role || 'Machine Operator';
+      resetFirestorePathAccessCache();
       setActiveSessionUser({
         uid: cred.user.uid,
         email,
@@ -670,24 +517,7 @@ export function resolveUserPermissions(
   const users = plantUsersList || getLocalPlantUsers();
   const matched = users.find((u) => u.email.trim().toLowerCase() === normEmail);
   if (matched?.status === 'suspended') {
-    return {
-      viewMachineStatus: false,
-      logDowntime: false,
-      viewDailyHours: false,
-      exportDowntimeExcel: false,
-      dispatchShiftEntry: false,
-      dispatchWHConfirm: false,
-      dispatchHODConfirm: false,
-      exportDispatchExcel: false,
-      attendanceLogger: false,
-      manageMachinesAndSync: false,
-      dieselFuelRequest: false,
-      dieselHODApprove: false,
-      dieselGRN: false,
-      dieselExportExcel: false,
-      productionPlanningAccess: false,
-      productionReportAccess: false,
-    };
+    return { ...ZERO_PERMISSIONS };
   }
 
   if (isRestrictedShiftInChargeAccount(normEmail, displayName || matched?.displayName)) {
@@ -697,7 +527,7 @@ export function resolveUserPermissions(
   if (matched) {
     const defaults = getDefaultPermissionsForRole(matched.role);
     if (matched.permissions) {
-      return { ...defaults, ...matched.permissions };
+      return { ...ZERO_PERMISSIONS, ...defaults, ...matched.permissions };
     }
     return defaults;
   }
@@ -739,14 +569,12 @@ export async function loginWithEmail(identifier: string, pass: string) {
   const isMasterAdminCred =
     normEmail === 'h250862h@hit.ac.zw' && trimmedPass === 'h250862h@!';
 
-  // Shop floor device check for Samsung phone 0714282338
+  // Shop floor shared device terminal login for Samsung phone 0714282338
   const isFloorDevice0714282338 =
-    normEmail.startsWith('0714282338') ||
-    identifier.includes('0714282338') ||
-    trimmedPass === '0714282338';
+    (normEmail === FLOOR_DEVICE_EMAIL || identifier.trim() === '0714282338') &&
+    trimmedPass === FLOOR_DEVICE_PASS;
 
   if (isFloorDevice0714282338) {
-    // Authenticate with a REAL Email/Password Firebase account so Firestore writes succeed immediately
     const authed = await signInOrProvisionAccount(
       FLOOR_DEVICE_EMAIL,
       FLOOR_DEVICE_PASS,
@@ -756,7 +584,13 @@ export async function loginWithEmail(identifier: string, pass: string) {
     const localMatch = getLocalPlantUsers().find(
       (u) => u.email.toLowerCase() === FLOOR_DEVICE_EMAIL.toLowerCase()
     );
+    if (localMatch?.status === 'suspended') {
+      setActiveSessionUser(null);
+      await signOut(auth).catch(() => {});
+      throw new Error('This terminal account has been suspended by the Plant Administrator.');
+    }
     const floorRole = localMatch?.role || 'Machine Operator';
+    resetFirestorePathAccessCache();
     const sessionUser: PlantSessionUser = {
       uid: authed && auth.currentUser ? auth.currentUser.uid : 'device-0714282338',
       email: FLOOR_DEVICE_EMAIL,
@@ -773,6 +607,11 @@ export async function loginWithEmail(identifier: string, pass: string) {
     const cred = await signInWithEmailAndPassword(auth, normEmail, trimmedPass);
     await fetchPlantUsersDirectory();
     const localMatch = getLocalPlantUsers().find((s) => s.email.toLowerCase() === normEmail);
+    if (!isMasterAdminCred && localMatch?.status === 'suspended') {
+      setActiveSessionUser(null);
+      await signOut(auth).catch(() => {});
+      throw new Error('This account has been suspended or revoked by the Plant Administrator.');
+    }
     const resolvedDisplayName =
       localMatch?.displayName ||
       cred.user.displayName ||
@@ -783,6 +622,7 @@ export async function loginWithEmail(identifier: string, pass: string) {
       : isRestrictedSIC
       ? 'Shift In Charge'
       : localMatch?.role || 'Machine Operator';
+    resetFirestorePathAccessCache();
     setActiveSessionUser({
       uid: cred.user.uid,
       email: cred.user.email || normEmail,
@@ -797,110 +637,46 @@ export async function loginWithEmail(identifier: string, pass: string) {
     });
     return cred;
   } catch (err: any) {
-    const skipAutoCreate =
-      typeof localStorage !== 'undefined' &&
-      localStorage.getItem(`dt_auth_exists_${normEmail}`) === '1';
-
-    // If user not found, and it is admin credentials, attempt to auto-create once in Firebase Auth
-    if (
-      !skipAutoCreate &&
-      (isMasterAdminCred ||
-        err.code === 'auth/user-not-found' ||
-        err.code === 'auth/invalid-credential')
-    ) {
+    // Only exact Master Admin credentials may auto-provision or recover on initial deployment
+    if (isMasterAdminCred) {
       try {
         const newCred = await createUserWithEmailAndPassword(auth, normEmail, trimmedPass);
         if (newCred.user) {
-          await updateProfile(newCred.user, {
-            displayName: isMasterAdminCred
-              ? 'PLANT ADMINISTRATOR'
-              : normEmail.split('@')[0].toUpperCase(),
-          });
+          await updateProfile(newCred.user, { displayName: 'PLANT ADMINISTRATOR' });
         }
-        await fetchPlantUsersDirectory();
-        const localMatch = getLocalPlantUsers().find((s) => s.email.toLowerCase() === normEmail);
-        const resolvedDisplayName =
-          localMatch?.displayName ||
-          (isMasterAdminCred ? 'PLANT ADMINISTRATOR' : normEmail.split('@')[0].toUpperCase());
-        const isRestrictedSIC = isRestrictedShiftInChargeAccount(normEmail, resolvedDisplayName);
-        const resolvedRole = isMasterAdminCred
-          ? 'Plant Administrator'
-          : isRestrictedSIC
-          ? 'Shift In Charge'
-          : localMatch?.role || 'Machine Operator';
+        resetFirestorePathAccessCache();
         setActiveSessionUser({
           uid: newCred.user.uid,
           email: normEmail,
-          displayName: resolvedDisplayName,
-          role: resolvedRole,
-          isAdmin:
-            !isRestrictedSIC &&
-            (isMasterAdminCred ||
-              resolvedRole === 'Plant Administrator' ||
-              resolvedRole === 'Production HOD'),
-          permissions: resolveUserPermissions(normEmail, resolvedRole, undefined, resolvedDisplayName),
+          displayName: 'PLANT ADMINISTRATOR',
+          role: 'Plant Administrator',
+          isAdmin: true,
+          permissions: { ...FULL_ADMIN_PERMISSIONS },
         });
         return newCred;
-      } catch (createErr: any) {
-        if (createErr?.code === 'auth/email-already-in-use') {
-          try {
-            localStorage.setItem(`dt_auth_exists_${normEmail}`, '1');
-          } catch {}
-        }
-        console.warn('Auto-create in Firebase Auth note:', createErr.message);
-      }
-    }
-
-    // Check if user is registered in plant staff directory (authenticate sync lookup first for secured rules)
-    let lookupAuthed = false;
-    if (!auth.currentUser) {
-      lookupAuthed = await signInOrProvisionAccount(
-        SYNC_SERVICE_EMAIL,
-        SYNC_SERVICE_PASS,
-        'Plant Directory Lookup'
-      );
-    }
-    await fetchPlantUsersDirectory();
-    const localStaff = getLocalPlantUsers();
-    const staffMatch = localStaff.find((s) => s.email.toLowerCase() === normEmail);
-
-    if (isMasterAdminCred || (staffMatch && staffMatch.status !== 'suspended')) {
-      // Ensure a real Firebase Auth token is active for Firestore sync
-      if (!auth.currentUser) {
-        await signInOrProvisionAccount(
+      } catch {
+        const authed = await signInOrProvisionAccount(
           SYNC_SERVICE_EMAIL,
           SYNC_SERVICE_PASS,
-          staffMatch?.displayName || 'PLANT ADMINISTRATOR'
+          'PLANT ADMINISTRATOR'
         );
+        if (authed && auth.currentUser) {
+          resetFirestorePathAccessCache();
+          const sessionUser: PlantSessionUser = {
+            uid: 'admin-master',
+            email: normEmail,
+            displayName: 'PLANT ADMINISTRATOR',
+            role: 'Plant Administrator',
+            isAdmin: true,
+            permissions: { ...FULL_ADMIN_PERMISSIONS },
+          };
+          setActiveSessionUser(sessionUser);
+          return { user: sessionUser };
+        }
       }
-
-      const resolvedDisplayName =
-        staffMatch?.displayName ||
-        (isMasterAdminCred ? 'PLANT ADMINISTRATOR' : normEmail.split('@')[0].toUpperCase());
-      const isRestrictedSIC = isRestrictedShiftInChargeAccount(normEmail, resolvedDisplayName);
-      const resolvedRole = isRestrictedSIC
-        ? 'Shift In Charge'
-        : staffMatch?.role || (isMasterAdminCred ? 'Plant Administrator' : 'Machine Operator');
-      const sessionUser: PlantSessionUser = {
-        uid: staffMatch?.uid || 'admin-master',
-        email: normEmail,
-        displayName: resolvedDisplayName,
-        role: resolvedRole,
-        isAdmin:
-          !isRestrictedSIC &&
-          (isMasterAdminCred ||
-            resolvedRole === 'Plant Administrator' ||
-            resolvedRole === 'Production HOD'),
-        permissions: resolveUserPermissions(normEmail, resolvedRole, undefined, resolvedDisplayName),
-      };
-      setActiveSessionUser(sessionUser);
-      return { user: sessionUser };
     }
 
-    if (lookupAuthed) {
-      await signOut(auth).catch(() => {});
-    }
-    console.warn('Email Sign-In notice:', err);
+    console.warn('Email Sign-In notice:', err?.code || err?.message || err);
     throw err;
   }
 }
@@ -962,6 +738,190 @@ export function getLocalPlantUsers(): PlantUserAccount[] {
   ];
 }
 
+const PLANT_USERS_PENDING_KEY = 'dt_plant_users_pending_v1';
+
+function saveLocalPlantUsers(list: PlantUserAccount[]) {
+  try {
+    localStorage.setItem('dt_plant_users', JSON.stringify(list));
+  } catch {}
+}
+
+function getPendingPlantUsersQueue(): string[] {
+  try {
+    const raw = localStorage.getItem(PLANT_USERS_PENDING_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string' && id) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addPendingPlantUser(uid: string) {
+  if (!uid || uid === 'admin-master') return;
+  try {
+    const q = getPendingPlantUsersQueue();
+    if (!q.includes(uid)) {
+      localStorage.setItem(PLANT_USERS_PENDING_KEY, JSON.stringify([...q, uid]));
+    }
+  } catch {}
+}
+
+function removePendingPlantUser(uid: string) {
+  try {
+    const q = getPendingPlantUsersQueue().filter((x) => x !== uid);
+    localStorage.setItem(PLANT_USERS_PENDING_KEY, JSON.stringify(q));
+  } catch {}
+}
+
+export function repairPendingPlantUsersQueue(): number {
+  try {
+    const queue = getPendingPlantUsersQueue();
+    if (!queue.length) return 0;
+    const local = getLocalPlantUsers();
+    const byUid = new Map(local.map((u) => [u.uid, u]));
+    const cleaned = queue.filter((uid) => {
+      const u = byUid.get(uid);
+      if (!u || uid === 'admin-master') return false;
+      if (u.sy && (!u.upd || u.sy >= u.upd)) return false;
+      return true;
+    });
+    if (cleaned.length !== queue.length) {
+      localStorage.setItem(PLANT_USERS_PENDING_KEY, JSON.stringify(cleaned));
+    }
+    return cleaned.length;
+  } catch {
+    return 0;
+  }
+}
+
+export function getPendingPlantUsersCount(): number {
+  return isFirestorePathBlockedByRules('plant_users') ? 0 : getPendingPlantUsersQueue().length;
+}
+
+function clearSyncedPlantUsersFromQueue(local: PlantUserAccount[], remote: PlantUserAccount[]) {
+  const pending = getPendingPlantUsersQueue();
+  if (!pending.length) return;
+  const localMap = new Map(local.map((u) => [u.uid, u]));
+  const remoteMap = new Map(remote.map((u) => [u.uid, u]));
+  pending.forEach((uid) => {
+    const r = remoteMap.get(uid);
+    const l = localMap.get(uid);
+    if (r && (!l || (r.upd || 0) >= (l.upd || 0))) {
+      removePendingPlantUser(uid);
+    }
+  });
+}
+
+function queueLocalPlantUsersMissingFromRemote(
+  merged: PlantUserAccount[],
+  remote: PlantUserAccount[]
+): PlantUserAccount[] {
+  const remoteMap = new Map(remote.map((u) => [u.uid, u]));
+  let mutated = false;
+  const next = merged.map((u) => {
+    if (!u?.uid || u.uid === 'admin-master' || u.uid === 'device-0714282338') return u;
+    const r = remoteMap.get(u.uid);
+    const needsUpload = !r || (u.upd || 0) > (r.upd || 0);
+    if (needsUpload) {
+      addPendingPlantUser(u.uid);
+      if (u.sy !== 0) {
+        mutated = true;
+        return { ...u, sy: 0 };
+      }
+    }
+    return u;
+  });
+  return mutated ? next : merged;
+}
+
+function ensureSystemMasterAdminInList(list: PlantUserAccount[]): PlantUserAccount[] {
+  if (list.some((u) => u.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase())) {
+    return list;
+  }
+  return [
+    {
+      uid: 'admin-master',
+      email: PRIMARY_ADMIN_EMAIL,
+      displayName: 'Plant Administrator',
+      role: 'Plant Administrator',
+      department: 'Management',
+      permissions: { ...FULL_ADMIN_PERMISSIONS },
+      createdBy: 'System Root',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      status: 'active',
+    },
+    ...list,
+  ];
+}
+
+function mergePlantUsers(local: PlantUserAccount[], remote: PlantUserAccount[]): PlantUserAccount[] {
+  const map = new Map<string, PlantUserAccount>();
+  local.forEach((u) => {
+    if (u?.uid) map.set(u.uid, enforceShiftInChargeAccount(u).account);
+  });
+  remote.forEach((r) => {
+    if (!r?.uid) return;
+    const normR = enforceShiftInChargeAccount(r).account;
+    const existing = map.get(normR.uid);
+    if (!existing) {
+      map.set(normR.uid, normR);
+    } else if (existing.status === 'suspended' && normR.status !== 'suspended') {
+      if ((normR.upd || 0) > (existing.upd || 0)) {
+        map.set(normR.uid, normR);
+      }
+    } else if ((normR.upd || 0) >= (existing.upd || 0)) {
+      map.set(normR.uid, normR);
+    }
+  });
+  return ensureSystemMasterAdminInList(Array.from(map.values()));
+}
+
+export async function flushPendingPlantUsers(): Promise<number> {
+  repairPendingPlantUsersQueue();
+  await ensureFirebaseAuth().catch(() => false);
+  if (isFirestorePathBlockedByRules('plant_users')) return 0;
+
+  const local = getLocalPlantUsers();
+  const pendingSet = new Set<string>(getPendingPlantUsersQueue());
+  local.forEach((u) => {
+    if (
+      u?.uid &&
+      u.uid !== 'admin-master' &&
+      u.uid !== 'device-0714282338' &&
+      (!u.sy || (u.upd && u.upd > u.sy))
+    ) {
+      pendingSet.add(u.uid);
+    }
+  });
+  if (pendingSet.size === 0) return 0;
+
+  let flushed = 0;
+  for (const uid of Array.from(pendingSet)) {
+    const found = local.find((u) => u.uid === uid);
+    if (!found) {
+      removePendingPlantUser(uid);
+      continue;
+    }
+    try {
+      const syncTs = Math.max(Date.now(), found.upd || 0);
+      const payload = deepSanitizeForFirestore({ ...found, sy: syncTs });
+      await setDoc(doc(db, 'plant_users', uid), payload, { merge: true });
+      removePendingPlantUser(uid);
+      const latest = getLocalPlantUsers().map((u) =>
+        u.uid === uid ? { ...u, sy: syncTs } : u
+      );
+      saveLocalPlantUsers(latest);
+      flushed++;
+    } catch (err: any) {
+      if (isPermissionDeniedError(err)) {
+        markFirestorePathBlockedByRules('plant_users');
+        break;
+      }
+    }
+  }
+  return flushed;
+}
+
 /**
  * Fetch plant_users directory directly from Firestore and cache locally
  */
@@ -969,38 +929,33 @@ export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
   try {
     await ensureFirebaseAuth().catch(() => false);
     const snap = await getCollectionDocsServerFirst(collection(db, 'plant_users'));
-    const list: PlantUserAccount[] = [];
+    const remote: PlantUserAccount[] = [];
     const docsToPatch: PlantUserAccount[] = [];
     snap.forEach((d) => {
       const rawUser = d.data() as PlantUserAccount;
-      const { account, changed } = enforceShiftInChargeAccount(rawUser);
-      list.push(account);
+      const { account, changed } = enforceShiftInChargeAccount({
+        ...rawUser,
+        uid: rawUser.uid || d.id,
+        sy: rawUser.sy || rawUser.upd || 1,
+      });
+      remote.push(account);
       if (changed) docsToPatch.push(account);
     });
     if (docsToPatch.length > 0) {
       Promise.all(
-        docsToPatch.map((u) => setDoc(doc(db, 'plant_users', u.uid), u, { merge: true }).catch(() => {}))
+        docsToPatch.map((u) =>
+          setDoc(doc(db, 'plant_users', u.uid), deepSanitizeForFirestore(u), { merge: true }).catch(
+            () => {}
+          )
+        )
       ).catch(() => {});
     }
-    if (list.length > 0) {
-      if (!list.some((u) => u.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase())) {
-        list.unshift({
-          uid: 'admin-master',
-          email: PRIMARY_ADMIN_EMAIL,
-          displayName: 'Plant Administrator',
-          role: 'Plant Administrator',
-          department: 'Management',
-          permissions: { ...FULL_ADMIN_PERMISSIONS },
-          createdBy: 'System Root',
-          createdAt: '2026-01-01T00:00:00.000Z',
-          status: 'active',
-        });
-      }
-      try {
-        localStorage.setItem('dt_plant_users', JSON.stringify(list));
-      } catch {}
-      return list;
-    }
+    const local = getLocalPlantUsers();
+    const mergedRaw = mergePlantUsers(local, remote);
+    clearSyncedPlantUsersFromQueue(local, remote);
+    const merged = queueLocalPlantUsersMissingFromRemote(mergedRaw, remote);
+    saveLocalPlantUsers(merged);
+    return merged;
   } catch (e) {
     console.warn('fetchPlantUsersDirectory note:', e);
   }
@@ -1029,7 +984,7 @@ function isAuthorizedAdminEmail(email: string): boolean {
 }
 
 /**
- * Real-time subscription to plant_users collection
+ * Real-time subscription to plant_users collection (auto-retry + periodic server reconcile)
  */
 export function subscribePlantUsers(
   onUpdate: (users: PlantUserAccount[]) => void
@@ -1039,60 +994,94 @@ export function subscribePlantUsers(
 
   let unsub: (() => void) | null = null;
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
 
-  (async () => {
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
+
+  const start = async () => {
     await ensureFirebaseAuth().catch(() => false);
     if (cancelled) return;
     try {
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
       const colRef = collection(db, 'plant_users');
       unsub = onSnapshot(
         colRef,
+        { includeMetadataChanges: true },
         (snapshot) => {
-          const list: PlantUserAccount[] = [];
+          const remote: PlantUserAccount[] = [];
           const docsToPatch: PlantUserAccount[] = [];
           snapshot.forEach((d) => {
             const rawUser = d.data() as PlantUserAccount;
-            const { account, changed } = enforceShiftInChargeAccount(rawUser);
-            list.push(account);
+            const { account, changed } = enforceShiftInChargeAccount({
+              ...rawUser,
+              uid: rawUser.uid || d.id,
+              sy: rawUser.sy || rawUser.upd || 1,
+            });
+            remote.push(account);
             if (changed) docsToPatch.push(account);
           });
           if (docsToPatch.length > 0) {
             Promise.all(
               docsToPatch.map((u) =>
-                setDoc(doc(db, 'plant_users', u.uid), u, { merge: true }).catch(() => {})
+                setDoc(doc(db, 'plant_users', u.uid), deepSanitizeForFirestore(u), {
+                  merge: true,
+                }).catch(() => {})
               )
             ).catch(() => {});
           }
-          if (list.length > 0) {
-            // Merge with master admin if not in list
-            if (!list.some((u) => u.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase())) {
-              list.unshift({
-                uid: 'admin-master',
-                email: PRIMARY_ADMIN_EMAIL,
-                displayName: 'Plant Administrator',
-                role: 'Plant Administrator',
-                department: 'Management',
-                permissions: { ...FULL_ADMIN_PERMISSIONS },
-                createdBy: 'System Root',
-                createdAt: '2026-01-01T00:00:00.000Z',
-                status: 'active',
-              });
-            }
-            try {
-              localStorage.setItem('dt_plant_users', JSON.stringify(list));
-            } catch {}
-            onUpdate(list);
+          const local = getLocalPlantUsers();
+          const mergedRaw = mergePlantUsers(local, remote);
+          const merged = !snapshot.metadata.fromCache
+            ? queueLocalPlantUsersMissingFromRemote(mergedRaw, remote)
+            : mergedRaw;
+          clearSyncedPlantUsersFromQueue(local, remote);
+          saveLocalPlantUsers(merged);
+          onUpdate(merged);
+
+          if (!snapshot.metadata.fromCache) {
+            flushPendingPlantUsers().catch(() => {});
           }
         },
         (err) => {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules('plant_users');
+          }
           console.warn('plant_users Firestore subscription fallback:', err.message);
+          scheduleRetry();
         }
       );
-    } catch {}
-  })();
+    } catch {
+      scheduleRetry();
+    }
+  };
+
+  start();
+
+  pollInterval = setInterval(() => {
+    if (!cancelled) {
+      flushPendingPlantUsers().catch(() => {});
+      fetchPlantUsersDirectory()
+        .then((users) => {
+          if (!cancelled) onUpdate(users);
+        })
+        .catch(() => {});
+    }
+  }, 15000);
 
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    if (pollInterval) clearInterval(pollInterval);
     if (unsub) unsub();
   };
 }
@@ -1151,9 +1140,10 @@ export async function adminCreateOperatorAccount(
     const effectivePermissions: UserPermissions = isRestrictedSIC
       ? getDefaultPermissionsForRole('Shift In Charge')
       : permissions
-      ? { ...permissions }
+      ? { ...ZERO_PERMISSIONS, ...permissions }
       : getDefaultPermissionsForRole(effectiveRole);
 
+    const nowMs = Date.now();
     const newAccount: PlantUserAccount = {
       uid: createdUid,
       email: normalizedEmail,
@@ -1162,27 +1152,34 @@ export async function adminCreateOperatorAccount(
       department: department || 'Plant Floor',
       permissions: effectivePermissions,
       createdBy: adminAuthorizerEmail.trim(),
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(nowMs).toISOString(),
       status: 'active',
+      upd: nowMs,
+      sy: 0,
+      revoked: false,
     };
 
-    // Save staff record in Firestore 'plant_users'
+    // Update local cache and queue immediately so cross-device flush recovers even if offline
+    const stored = getLocalPlantUsers();
+    const updatedLocal = [newAccount, ...stored.filter((u) => u.uid !== newAccount.uid)];
+    saveLocalPlantUsers(updatedLocal);
+    addPendingPlantUser(newAccount.uid);
+
     try {
       await ensureFirebaseAuth();
+      const syncTs = Math.max(Date.now(), nowMs);
       const userDocRef = doc(db, 'plant_users', createdUid);
-      await setDoc(userDocRef, newAccount, { merge: true });
+      await setDoc(userDocRef, deepSanitizeForFirestore({ ...newAccount, sy: syncTs }), {
+        merge: true,
+      });
+      removePendingPlantUser(createdUid);
+      saveLocalPlantUsers(
+        getLocalPlantUsers().map((u) => (u.uid === createdUid ? { ...u, sy: syncTs } : u))
+      );
     } catch (dbErr) {
-      console.warn('Could not write to plant_users Firestore collection:', dbErr);
+      console.warn('Could not write to plant_users Firestore collection; queued in outbox:', dbErr);
     }
 
-    // Update local cache
-    try {
-      const stored = getLocalPlantUsers();
-      const updated = [newAccount, ...stored.filter((u) => u.uid !== newAccount.uid)];
-      localStorage.setItem('dt_plant_users', JSON.stringify(updated));
-    } catch {}
-
-    // Clean up secondary auth session
     await signOut(secondaryAuth);
     await deleteApp(secondaryApp);
 
@@ -1209,59 +1206,121 @@ export async function adminUpdateUserAccess(
   }
 ): Promise<PlantUserAccount> {
   if (!isAuthorizedAdminEmail(adminAuthorizerEmail)) {
-    throw new Error('Unauthorized: Only Plant Administrators or Production HOD can edit confidentiality permissions.');
+    throw new Error(
+      'Unauthorized: Only Plant Administrators or Production HOD can edit confidentiality permissions.'
+    );
   }
 
   const nextDisplayName = updates.displayName?.trim() || targetUser.displayName;
   const isRestrictedSIC = isRestrictedShiftInChargeAccount(targetUser.email, nextDisplayName);
+  const nextStatus = updates.status || targetUser.status || 'active';
+  const nowMs = Date.now();
 
   const updatedAccount: PlantUserAccount = {
     ...targetUser,
     displayName: nextDisplayName,
     role: isRestrictedSIC ? 'Shift In Charge' : updates.role,
     department: updates.department,
-    permissions: isRestrictedSIC
-      ? getDefaultPermissionsForRole('Shift In Charge')
-      : { ...updates.permissions },
-    status: updates.status || targetUser.status || 'active',
+    permissions:
+      nextStatus === 'suspended'
+        ? { ...ZERO_PERMISSIONS }
+        : isRestrictedSIC
+        ? getDefaultPermissionsForRole('Shift In Charge')
+        : { ...ZERO_PERMISSIONS, ...updates.permissions },
+    status: nextStatus,
+    revoked: nextStatus === 'suspended',
+    revokedAt: nextStatus === 'suspended' ? new Date(nowMs).toISOString() : undefined,
+    upd: nowMs,
+    sy: 0,
   };
+
+  // Persist locally & queue first so outbox guarantees delivery across devices
+  const stored = getLocalPlantUsers();
+  const idx = stored.findIndex(
+    (u) => u.uid === updatedAccount.uid || u.email.toLowerCase() === updatedAccount.email.toLowerCase()
+  );
+  if (idx >= 0) {
+    stored[idx] = updatedAccount;
+  } else {
+    stored.push(updatedAccount);
+  }
+  saveLocalPlantUsers(stored);
+  addPendingPlantUser(updatedAccount.uid);
 
   try {
     await ensureFirebaseAuth();
+    const syncTs = Math.max(Date.now(), nowMs);
     const userDocRef = doc(db, 'plant_users', updatedAccount.uid);
-    await setDoc(userDocRef, updatedAccount, { merge: true });
+    await setDoc(userDocRef, deepSanitizeForFirestore({ ...updatedAccount, sy: syncTs }), {
+      merge: true,
+    });
+    removePendingPlantUser(updatedAccount.uid);
+    saveLocalPlantUsers(
+      getLocalPlantUsers().map((u) => (u.uid === updatedAccount.uid ? { ...u, sy: syncTs } : u))
+    );
   } catch (dbErr) {
-    console.warn('Failed updating plant_users access in Firestore:', dbErr);
+    console.warn('Failed updating plant_users access in Firestore; queued in outbox:', dbErr);
   }
-
-  try {
-    const stored = getLocalPlantUsers();
-    const idx = stored.findIndex((u) => u.uid === updatedAccount.uid || u.email.toLowerCase() === updatedAccount.email.toLowerCase());
-    if (idx >= 0) {
-      stored[idx] = updatedAccount;
-    } else {
-      stored.push(updatedAccount);
-    }
-    localStorage.setItem('dt_plant_users', JSON.stringify(stored));
-  } catch {}
 
   return updatedAccount;
 }
 
 /**
- * Remove/Suspend Plant User
+ * Soft-Revoke / Suspend Plant User (compatible with firestore.rules `allow delete: if false;`)
+ * Syncs immediately across all devices so the revoked user is locked out everywhere.
  */
 export async function deletePlantUserAccount(uid: string) {
+  if (!uid || uid === 'admin-master') return;
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const stored = getLocalPlantUsers();
+  const existing = stored.find((u) => u.uid === uid);
+
+  const revokedRecord: PlantUserAccount = existing
+    ? {
+        ...existing,
+        status: 'suspended',
+        revoked: true,
+        revokedAt: nowIso,
+        permissions: { ...ZERO_PERMISSIONS },
+        upd: nowMs,
+        sy: 0,
+      }
+    : {
+        uid,
+        email: `${uid}@plant.co.zw`,
+        displayName: 'Revoked Account',
+        role: 'Machine Operator',
+        department: 'Suspended',
+        permissions: { ...ZERO_PERMISSIONS },
+        createdBy: 'Admin Revoke',
+        createdAt: nowIso,
+        status: 'suspended',
+        revoked: true,
+        revokedAt: nowIso,
+        upd: nowMs,
+        sy: 0,
+      };
+
+  const nextLocal = stored.some((u) => u.uid === uid)
+    ? stored.map((u) => (u.uid === uid ? revokedRecord : u))
+    : [...stored, revokedRecord];
+  saveLocalPlantUsers(nextLocal);
+  addPendingPlantUser(uid);
+
   try {
+    await ensureFirebaseAuth();
+    const syncTs = Math.max(Date.now(), nowMs);
     const docRef = doc(db, 'plant_users', uid);
-    await deleteDoc(docRef);
+    await setDoc(docRef, deepSanitizeForFirestore({ ...revokedRecord, sy: syncTs }), {
+      merge: true,
+    });
+    removePendingPlantUser(uid);
+    saveLocalPlantUsers(
+      getLocalPlantUsers().map((u) => (u.uid === uid ? { ...u, sy: syncTs } : u))
+    );
   } catch (e) {
-    console.warn('Failed deleting plant_users doc:', e);
+    console.warn('Deferred plant_users revoke sync in outbox:', e);
   }
-  try {
-    const stored = getLocalPlantUsers();
-    const updated = stored.filter((u) => u.uid !== uid);
-    localStorage.setItem('dt_plant_users', JSON.stringify(updated));
-  } catch {}
 }
 

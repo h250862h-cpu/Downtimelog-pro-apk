@@ -33,8 +33,10 @@ export const SpecialOrderPopupAlert: React.FC<SpecialOrderPopupAlertProps> = ({
   onDismissKey,
   onNavigateToSpecialOrders,
 }) => {
-  const canHod = isAdmin || permissions.dispatchHODConfirm;
-  const canWh = isAdmin || permissions.dispatchWHConfirm;
+  const canHod =
+    isAdmin || (Boolean(permissions.specialOrdersAccess) && Boolean(permissions.dispatchHODConfirm));
+  const canWh =
+    isAdmin || (Boolean(permissions.specialOrdersAccess) && Boolean(permissions.dispatchWHConfirm));
 
   const pendingFactoryHod = canHod
     ? prodEntries.filter(

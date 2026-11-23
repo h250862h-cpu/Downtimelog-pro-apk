@@ -212,7 +212,7 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
   const canRequestFuel = isAdmin || Boolean(permissions.dieselFuelRequest);
   const canHodApprove = isAdmin || Boolean(permissions.dieselHODApprove);
   const canGrn = isAdmin || Boolean(permissions.dieselGRN);
-  const canExportExcel = isAdmin;
+  const canExportExcel = isAdmin || Boolean(permissions.dieselExportExcel);
 
   // Live tank level is strictly (Total Positives ADDING) - (Total Negatives REMOVING)
   const liveTank = useMemo(
@@ -659,11 +659,11 @@ export const DieselBowserView: React.FC<DieselBowserViewProps> = ({
   };
 
   const handleExportDieselExcel = () => {
-    if (!isAdmin || !canExportExcel) {
-      setLedgerBanner('Admin Only: Only Plant Administrators can download Diesel Excel reports.');
+    if (!canExportExcel) {
+      setLedgerBanner('Admin Only: Only Plant Administrators or authorized fuel managers can download Diesel Excel reports.');
       return;
     }
-    exportDieselExcelWorkbook(requests, grns, liveTank, ledgerFrom, ledgerTo, isAdmin);
+    exportDieselExcelWorkbook(requests, grns, liveTank, ledgerFrom, ledgerTo, canExportExcel);
     setLedgerBanner(
       `Downloaded LGPLAST Diesel Bowser Usage & GRN Excel (.xlsx) covering ${filteredRequests.length} fuel issues & ${filteredGrns.length} GRNs (Net Balance: ${liveTank.currentLevelLitres.toLocaleString()} L).`
     );

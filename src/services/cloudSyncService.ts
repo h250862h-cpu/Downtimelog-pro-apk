@@ -1,9 +1,11 @@
 import {
-  canAccessFirestorePath,
   fetchPlantUsersDirectory,
+  flushPendingPlantUsers,
+  getPendingPlantUsersCount,
   isFirestorePathBlockedByRules,
   probeFirestoreCloudHealth,
   reconnectFirestoreNetwork,
+  repairPendingPlantUsersQueue,
   resetFirestorePathAccessCache,
 } from '../firebase';
 import {
@@ -116,6 +118,7 @@ export interface PendingSyncBreakdown {
   specialOrders: number;
   qualityTrials: number;
   maintenanceJobCards: number;
+  plantUsers: number;
   ruleBlockedPending: number;
   totalPending: number;
 }
@@ -193,7 +196,8 @@ export function repairAllPendingSyncQueues(): number {
     repairPendingPlanningQueues() +
     repairPendingSpecialOrderQueues() +
     repairPendingQualityTrialQueues() +
-    repairPendingMaintenanceJobCardQueues();
+    repairPendingMaintenanceJobCardQueues() +
+    repairPendingPlantUsersQueue();
   return repairedTotal;
 }
 
@@ -210,10 +214,13 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
   const specialB = getSpecialOrderPendingBreakdown();
   const trialsB = getQualityTrialsPendingBreakdown();
   const mntCardsB = getMaintenanceJobCardsPendingBreakdown();
+  const plantUsersRaw = getPendingPlantUsersCount();
+  const plantUsers = isFirestorePathBlockedByRules('plant_users') ? 0 : plantUsersRaw;
 
   const ruleBlockedPending =
     (isFirestorePathBlockedByRules('downtime_entries') ? downtimeRaw : 0) +
     (isFirestorePathBlockedByRules('dispatch_entries') ? dispatchRaw : 0) +
+    (isFirestorePathBlockedByRules('plant_users') ? plantUsersRaw : 0) +
     sopB.ruleBlocked +
     dieselB.ruleBlocked +
     powerGenB.ruleBlocked +
@@ -234,6 +241,7 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
     specialOrders: specialB.active,
     qualityTrials: trialsB.active,
     maintenanceJobCards: mntCardsB.active,
+    plantUsers,
     ruleBlockedPending,
     totalPending:
       downtime +
@@ -245,7 +253,8 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
       attQcB.active +
       specialB.active +
       trialsB.active +
-      mntCardsB.active,
+      mntCardsB.active +
+      plantUsers,
   };
 }
 
@@ -261,10 +270,6 @@ export async function runFullCloudSyncNow(
     resetFirestorePathAccessCache();
   }
   repairAllPendingSyncQueues();
-  await Promise.all([
-    canAccessFirestorePath('sop_production_logs', false).catch(() => false),
-    canAccessFirestorePath('maintenance_job_cards', false).catch(() => false),
-  ]);
   const pendingBefore = getUnifiedPendingQueueBreakdown();
   await reconnectFirestoreNetwork(false).catch(() => false);
   const health = await probeFirestoreCloudHealth();
@@ -284,6 +289,7 @@ export async function runFullCloudSyncNow(
     flushPendingSpecialOrderData().catch(() => 0),
     flushPendingQualityTrials().catch(() => 0),
     flushPendingMaintenanceJobCards().catch(() => 0),
+    flushPendingPlantUsers().catch(() => 0),
   ]);
   const flushedTotal = flushCounts.reduce((s, n) => s + (Number(n) || 0), 0);
 
@@ -356,6 +362,7 @@ export async function runFullCloudSyncNow(
       flushPendingSpecialOrderData().catch(() => 0),
       flushPendingQualityTrials().catch(() => 0),
       flushPendingMaintenanceJobCards().catch(() => 0),
+      flushPendingPlantUsers().catch(() => 0),
     ]);
     extraFlushed = flushPass2.reduce((s, n) => s + (Number(n) || 0), 0);
     repairAllPendingSyncQueues();

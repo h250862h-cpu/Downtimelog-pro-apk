@@ -357,13 +357,26 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
   onUpdate(getLocalDieselTank());
   let unsub: () => void = () => {};
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(`${TANK_COLLECTION}/main_bowser`, true))) return;
+    if (!(await canAccessFirestorePath(`${TANK_COLLECTION}/main_bowser`, true))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         doc(db, TANK_COLLECTION, 'main_bowser'),
         { includeMetadataChanges: true },
@@ -385,14 +398,23 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
             flushPendingDieselData().catch(() => {});
           }
         },
-        () => {}
+        () => scheduleRetry()
       );
-    } catch {}
+    } catch {
+      scheduleRetry();
+    }
   };
   start();
 
+  const pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollDieselTank().then(onUpdate).catch(() => {});
+  }, 15000);
+
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    clearInterval(pollTimer);
     unsub();
   };
 }

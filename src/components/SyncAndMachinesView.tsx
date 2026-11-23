@@ -71,6 +71,7 @@ import {
   PlantRole,
   PlantUserAccount,
   UserPermissions,
+  ZERO_PERMISSIONS,
 } from '../types';
 import { LgplastLogo } from './LgplastLogo';
 
@@ -82,6 +83,7 @@ interface SyncAndMachinesViewProps {
   syncStatus: 'synced' | 'syncing' | 'offline' | 'error';
   syncStatusMessage: string;
   totalPendingCount?: number;
+  isAdmin?: boolean;
   onReporterChange: (name: string) => void;
   onRefreshData: () => void;
   onFullCloudSync?: () => Promise<void>;
@@ -97,6 +99,7 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
   syncStatus,
   syncStatusMessage,
   totalPendingCount,
+  isAdmin: isAdminProp,
   onReporterChange,
   onRefreshData,
   onFullCloudSync,
@@ -151,9 +154,9 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
   const goneMachines = getStoredGoneMachines();
   const directAppUrl = getCanonicalSharedAppUrl();
 
-  // Admin Check (supports active session user and Firebase auth email)
+  // Admin Check (supports explicit App state override + active session user + Firebase auth email)
   const currentUserEmail = getActiveSessionUser()?.email || auth.currentUser?.email;
-  const userIsAdmin = isUserAdmin(currentUserEmail);
+  const userIsAdmin = typeof isAdminProp === 'boolean' ? isAdminProp : isUserAdmin(currentUserEmail);
 
   useEffect(() => {
     const unsub = subscribePlantUsers((users) => {
@@ -242,8 +245,12 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
     setEditDept(target.department || 'Extrusion & Production');
     setEditPerms(
       target.permissions
-        ? { ...getDefaultPermissionsForRole(target.role), ...target.permissions }
-        : getDefaultPermissionsForRole(target.role)
+        ? {
+            ...ZERO_PERMISSIONS,
+            ...getDefaultPermissionsForRole(target.role),
+            ...target.permissions,
+          }
+        : { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole(target.role) }
     );
     setEditStatus(target.status || 'active');
   };
@@ -274,8 +281,36 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
 
   const handleDeleteOperator = async (uid: string, name: string) => {
     if (!userIsAdmin) return;
-    if (window.confirm(`Are you sure you want to revoke account for ${name}?`)) {
+    if (window.confirm(`Are you sure you want to suspend and revoke access for ${name}?`)) {
       await deletePlantUserAccount(uid);
+      setOpMsg({
+        text: `Suspended access for ${name}. Their session will lock automatically on all devices.`,
+        isError: false,
+      });
+    }
+  };
+
+  const handleReactivateOperator = async (target: PlantUserAccount) => {
+    if (!userIsAdmin || !currentUserEmail) return;
+    try {
+      const restoredPerms = {
+        ...ZERO_PERMISSIONS,
+        ...getDefaultPermissionsForRole(target.role),
+        ...(target.permissions || {}),
+      };
+      const updated = await adminUpdateUserAccess(currentUserEmail, target, {
+        role: target.role,
+        department: target.department,
+        permissions: restoredPerms,
+        status: 'active',
+      });
+      setOpMsg({
+        text: `Reactivated ${updated.displayName} (${updated.role}) across all devices.`,
+        isError: false,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setOpMsg({ text: msg, isError: true });
     }
   };
 
@@ -1106,6 +1141,8 @@ git push -u origin main`}
                       ['sopScrapSend', 'SOP Scrap: Operator Send (Alerts Recycling)'],
                       ['sopRecyclingConfirm', 'SOP Recycling: Verify & Process (Alerts Mixers)'],
                       ['sopMixingAccess', 'SOP Mixing: Mix & WH Stock (Alerts HOD)'],
+                      ['sopHandoverAccess', 'SOP Shift Handover APK'],
+                      ['powerGenAccess', 'Power Cut & Generator Logs'],
                       ['productionPlanningAccess', 'Production Planning & Plan Closure View'],
                       ['productionReportAccess', 'Period Production Report & Excel (Admin Only)'],
                       ['dieselFuelRequest', 'Diesel Bowser: Request Fuel & Meter Readings'],
@@ -1308,6 +1345,8 @@ git push -u origin main`}
                   ['sopScrapSend', 'SOP Scrap: Operator Send (Alerts Recycling)'],
                   ['sopRecyclingConfirm', 'SOP Recycling: Verify & Process (Alerts Mixers)'],
                   ['sopMixingAccess', 'SOP Mixing: Mix & WH Stock (Alerts HOD)'],
+                  ['sopHandoverAccess', 'SOP Shift Handover APK'],
+                  ['powerGenAccess', 'Power Cut & Generator Logs'],
                   ['productionPlanningAccess', 'Production Planning & Plan Closure View'],
                   ['productionReportAccess', 'Period Production Report & Excel (Admin Only)'],
                   ['dieselFuelRequest', 'Diesel Bowser: Request Fuel & Meter Readings'],
@@ -1355,40 +1394,61 @@ git push -u origin main`}
         {/* Registered Users Roster */}
         <div className="mt-4">
           <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2.5">
-            Active Registered Plant Personnel ({plantUsers.length})
+            Registered Plant Personnel (
+            {plantUsers.filter((u) => u.status !== 'suspended' && !u.revoked).length} active
+            {plantUsers.some((u) => u.status === 'suspended' || u.revoked)
+              ? ` · ${plantUsers.filter((u) => u.status === 'suspended' || u.revoked).length} suspended`
+              : ''}
+            )
           </h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
             {plantUsers.map((u) => {
               const isItemAdmin = u.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase();
               const isLockedSIC = isRestrictedShiftInChargeAccount(u.email, u.displayName);
-              const resolvedPerms = isLockedSIC
-                ? getDefaultPermissionsForRole('Shift In Charge')
-                : u.permissions
-                ? { ...getDefaultPermissionsForRole(u.role), ...u.permissions }
-                : getDefaultPermissionsForRole(u.role);
-              const totalSections = Object.keys(resolvedPerms).length;
+              const isSuspended = u.status === 'suspended' || Boolean(u.revoked);
+              const resolvedPerms: UserPermissions = isSuspended
+                ? { ...ZERO_PERMISSIONS }
+                : isLockedSIC
+                ? { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole('Shift In Charge') }
+                : {
+                    ...ZERO_PERMISSIONS,
+                    ...getDefaultPermissionsForRole(u.role),
+                    ...(u.permissions || {}),
+                  };
+              const totalSections = Object.keys(ZERO_PERMISSIONS).length;
               const allowedCount = Object.values(resolvedPerms).filter(Boolean).length;
               return (
                 <div
                   key={u.uid}
-                  className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 flex flex-col justify-between"
+                  className={`rounded-xl border p-3 flex flex-col justify-between ${
+                    isSuspended
+                      ? 'border-rose-500/40 bg-rose-950/20 opacity-85'
+                      : 'border-slate-800 bg-slate-950/70'
+                  }`}
                 >
                   <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-bold text-white truncate max-w-[150px]">
+                    <div className="flex items-center justify-between gap-1.5 mb-1">
+                      <span className="text-xs font-bold text-white truncate max-w-[140px]">
                         {u.displayName}
                       </span>
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[9px] font-black uppercase ${
-                          isItemAdmin
-                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                            : isLockedSIC
-                            ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                            : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                        }`}
-                      >
-                        {isLockedSIC ? 'Shift In Charge' : u.role}
-                      </span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {isSuspended && (
+                          <span className="rounded px-1.5 py-0.5 text-[9px] font-black uppercase bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                            SUSPENDED
+                          </span>
+                        )}
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[9px] font-black uppercase ${
+                            isItemAdmin
+                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                              : isLockedSIC
+                              ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                              : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                          }`}
+                        >
+                          {isLockedSIC ? 'Shift In Charge' : u.role}
+                        </span>
+                      </div>
                     </div>
                     <div className="text-[11px] font-mono text-slate-400 truncate">
                       {u.email}
@@ -1397,7 +1457,11 @@ git push -u origin main`}
                       <span>
                         Dept: <span className="text-slate-300">{u.department}</span>
                       </span>
-                      <span className="text-emerald-400 font-semibold">
+                      <span
+                        className={`font-semibold ${
+                          isSuspended ? 'text-rose-400' : 'text-emerald-400'
+                        }`}
+                      >
                         {allowedCount}/{totalSections} sections
                       </span>
                     </div>
@@ -1419,15 +1483,27 @@ git push -u origin main`}
                         <span>Edit Access</span>
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteOperator(u.uid, u.displayName)}
-                        className="flex items-center gap-1 text-[10px] text-rose-400 hover:text-rose-300"
-                        title="Revoke access"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                        <span>Revoke</span>
-                      </button>
+                      {isSuspended ? (
+                        <button
+                          type="button"
+                          onClick={() => handleReactivateOperator(u)}
+                          className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 hover:text-emerald-300"
+                          title="Restore access across all devices"
+                        >
+                          <UserCheck className="h-3 w-3" />
+                          <span>Reactivate</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteOperator(u.uid, u.displayName)}
+                          className="flex items-center gap-1 text-[10px] text-rose-400 hover:text-rose-300"
+                          title="Suspend & revoke access"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          <span>Revoke</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1551,6 +1627,7 @@ git push -u origin main`}
               {pendingBreakdown.powerGen > 0 && <span>Power/Gen: {pendingBreakdown.powerGen}</span>}
               {pendingBreakdown.planningAndHist > 0 && <span>Plans/History: {pendingBreakdown.planningAndHist}</span>}
               {pendingBreakdown.attendanceAndQc > 0 && <span>Attendance/QC: {pendingBreakdown.attendanceAndQc}</span>}
+              {pendingBreakdown.plantUsers > 0 && <span>User Accounts: {pendingBreakdown.plantUsers}</span>}
             </div>
           )}
 

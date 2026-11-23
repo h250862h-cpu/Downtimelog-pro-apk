@@ -324,6 +324,12 @@ export async function evaluateAndDispatchPushNotifications(
     return 0;
   }
 
+  const hasAnyPermission = isAdmin || Object.values(permissions).some(Boolean);
+  if (!hasAnyPermission) {
+    updateAppBadgeCount(0);
+    return 0;
+  }
+
   const userKey = userEmail.trim().toLowerCase();
   const candidates: OsPushNavigationPayload[] = [];
   const todayStr = ymd(now);
@@ -395,7 +401,7 @@ export async function evaluateAndDispatchPushNotifications(
   }
 
   // 5. SOP Mixing Report -> HOD Stock Review
-  if (isAdmin || permissions.dispatchHODConfirm) {
+  if (isAdmin || (permissions.sopMixingAccess && permissions.dispatchHODConfirm)) {
     sopMixingReports
       .filter((m) => m.status === 'PENDING_HOD')
       .forEach((m) => {
@@ -516,7 +522,7 @@ export async function evaluateAndDispatchPushNotifications(
   }
 
   // 11. Special Orders Pending HOD Factory Confirm, WH Confirm, or Final HOD Dispatch
-  if (isAdmin || permissions.dispatchHODConfirm) {
+  if (isAdmin || (permissions.specialOrdersAccess && permissions.dispatchHODConfirm)) {
     specialOrderProductions
       .filter((p) => p.status === 'PENDING_HOD_FACTORY')
       .forEach((p) => {
@@ -544,7 +550,7 @@ export async function evaluateAndDispatchPushNotifications(
       });
   }
 
-  if (isAdmin || permissions.dispatchWHConfirm) {
+  if (isAdmin || (permissions.specialOrdersAccess && permissions.dispatchWHConfirm)) {
     specialOrderWhDispatches
       .filter((w) => w.status === 'PENDING_WH')
       .forEach((w) => {

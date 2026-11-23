@@ -183,12 +183,51 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
   >(null);
   const [deletingRecord, setDeletingRecord] = useState(false);
 
+  const canShiftWrite = isAdmin || Boolean(permissions.dispatchShiftEntry);
+  const canWhConfirm = isAdmin || Boolean(permissions.dispatchWHConfirm);
+  const canHodConfirm = isAdmin || Boolean(permissions.dispatchHODConfirm);
+  const canManagePlanning = isAdmin || canHodConfirm || Boolean(permissions.productionPlanningAccess);
+  const canExportReports =
+    isAdmin || Boolean(permissions.exportDispatchExcel || permissions.productionReportAccess);
+
+  const allowedSubTabs = useMemo<SpecialOrderSubTab[]>(() => {
+    const list: SpecialOrderSubTab[] = [];
+    if (
+      isAdmin ||
+      Boolean(permissions.specialOrdersAccess) ||
+      canShiftWrite ||
+      canWhConfirm ||
+      canHodConfirm
+    ) {
+      list.push('stock');
+    }
+    if (isAdmin || canShiftWrite || canHodConfirm) {
+      list.push('factory_prod');
+    }
+    if (isAdmin || canShiftWrite || canWhConfirm || canHodConfirm) {
+      list.push('wh_dispatch');
+    }
+    if (canExportReports) {
+      list.push('reports');
+    }
+    return Array.from(new Set(list));
+  }, [
+    isAdmin,
+    permissions.specialOrdersAccess,
+    canShiftWrite,
+    canWhConfirm,
+    canHodConfirm,
+    canExportReports,
+  ]);
+
   useEffect(() => {
-    if (requestedSubTab) {
+    if (requestedSubTab && allowedSubTabs.includes(requestedSubTab)) {
       setSubTab(requestedSubTab);
       onSubTabHandled?.();
+    } else if (!allowedSubTabs.includes(subTab) && allowedSubTabs.length > 0) {
+      setSubTab(allowedSubTabs[0]);
     }
-  }, [requestedSubTab, onSubTabHandled]);
+  }, [requestedSubTab, allowedSubTabs, subTab, onSubTabHandled]);
 
   const activeOrder = useMemo(
     () => orders.find((o) => o.id === selectedOrderId) || orders[0],
@@ -232,11 +271,6 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
   const pendingHodWhCount = orderWhDispatches.filter(
     (w) => w.status === 'PENDING_HOD'
   ).length;
-
-  const canShiftWrite = isAdmin || permissions.dispatchShiftEntry || permissions.specialOrdersAccess;
-  const canWhConfirm = isAdmin || permissions.dispatchWHConfirm;
-  const canHodConfirm = isAdmin || permissions.dispatchHODConfirm;
-  const canManagePlanning = isAdmin || canHodConfirm || permissions.productionPlanningAccess;
 
   const flashMsg = (text: string, isError = false) => {
     setFeedback({ text, isError });
@@ -815,7 +849,9 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
               icon: React.ReactNode;
               badge?: number;
             }>
-          ).map((tab) => (
+          )
+            .filter((tab) => allowedSubTabs.includes(tab.id))
+            .map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -1755,14 +1791,14 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
             </p>
           </div>
 
-          {!isAdmin ? (
+          {!canExportReports ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 text-center space-y-2">
               <Lock className="h-7 w-7 text-amber-700 mx-auto" />
               <div className="text-xs font-bold text-amber-900">
                 Admin Authorization Required
               </div>
               <p className="text-xs text-amber-800 max-w-md mx-auto">
-                Only the Plant Administrator / Production HOD can download Special Order Factory Stock and WH Dispatched Excel reports.
+                Only the Plant Administrator / Production HOD or authorized report managers can download Special Order Factory Stock and WH Dispatched Excel reports.
               </p>
             </div>
           ) : (
@@ -1785,7 +1821,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                       order: activeOrder,
                       prodEntries,
                       whDispatches,
-                      isAdmin,
+                      isAdmin: canExportReports,
                     })
                   }
                   className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition"
@@ -1812,7 +1848,7 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                     exportSpecialOrderWhDispatchedExcel({
                       order: activeOrder,
                       whDispatches,
-                      isAdmin,
+                      isAdmin: canExportReports,
                     })
                   }
                   className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-4 py-2.5 text-xs font-bold text-white transition"

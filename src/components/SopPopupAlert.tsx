@@ -59,7 +59,7 @@ export const SopPopupAlert: React.FC<SopPopupAlertProps> = ({
 
   // 3. Mixing Complete -> Alert Production HOD / Admin with Stock & Sweeping Balances
   const pendingForHOD =
-    isAdmin || permissions.dispatchHODConfirm
+    isAdmin || (Boolean(permissions.sopMixingAccess) && Boolean(permissions.dispatchHODConfirm))
       ? mixingReports.filter(
           (m) =>
             m.status === 'PENDING_HOD' &&

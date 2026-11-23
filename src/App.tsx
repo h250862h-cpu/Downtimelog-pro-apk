@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   Activity,
@@ -102,13 +102,14 @@ const SyncAndMachinesView = lazy(() =>
 );
 import {
   auth,
-  canAccessFirestorePath,
   ensureFirebaseAuth,
   getActiveSessionUser,
   getLocalPlantUsers,
   isRestrictedShiftInChargeAccount,
   logoutUser,
+  PRIMARY_ADMIN_EMAIL,
   resolveUserPermissions,
+  setActiveSessionUser,
   subscribePlantUsers,
   testConnection,
 } from './firebase';
@@ -218,6 +219,7 @@ import {
   SpecialOrder,
   SpecialOrderFactoryProduction,
   SpecialOrderWhDispatch,
+  ZERO_PERMISSIONS,
 } from './types';
 import { ParsedAttendanceMessage } from './types/attendance';
 
@@ -517,7 +519,6 @@ export default function App() {
 
       if (!mounted) return;
       if (session || auth.currentUser) {
-        await canAccessFirestorePath('sop_production_logs', false).catch(() => false);
         await testConnection().catch(() => {});
         if (mounted) {
           repairAllPendingSyncQueues();
@@ -722,12 +723,6 @@ export default function App() {
     // Auto-repair stale queues and pull/flush server updates immediately after listeners stabilize
     repairAllPendingSyncQueues();
     setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
-    canAccessFirestorePath('sop_production_logs', false)
-      .then(() => {
-        repairAllPendingSyncQueues();
-        setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
-      })
-      .catch(() => {});
     const initialPullTimer = setTimeout(() => {
       runLiveKeepAlive();
     }, 50);
@@ -829,20 +824,31 @@ export default function App() {
     );
   }, [plantUsers, user?.email]);
 
+  const isPrimaryAdmin =
+    (user?.email || '').trim().toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase();
+
+  const isSuspendedAccount = Boolean(
+    matchedUserRecord && !isPrimaryAdmin && matchedUserRecord.status === 'suspended'
+  );
+
   const isRestrictedSIC = isRestrictedShiftInChargeAccount(
     user?.email,
     matchedUserRecord?.displayName || user?.displayName
   );
 
   const isAdmin =
+    !isSuspendedAccount &&
     !isRestrictedSIC &&
-    (isUserAdmin(user?.email) ||
-      (matchedUserRecord?.status !== 'suspended' &&
-        (matchedUserRecord?.role === 'Plant Administrator' ||
-          matchedUserRecord?.role === 'Production HOD' ||
-          user?.role === 'Production HOD')));
+    (isPrimaryAdmin ||
+      (matchedUserRecord
+        ? matchedUserRecord.role === 'Plant Administrator' ||
+          matchedUserRecord.role === 'Production HOD'
+        : isUserAdmin(user?.email) || user?.role === 'Production HOD'));
 
   const effectivePermissions = useMemo(() => {
+    if (isSuspendedAccount) {
+      return { ...ZERO_PERMISSIONS };
+    }
     return resolveUserPermissions(
       user?.email,
       matchedUserRecord?.role || user?.role,
@@ -850,6 +856,7 @@ export default function App() {
       matchedUserRecord?.displayName || user?.displayName
     );
   }, [
+    isSuspendedAccount,
     user?.email,
     user?.displayName,
     matchedUserRecord?.displayName,
@@ -858,7 +865,53 @@ export default function App() {
     plantUsers,
   ]);
 
-  const effectiveRoleLabel = isRestrictedSIC
+  // Keep local session synced with live Firestore user role / permission / suspension changes
+  useEffect(() => {
+    if (!user?.email) return;
+    if (isSuspendedAccount) {
+      updateAppBadgeCount(0);
+      return;
+    }
+    if (matchedUserRecord) {
+      const currentSession = getActiveSessionUser();
+      const resolvedDisplay =
+        matchedUserRecord.displayName ||
+        user.displayName ||
+        user.email.split('@')[0].toUpperCase();
+      const resolvedRole = isPrimaryAdmin
+        ? 'Plant Administrator'
+        : isRestrictedSIC
+        ? 'Shift In Charge'
+        : matchedUserRecord.role;
+      setActiveSessionUser({
+        uid: user.uid || matchedUserRecord.uid,
+        email: user.email,
+        displayName: resolvedDisplay,
+        role: resolvedRole,
+        isAdmin,
+        permissions: effectivePermissions,
+      });
+      if (currentSession && currentSession.role !== resolvedRole) {
+        setUser((prev) =>
+          prev ? { ...prev, role: resolvedRole, displayName: resolvedDisplay } : prev
+        );
+      }
+    }
+  }, [
+    user?.email,
+    user?.uid,
+    user?.displayName,
+    matchedUserRecord,
+    isPrimaryAdmin,
+    isRestrictedSIC,
+    isAdmin,
+    isSuspendedAccount,
+    effectivePermissions,
+  ]);
+
+  const effectiveRoleLabel = isSuspendedAccount
+    ? 'Account Suspended'
+    : isRestrictedSIC
     ? 'Shift In Charge'
     : matchedUserRecord?.role === 'Production HOD' || user?.role === 'Production HOD'
     ? 'Production HOD (Admin)'
@@ -868,6 +921,7 @@ export default function App() {
 
   // Count of pending dispatches actionable by current user
   const actionableDispatchCount = useMemo(() => {
+    if (isSuspendedAccount) return 0;
     let count = 0;
     if (effectivePermissions.dispatchWHConfirm) {
       count += dispatchEntries.filter((e) => e.status === 'PENDING_WH').length;
@@ -876,45 +930,52 @@ export default function App() {
       count += dispatchEntries.filter((e) => e.status === 'PENDING_HOD').length;
     }
     return count;
-  }, [dispatchEntries, effectivePermissions]);
+  }, [dispatchEntries, effectivePermissions, isSuspendedAccount]);
 
   // Pending counts for spread SOP APKs
   const sopRecyclingBadgeCount = useMemo(() => {
+    if (isSuspendedAccount) return 0;
     if (!isAdmin && !effectivePermissions.sopRecyclingConfirm) return 0;
     return sopScrapPipeline.filter((s) => s.status === 'SENT_TO_RECYCLING').length;
-  }, [sopScrapPipeline, effectivePermissions.sopRecyclingConfirm, isAdmin]);
+  }, [sopScrapPipeline, effectivePermissions.sopRecyclingConfirm, isAdmin, isSuspendedAccount]);
 
   const sopMixingBadgeCount = useMemo(() => {
+    if (isSuspendedAccount) return 0;
     let count = 0;
-    if (effectivePermissions.sopMixingAccess) {
+    if (isAdmin || effectivePermissions.sopMixingAccess) {
       count += sopScrapPipeline.filter((s) => s.status === 'PROCESSED_FOR_MIXER').length;
     }
-    if (isAdmin || effectivePermissions.dispatchHODConfirm) {
+    if (isAdmin || (effectivePermissions.sopMixingAccess && effectivePermissions.dispatchHODConfirm)) {
       count += sopMixingReports.filter((m) => m.status === 'PENDING_HOD').length;
     }
     return count;
-  }, [sopScrapPipeline, sopMixingReports, effectivePermissions, isAdmin]);
+  }, [sopScrapPipeline, sopMixingReports, effectivePermissions, isAdmin, isSuspendedAccount]);
 
   const isShiftInChargeWeightCheckUser =
-    isRestrictedSIC ||
-    matchedUserRecord?.role === 'Shift In Charge' ||
-    user?.role === 'Shift In Charge' ||
-    (effectivePermissions.dispatchShiftEntry && effectivePermissions.logDowntime);
+    !isSuspendedAccount &&
+    (isRestrictedSIC ||
+      matchedUserRecord?.role === 'Shift In Charge' ||
+      user?.role === 'Shift In Charge' ||
+      (effectivePermissions.dispatchShiftEntry && effectivePermissions.logDowntime));
 
   const hasDispatchAccess =
-    effectivePermissions.dispatchShiftEntry ||
-    effectivePermissions.dispatchWHConfirm ||
-    effectivePermissions.dispatchHODConfirm ||
-    effectivePermissions.exportDispatchExcel;
+    !isSuspendedAccount &&
+    (isAdmin ||
+      Boolean(effectivePermissions.dispatchShiftEntry) ||
+      Boolean(effectivePermissions.dispatchWHConfirm) ||
+      Boolean(effectivePermissions.dispatchHODConfirm) ||
+      Boolean(effectivePermissions.exportDispatchExcel));
 
   const hasDieselAccess =
-    isAdmin ||
-    Boolean(effectivePermissions.dieselFuelRequest) ||
-    Boolean(effectivePermissions.dieselHODApprove) ||
-    Boolean(effectivePermissions.dieselGRN) ||
-    Boolean(effectivePermissions.dieselExportExcel);
+    !isSuspendedAccount &&
+    (isAdmin ||
+      Boolean(effectivePermissions.dieselFuelRequest) ||
+      Boolean(effectivePermissions.dieselHODApprove) ||
+      Boolean(effectivePermissions.dieselGRN) ||
+      Boolean(effectivePermissions.dieselExportExcel));
 
   const dieselBadgeCount = useMemo(() => {
+    if (isSuspendedAccount) return 0;
     let count = 0;
     if (isAdmin || effectivePermissions.dieselHODApprove) {
       count += dieselRequests.filter((r) => r.status === 'PENDING_HOD').length;
@@ -925,7 +986,9 @@ export default function App() {
       ).length;
     }
     return count;
-  }, [dieselRequests, effectivePermissions, isAdmin]);
+  }, [dieselRequests, effectivePermissions, isAdmin, isSuspendedAccount]);
+
+  const allowedTabsRef = useRef<DowntimeTab[]>([]);
 
   // 4. Phone OS Push Notification Engine + Deep-Link Tap Handling
   useEffect(() => {
@@ -933,42 +996,20 @@ export default function App() {
 
     const navigateFromPushPayload = (payload: Partial<OsPushNavigationPayload> | null | undefined) => {
       if (!payload) return;
-      const validTabs: DowntimeTab[] = [
-        'status',
-        'log',
-        'daily',
-        'dispatch',
-        'special_orders',
-        'prod_planning',
-        'diesel',
-        'power_gen',
-        'maintenance_job_cards',
-        'sop_overview',
-        'sop_production',
-        'sop_qc',
-        'quality_trials',
-        'sop_scrap',
-        'sop_recycling',
-        'sop_mixing',
-        'sop_handover',
-        'attendance',
-        'prod_report',
-        'rep',
-        'data',
-      ];
-      if (payload.targetTab && validTabs.includes(payload.targetTab as DowntimeTab)) {
-        setActiveDowntimeTab(payload.targetTab as DowntimeTab);
+      const target = payload.targetTab as DowntimeTab | undefined;
+      if (target && allowedTabsRef.current.includes(target)) {
+        setActiveDowntimeTab(target);
       }
-      if (payload.dispatchStage) {
+      if (payload.dispatchStage && allowedTabsRef.current.includes('dispatch')) {
         setRequestedDispatchStage(payload.dispatchStage);
       }
-      if (payload.dieselSubTab) {
+      if (payload.dieselSubTab && allowedTabsRef.current.includes('diesel')) {
         setRequestedDieselSubTab(payload.dieselSubTab);
       }
-      if (payload.specialOrderSubTab) {
+      if (payload.specialOrderSubTab && allowedTabsRef.current.includes('special_orders')) {
         setRequestedSpecialOrderSubTab(payload.specialOrderSubTab);
       }
-      if (payload.openWeightCheck) {
+      if (payload.openWeightCheck && allowedTabsRef.current.includes('status')) {
         const now = new Date();
         const active = getActiveWeightOutputSlot(now);
         if (active) {
@@ -1033,6 +1074,10 @@ export default function App() {
 
   useEffect(() => {
     if (!user?.email) return;
+    if (isSuspendedAccount) {
+      updateAppBadgeCount(0);
+      return;
+    }
     evaluateAndDispatchPushNotifications({
       userEmail: user.email,
       isAdmin,
@@ -1051,6 +1096,7 @@ export default function App() {
   }, [
     user?.email,
     isAdmin,
+    isSuspendedAccount,
     isOnline,
     effectivePermissions,
     isShiftInChargeWeightCheckUser,
@@ -1107,40 +1153,28 @@ export default function App() {
   }, [specialOrderProductions, specialOrderWhDispatches, effectivePermissions, isAdmin]);
 
   const hasSpecialOrderAccess =
-    isAdmin ||
-    Boolean(effectivePermissions.specialOrdersAccess) ||
-    effectivePermissions.dispatchShiftEntry ||
-    effectivePermissions.dispatchWHConfirm ||
-    effectivePermissions.dispatchHODConfirm;
+    !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.specialOrdersAccess));
 
   const hasQualityTrialAccess =
-    isAdmin ||
-    Boolean(effectivePermissions.qualityTrialsAccess) ||
-    Boolean(effectivePermissions.sopFloorAccess);
+    !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.qualityTrialsAccess));
 
   const hasMaintenanceJobCardAccess =
-    isAdmin ||
-    Boolean(effectivePermissions.maintenanceJobCardsAccess) ||
-    effectivePermissions.dispatchShiftEntry ||
-    effectivePermissions.logDowntime;
+    !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.maintenanceJobCardsAccess));
 
-  // Compute allowed sidebar navigation tabs strictly from effectivePermissions & Admin-only report policy
+  // Compute allowed sidebar navigation tabs strictly from effectivePermissions
   const allowedTabs = useMemo<DowntimeTab[]>(() => {
+    if (isSuspendedAccount) return [];
     const tabs: DowntimeTab[] = [];
-    if (effectivePermissions.viewMachineStatus) tabs.push('status');
-    if (effectivePermissions.logDowntime) tabs.push('log');
-    if (effectivePermissions.viewDailyHours) tabs.push('daily');
+    if (isAdmin || effectivePermissions.viewMachineStatus) tabs.push('status');
+    if (isAdmin || effectivePermissions.logDowntime) tabs.push('log');
+    if (isAdmin || effectivePermissions.viewDailyHours) tabs.push('daily');
     if (hasDispatchAccess) tabs.push('dispatch');
     if (hasSpecialOrderAccess) tabs.push('special_orders');
-    if (
-      isAdmin ||
-      effectivePermissions.productionPlanningAccess ||
-      effectivePermissions.dispatchShiftEntry
-    ) {
+    if (isAdmin || effectivePermissions.productionPlanningAccess) {
       tabs.push('prod_planning');
     }
     if (hasDieselAccess) tabs.push('diesel');
-    if (isAdmin || effectivePermissions.logDowntime || effectivePermissions.viewMachineStatus) {
+    if (isAdmin || effectivePermissions.powerGenAccess) {
       tabs.push('power_gen');
     }
     if (hasMaintenanceJobCardAccess) tabs.push('maintenance_job_cards');
@@ -1148,23 +1182,25 @@ export default function App() {
       tabs.push('sop_overview', 'sop_production', 'sop_qc');
     }
     if (hasQualityTrialAccess) tabs.push('quality_trials');
-    if (isAdmin || effectivePermissions.sopScrapSend || effectivePermissions.sopFloorAccess) {
+    if (isAdmin || effectivePermissions.sopScrapSend) {
       tabs.push('sop_scrap');
     }
     if (isAdmin || effectivePermissions.sopRecyclingConfirm) {
       tabs.push('sop_recycling');
     }
-    if (isAdmin || effectivePermissions.sopMixingAccess || effectivePermissions.dispatchHODConfirm) {
+    if (isAdmin || effectivePermissions.sopMixingAccess) {
       tabs.push('sop_mixing');
     }
-    if (isAdmin || effectivePermissions.dispatchShiftEntry || effectivePermissions.sopFloorAccess) {
+    if (isAdmin || effectivePermissions.sopHandoverAccess) {
       tabs.push('sop_handover');
     }
-    if (effectivePermissions.attendanceLogger || isAdmin) tabs.push('attendance');
-    if (isAdmin) tabs.push('prod_report', 'rep');
+    if (isAdmin || effectivePermissions.attendanceLogger) tabs.push('attendance');
+    if (isAdmin || effectivePermissions.productionReportAccess) tabs.push('prod_report');
+    if (isAdmin || effectivePermissions.exportDowntimeExcel) tabs.push('rep');
     if (isAdmin || effectivePermissions.manageMachinesAndSync) tabs.push('data');
     return tabs;
   }, [
+    isSuspendedAccount,
     effectivePermissions,
     hasDispatchAccess,
     hasSpecialOrderAccess,
@@ -1173,6 +1209,7 @@ export default function App() {
     hasDieselAccess,
     isAdmin,
   ]);
+  allowedTabsRef.current = allowedTabs;
 
   // Automatically switch active view to the first permitted tab whenever permissions change
   useEffect(() => {
@@ -1348,6 +1385,36 @@ export default function App() {
           setAuthLoading(false);
         }}
       />
+    );
+  }
+
+  // 2B. LIVE CROSS-DEVICE REVOCATION / SUSPENSION LOCKOUT
+  if (isSuspendedAccount) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center p-4 text-slate-800 font-sans">
+        <div className="w-full max-w-md rounded-2xl border border-rose-200 bg-white p-7 text-center space-y-4 shadow-lg">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 border border-rose-200 text-rose-600">
+            <Lock className="h-7 w-7" />
+          </div>
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-bold text-slate-900">Account Access Suspended</h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Access for <span className="font-mono font-semibold text-slate-800">{user.email}</span> has been revoked or suspended by the Plant Administrator.
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Contact <span className="font-mono font-semibold text-[#0F1E36]">{PRIMARY_ADMIN_EMAIL}</span> to restore clearance.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#0F1E36] hover:bg-[#193054] px-4 py-2.5 text-xs font-bold text-white transition"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>Sign Out</span>
+          </button>
+        </div>
+      </div>
     );
   }
 
@@ -1994,56 +2061,57 @@ export default function App() {
                   </div>
                 }
               >
-                {activeDowntimeTab === 'status' && effectivePermissions.viewMachineStatus && (
-                  <MachineStatusBoard
-                    machines={machines}
-                    entries={entries}
-                    dispatchEntries={dispatchEntries}
-                    sopProductionLogs={sopProductionLogs}
-                    sopScrapPipeline={sopScrapPipeline}
-                    generatorLogs={generatorLogs}
-                    powerCutLogs={powerCutLogs}
-                    onOpenPowerGenTab={(sub) => {
-                      setRequestedPowerGenSubTab(sub || 'generator');
-                      setActiveDowntimeTab('power_gen');
-                    }}
-                    onLogStoppage={handleLogStoppageFromBoard}
-                    onRestoreRunning={handleRestoreRunning}
-                    onSaveEntry={handleSaveEntry}
-                    onOpenWeightOutputSchedule={
-                      isShiftInChargeWeightCheckUser || isAdmin
-                        ? () => {
-                            const now = new Date();
-                            const active = getActiveWeightOutputSlot(now);
-                            if (active) {
-                              setManualWeightCheckSlot(active);
-                            } else {
-                              const next = getNextWeightOutputSlot(now);
-                              const todayLocal = ymd(now);
-                              setManualWeightCheckSlot({
-                                slot: next.slot,
-                                slotKey: `${todayLocal}_MANUAL_${next.slot}`,
-                                slotDateStr: todayLocal,
-                                shiftLabel:
-                                  now.getHours() >= 7 && now.getHours() < 19 ? 'Day' : 'Night',
-                                elapsedMins: 0,
-                              });
+                {activeDowntimeTab === 'status' &&
+                  (isAdmin || effectivePermissions.viewMachineStatus) && (
+                    <MachineStatusBoard
+                      machines={machines}
+                      entries={entries}
+                      dispatchEntries={dispatchEntries}
+                      sopProductionLogs={sopProductionLogs}
+                      sopScrapPipeline={sopScrapPipeline}
+                      generatorLogs={generatorLogs}
+                      powerCutLogs={powerCutLogs}
+                      onOpenPowerGenTab={
+                        isAdmin || effectivePermissions.powerGenAccess
+                          ? (sub) => {
+                              setRequestedPowerGenSubTab(sub || 'generator');
+                              setActiveDowntimeTab('power_gen');
                             }
-                          }
-                        : undefined
-                    }
-                    canQuickLog={
-                      isAdmin ||
-                      effectivePermissions.logDowntime ||
-                      effectivePermissions.sopFloorAccess ||
-                      effectivePermissions.sopScrapSend
-                    }
-                    currentUserName={user.displayName || currentReporter}
-                    currentUserEmail={user.email || ''}
-                  />
-                )}
+                          : undefined
+                      }
+                      onLogStoppage={handleLogStoppageFromBoard}
+                      onRestoreRunning={handleRestoreRunning}
+                      onSaveEntry={handleSaveEntry}
+                      onOpenWeightOutputSchedule={
+                        isShiftInChargeWeightCheckUser || isAdmin
+                          ? () => {
+                              const now = new Date();
+                              const active = getActiveWeightOutputSlot(now);
+                              if (active) {
+                                setManualWeightCheckSlot(active);
+                              } else {
+                                const next = getNextWeightOutputSlot(now);
+                                const todayLocal = ymd(now);
+                                setManualWeightCheckSlot({
+                                  slot: next.slot,
+                                  slotKey: `${todayLocal}_MANUAL_${next.slot}`,
+                                  slotDateStr: todayLocal,
+                                  shiftLabel:
+                                    now.getHours() >= 7 && now.getHours() < 19 ? 'Day' : 'Night',
+                                  elapsedMins: 0,
+                                });
+                              }
+                            }
+                          : undefined
+                      }
+                      canQuickLog={isAdmin || Boolean(effectivePermissions.sopFloorAccess)}
+                      canLogDowntime={isAdmin || Boolean(effectivePermissions.logDowntime)}
+                      currentUserName={user.displayName || currentReporter}
+                      currentUserEmail={user.email || ''}
+                    />
+                  )}
 
-                {activeDowntimeTab === 'log' && effectivePermissions.logDowntime && (
+                {activeDowntimeTab === 'log' && (isAdmin || effectivePermissions.logDowntime) && (
                   <LogDowntimeView
                     machines={machines}
                     entries={entries}
@@ -2060,9 +2128,14 @@ export default function App() {
                   />
                 )}
 
-                {activeDowntimeTab === 'daily' && effectivePermissions.viewDailyHours && (
-                  <DailyHoursView machines={machines} entries={entries} isAdmin={isAdmin} />
-                )}
+                {activeDowntimeTab === 'daily' &&
+                  (isAdmin || effectivePermissions.viewDailyHours) && (
+                    <DailyHoursView
+                      machines={machines}
+                      entries={entries}
+                      isAdmin={isAdmin || Boolean(effectivePermissions.exportDowntimeExcel)}
+                    />
+                  )}
 
                 {activeDowntimeTab === 'dispatch' && hasDispatchAccess && (
                   <DispatchSystemView
@@ -2103,9 +2176,7 @@ export default function App() {
                 )}
 
                 {activeDowntimeTab === 'prod_planning' &&
-                  (isAdmin ||
-                    effectivePermissions.productionPlanningAccess ||
-                    effectivePermissions.dispatchShiftEntry) && (
+                  (isAdmin || effectivePermissions.productionPlanningAccess) && (
                     <ProductionPlanningView
                       machines={machines}
                       allDispatches={allDispatchesWithBackground}
@@ -2131,9 +2202,7 @@ export default function App() {
                 )}
 
                 {activeDowntimeTab === 'power_gen' &&
-                  (isAdmin ||
-                    effectivePermissions.logDowntime ||
-                    effectivePermissions.viewMachineStatus) && (
+                  (isAdmin || effectivePermissions.powerGenAccess) && (
                     <PowerCutAndGeneratorView
                       powerCutLogs={powerCutLogs}
                       generatorLogs={generatorLogs}
@@ -2173,23 +2242,24 @@ export default function App() {
                   />
                 )}
 
-                {SOP_TAB_TO_SUBTAB[activeDowntimeTab] && (
-                  <SopFloorApkView
-                    machines={machines}
-                    downtimeEntries={entries}
-                    productionLogs={sopProductionLogs}
-                    qcChecks={sopQcChecks}
-                    scrapPipeline={sopScrapPipeline}
-                    mixingReports={sopMixingReports}
-                    handovers={sopHandovers}
-                    permissions={effectivePermissions}
-                    isAdmin={isAdmin}
-                    currentUserName={user.displayName || currentReporter}
-                    currentUserEmail={user.email || ''}
-                    forcedSubTab={SOP_TAB_TO_SUBTAB[activeDowntimeTab]}
-                    standaloneMode
-                  />
-                )}
+                {SOP_TAB_TO_SUBTAB[activeDowntimeTab] &&
+                  allowedTabs.includes(activeDowntimeTab) && (
+                    <SopFloorApkView
+                      machines={machines}
+                      downtimeEntries={entries}
+                      productionLogs={sopProductionLogs}
+                      qcChecks={sopQcChecks}
+                      scrapPipeline={sopScrapPipeline}
+                      mixingReports={sopMixingReports}
+                      handovers={sopHandovers}
+                      permissions={effectivePermissions}
+                      isAdmin={isAdmin}
+                      currentUserName={user.displayName || currentReporter}
+                      currentUserEmail={user.email || ''}
+                      forcedSubTab={SOP_TAB_TO_SUBTAB[activeDowntimeTab]}
+                      standaloneMode
+                    />
+                  )}
 
                 {activeDowntimeTab === 'attendance' &&
                   (effectivePermissions.attendanceLogger || isAdmin) && (
@@ -2201,26 +2271,32 @@ export default function App() {
                     />
                   )}
 
-                {activeDowntimeTab === 'prod_report' && isAdmin && (
-                  <PeriodProductionReportView
-                    machines={machines}
-                    downtimeEntries={entries}
-                    allDispatches={allDispatchesWithBackground}
-                    sopProductionLogs={sopProductionLogs}
-                    sopQcChecks={sopQcChecks}
-                    dieselRequests={dieselRequests}
-                    dieselGrns={dieselGrns}
-                    dieselTank={dieselTank}
-                    generatorLogs={generatorLogs}
-                    powerCutLogs={powerCutLogs}
-                    currentUserName={user.displayName || currentReporter}
-                    isAdmin={isAdmin}
-                  />
-                )}
+                {activeDowntimeTab === 'prod_report' &&
+                  (isAdmin || effectivePermissions.productionReportAccess) && (
+                    <PeriodProductionReportView
+                      machines={machines}
+                      downtimeEntries={entries}
+                      allDispatches={allDispatchesWithBackground}
+                      sopProductionLogs={sopProductionLogs}
+                      sopQcChecks={sopQcChecks}
+                      dieselRequests={dieselRequests}
+                      dieselGrns={dieselGrns}
+                      dieselTank={dieselTank}
+                      generatorLogs={generatorLogs}
+                      powerCutLogs={powerCutLogs}
+                      currentUserName={user.displayName || currentReporter}
+                      isAdmin={isAdmin || Boolean(effectivePermissions.productionReportAccess)}
+                    />
+                  )}
 
-                {activeDowntimeTab === 'rep' && isAdmin && (
-                  <PeriodReportView machines={machines} entries={entries} isAdmin={isAdmin} />
-                )}
+                {activeDowntimeTab === 'rep' &&
+                  (isAdmin || effectivePermissions.exportDowntimeExcel) && (
+                    <PeriodReportView
+                      machines={machines}
+                      entries={entries}
+                      isAdmin={isAdmin || Boolean(effectivePermissions.exportDowntimeExcel)}
+                    />
+                  )}
 
                 {activeDowntimeTab === 'data' &&
                   (isAdmin || effectivePermissions.manageMachinesAndSync) && (
@@ -2232,6 +2308,7 @@ export default function App() {
                       syncStatus={syncStatus}
                       syncStatusMessage={syncStatusMsg}
                       totalPendingCount={pendingSyncCount}
+                      isAdmin={isAdmin}
                       onReporterChange={handleReporterChange}
                       onRefreshData={refreshLocalState}
                       onFullCloudSync={handleManualSyncNow}
@@ -2247,16 +2324,18 @@ export default function App() {
 
       {/* Non-Blocking Live Alert Stack (All Active Pop-Up Messages Continue Unblocked) */}
       <div className="fixed inset-0 z-50 pointer-events-none flex flex-col items-center justify-start gap-3 overflow-y-auto px-3 pt-4 pb-8 sm:px-5 sm:pt-8">
-        <DispatchPopupAlert
-          entries={dispatchEntries}
-          permissions={effectivePermissions}
-          dismissedKeys={dismissedPopupKeys}
-          onDismissKey={snoozePopupKey}
-          onNavigateToStage={(stage) => {
-            setActiveDowntimeTab('dispatch');
-            setRequestedDispatchStage(stage);
-          }}
-        />
+        {hasDispatchAccess && (
+          <DispatchPopupAlert
+            entries={dispatchEntries}
+            permissions={effectivePermissions}
+            dismissedKeys={dismissedPopupKeys}
+            onDismissKey={snoozePopupKey}
+            onNavigateToStage={(stage) => {
+              setActiveDowntimeTab('dispatch');
+              setRequestedDispatchStage(stage);
+            }}
+          />
+        )}
 
         <SopPopupAlert
           scrapRecords={sopScrapPipeline}
@@ -2270,31 +2349,35 @@ export default function App() {
           }}
         />
 
-        <DieselPopupAlert
-          requests={dieselRequests}
-          permissions={effectivePermissions}
-          isAdmin={isAdmin}
-          currentUserEmail={user.email || ''}
-          dismissedKeys={dismissedPopupKeys}
-          onDismissKey={snoozePopupKey}
-          onNavigateToDieselTab={(subTab) => {
-            setActiveDowntimeTab('diesel');
-            setRequestedDieselSubTab(subTab);
-          }}
-        />
+        {hasDieselAccess && (
+          <DieselPopupAlert
+            requests={dieselRequests}
+            permissions={effectivePermissions}
+            isAdmin={isAdmin}
+            currentUserEmail={user.email || ''}
+            dismissedKeys={dismissedPopupKeys}
+            onDismissKey={snoozePopupKey}
+            onNavigateToDieselTab={(subTab) => {
+              setActiveDowntimeTab('diesel');
+              setRequestedDieselSubTab(subTab);
+            }}
+          />
+        )}
 
-        <SpecialOrderPopupAlert
-          prodEntries={specialOrderProductions}
-          whDispatches={specialOrderWhDispatches}
-          permissions={effectivePermissions}
-          isAdmin={isAdmin}
-          dismissedKeys={dismissedPopupKeys}
-          onDismissKey={snoozePopupKey}
-          onNavigateToSpecialOrders={(subTab) => {
-            setActiveDowntimeTab('special_orders');
-            setRequestedSpecialOrderSubTab(subTab);
-          }}
-        />
+        {hasSpecialOrderAccess && (
+          <SpecialOrderPopupAlert
+            prodEntries={specialOrderProductions}
+            whDispatches={specialOrderWhDispatches}
+            permissions={effectivePermissions}
+            isAdmin={isAdmin}
+            dismissedKeys={dismissedPopupKeys}
+            onDismissKey={snoozePopupKey}
+            onNavigateToSpecialOrders={(subTab) => {
+              setActiveDowntimeTab('special_orders');
+              setRequestedSpecialOrderSubTab(subTab);
+            }}
+          />
+        )}
 
         <ShiftWeightOutputPopupAlert
           machines={machines}

@@ -297,6 +297,22 @@ export function saveLocalAttendanceBatch(batch: ParsedAttendanceMessage[]) {
   }
 }
 
+function queueMissingAttendanceFromRemote(
+  localCustom: ParsedAttendanceMessage[],
+  remoteList: ParsedAttendanceMessage[]
+) {
+  if (!localCustom.length) return;
+  const byId = new Map(remoteList.map((r) => [r.id, r]));
+  const byKey = new Map(remoteList.map((r) => [batchKey(r), r]));
+  localCustom.forEach((item) => {
+    if (!item || !item.date || item.isHistorical || item.id === 'ATT-SAMPLE-01') return;
+    const match = byId.get(item.id) || byKey.get(batchKey(item));
+    if (!match || (item.createdAt || 0) > (match.createdAt || 0)) {
+      enqueuePendingAttendance(item);
+    }
+  });
+}
+
 export async function pollAttendanceBatches(): Promise<ParsedAttendanceMessage[]> {
   try {
     await ensureFirebaseAuth().catch(() => false);
@@ -309,6 +325,7 @@ export async function pollAttendanceBatches(): Promise<ParsedAttendanceMessage[]
       }
     });
     const localCustom = getCustomLocalAttendanceBatches();
+    queueMissingAttendanceFromRemote(localCustom, remoteList);
     const pending = getPendingAttendanceQueue();
     const merged = mergeAttendanceBatches([...localCustom, ...remoteList, ...pending]);
     saveLocalAttendanceBatch(merged);
@@ -326,49 +343,77 @@ export function subscribeAttendanceBatches(
 
   let unsub: (() => void) | null = null;
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth().catch(() => false);
     if (cancelled) return;
-    if (!(await canAccessFirestorePath('attendance_batches', false))) return;
+    if (!(await canAccessFirestorePath('attendance_batches', false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
 
     const colRef = collection(db, 'attendance_batches');
-    unsub = onSnapshot(
-      colRef,
-      { includeMetadataChanges: true },
-      (snapshot) => {
-        const remoteList: ParsedAttendanceMessage[] = [];
-        snapshot.forEach((snap) => {
-          const data = snap.data() as ParsedAttendanceMessage;
-          if (snap.id !== 'ATT-SAMPLE-01' && data?.date) {
-            remoteList.push({ ...data, id: snap.id, isHistorical: false });
+    try {
+      if (unsub) unsub();
+      unsub = onSnapshot(
+        colRef,
+        { includeMetadataChanges: true },
+        (snapshot) => {
+          const remoteList: ParsedAttendanceMessage[] = [];
+          snapshot.forEach((snap) => {
+            const data = snap.data() as ParsedAttendanceMessage;
+            if (snap.id !== 'ATT-SAMPLE-01' && data?.date) {
+              remoteList.push({ ...data, id: snap.id, isHistorical: false });
+            }
+          });
+
+          const localCustom = getCustomLocalAttendanceBatches();
+          if (!snapshot.metadata.fromCache) {
+            queueMissingAttendanceFromRemote(localCustom, remoteList);
           }
-        });
+          const pending = getPendingAttendanceQueue();
 
-        const localCustom = getCustomLocalAttendanceBatches();
-        const pending = getPendingAttendanceQueue();
+          // Keep local un-synced/pending edits + all remote multi-device batches
+          const merged = mergeAttendanceBatches([...localCustom, ...remoteList, ...pending]);
+          saveLocalAttendanceBatch(merged);
+          clearSyncedFromAttendanceQueue(remoteList);
+          onUpdate(merged);
 
-        // Keep local un-synced/pending edits + all remote multi-device batches
-        const merged = mergeAttendanceBatches([...localCustom, ...remoteList, ...pending]);
-        saveLocalAttendanceBatch(merged);
-        clearSyncedFromAttendanceQueue(remoteList);
-        onUpdate(merged);
-
-        if (!snapshot.metadata.fromCache) {
-          flushPendingAttendanceBatches().catch(() => {});
+          if (!snapshot.metadata.fromCache) {
+            flushPendingAttendanceBatches().catch(() => {});
+          }
+        },
+        (err) => {
+          console.warn('Attendance firestore listener notice:', err.message);
+          scheduleRetry();
         }
-      },
-      (err) => {
-        console.warn('Attendance firestore listener notice:', err.message);
-      }
-    );
+      );
+    } catch {
+      scheduleRetry();
+    }
   };
 
   start();
 
+  const pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollAttendanceBatches().then(onUpdate).catch(() => {});
+  }, 15000);
+
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    clearInterval(pollTimer);
     if (unsub) unsub();
   };
 }
@@ -590,25 +635,27 @@ export async function pollQCLogs(): Promise<QCInspectionRecord[]> {
   try {
     await ensureFirebaseAuth().catch(() => false);
     const snapshot = await getCollectionDocsServerFirst(collection(db, 'qc_inspections'));
-    if (!snapshot.empty) {
-      const remoteMap: Record<string, QCInspectionRecord> = {};
-      snapshot.forEach((snap) => {
-        remoteMap[snap.id] = normalizeQcInspectionRecord({
-          ...(snap.data() as QCInspectionRecord),
-          id: snap.id,
-          synced: true,
-        });
+    const remoteMap: Record<string, QCInspectionRecord> = {};
+    snapshot.forEach((snap) => {
+      remoteMap[snap.id] = normalizeQcInspectionRecord({
+        ...(snap.data() as QCInspectionRecord),
+        id: snap.id,
+        synced: true,
       });
+    });
 
-      const currentLocal = getLocalQCLogs();
-      const merged: QCInspectionRecord[] = [];
-      currentLocal.forEach((l) => {
-        if (l.synced === false && !remoteMap[l.id]) {
-          merged.push(l);
-        }
-      });
-      Object.values(remoteMap).forEach((rem) => merged.push(rem));
-      merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const currentLocal = getLocalQCLogs();
+    const merged: QCInspectionRecord[] = [];
+    currentLocal.forEach((l) => {
+      const rem = remoteMap[l.id];
+      const isInitialSeed = INITIAL_QC_LOGS.some((s) => s.id === l.id);
+      if (!rem && (l.synced === false || !isInitialSeed)) {
+        merged.push({ ...l, synced: false });
+      }
+    });
+    Object.values(remoteMap).forEach((rem) => merged.push(rem));
+    merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    if (merged.length > 0 || !snapshot.empty) {
       saveLocalQCLogs(merged);
       return merged;
     }
@@ -620,18 +667,31 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
   onUpdate(getLocalQCLogs());
   let unsub: (() => void) | null = null;
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth().catch(() => false);
     if (cancelled) return;
-    if (!(await canAccessFirestorePath('qc_inspections', false))) return;
+    if (!(await canAccessFirestorePath('qc_inspections', false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     const colRef = collection(db, 'qc_inspections');
-    unsub = onSnapshot(
-      colRef,
-      { includeMetadataChanges: true },
-      (snapshot) => {
-        if (!snapshot.empty) {
+    try {
+      if (unsub) unsub();
+      unsub = onSnapshot(
+        colRef,
+        { includeMetadataChanges: true },
+        (snapshot) => {
           const remoteMap: Record<string, QCInspectionRecord> = {};
           snapshot.forEach((snap) => {
             remoteMap[snap.id] = normalizeQcInspectionRecord({
@@ -644,10 +704,12 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
           const currentLocal = getLocalQCLogs();
           const merged: QCInspectionRecord[] = [];
 
-          // Keep local pending items that haven't reached remote yet
+          // Keep local pending or un-pushed items that haven't reached remote yet
           currentLocal.forEach((l) => {
-            if (l.synced === false && !remoteMap[l.id]) {
-              merged.push(l);
+            const rem = remoteMap[l.id];
+            const isInitialSeed = INITIAL_QC_LOGS.some((s) => s.id === l.id);
+            if (!rem && (l.synced === false || (!snapshot.metadata.fromCache && !isInitialSeed))) {
+              merged.push({ ...l, synced: false });
             }
           });
 
@@ -656,23 +718,35 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
           });
 
           merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          saveLocalQCLogs(merged);
-          onUpdate(merged);
+          if (merged.length > 0) {
+            saveLocalQCLogs(merged);
+            onUpdate(merged);
+          }
+          if (!snapshot.metadata.fromCache) {
+            flushPendingQCLogs().catch(() => {});
+          }
+        },
+        (err) => {
+          console.warn('QC firestore listener notice:', err.message);
+          scheduleRetry();
         }
-        if (!snapshot.metadata.fromCache) {
-          flushPendingQCLogs().catch(() => {});
-        }
-      },
-      (err) => {
-        console.warn('QC firestore listener notice:', err.message);
-      }
-    );
+      );
+    } catch {
+      scheduleRetry();
+    }
   };
 
   start();
 
+  const pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollQCLogs().then(onUpdate).catch(() => {});
+  }, 15000);
+
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    clearInterval(pollTimer);
     if (unsub) unsub();
   };
 }

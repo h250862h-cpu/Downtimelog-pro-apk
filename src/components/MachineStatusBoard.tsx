@@ -82,6 +82,7 @@ interface MachineStatusBoardProps {
   onOpenWeightOutputSchedule?: () => void;
   onViewCertificate?: (entry: DowntimeEntry) => void;
   canQuickLog?: boolean;
+  canLogDowntime?: boolean;
   currentUserName?: string;
   currentUserEmail?: string;
 }
@@ -101,6 +102,7 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
   onOpenWeightOutputSchedule,
   onViewCertificate,
   canQuickLog = true,
+  canLogDowntime = true,
   currentUserName,
   currentUserEmail,
 }) => {
@@ -1100,26 +1102,27 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                     <span>History ({item.historyCount})</span>
                   </button>
 
-                  {isOff && open ? (
-                    <button
-                      type="button"
-                      onClick={() => onRestoreRunning(open.id, item.name)}
-                      className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white py-2 px-2.5 text-xs font-semibold transition"
-                      title="Clear stoppage and mark machine as running"
-                    >
-                      <Play className="h-3.5 w-3.5 fill-current" />
-                      <span>Resume Run</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => onLogStoppage(item.name)}
-                      className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-rose-400/60 bg-rose-950/70 hover:bg-rose-900/90 text-rose-100 py-2 px-2.5 text-xs font-semibold transition"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      <span>Log Stoppage</span>
-                    </button>
-                  )}
+                  {canLogDowntime &&
+                    (isOff && open ? (
+                      <button
+                        type="button"
+                        onClick={() => onRestoreRunning(open.id, item.name)}
+                        className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white py-2 px-2.5 text-xs font-semibold transition"
+                        title="Clear stoppage and mark machine as running"
+                      >
+                        <Play className="h-3.5 w-3.5 fill-current" />
+                        <span>Resume Run</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onLogStoppage(item.name)}
+                        className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-rose-400/60 bg-rose-950/70 hover:bg-rose-900/90 text-rose-100 py-2 px-2.5 text-xs font-semibold transition"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>Log Stoppage</span>
+                      </button>
+                    ))}
                 </div>
               </div>
             </div>
@@ -1174,17 +1177,19 @@ export const MachineStatusBoard: React.FC<MachineStatusBoardProps> = ({
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  onLogStoppage(selectedHistoryMachine);
-                  setSelectedHistoryMachine(null);
-                }}
-                className="flex items-center gap-1.5 rounded-lg bg-[#0F1E36] hover:bg-[#193054] text-white px-3 py-1.5 text-xs font-semibold transition"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Log Stoppage</span>
-              </button>
+              {canLogDowntime && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLogStoppage(selectedHistoryMachine);
+                    setSelectedHistoryMachine(null);
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg bg-[#0F1E36] hover:bg-[#193054] text-white px-3 py-1.5 text-xs font-semibold transition"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Log Stoppage</span>
+                </button>
+              )}
             </div>
 
             <div className="overflow-y-auto pr-1 py-3 space-y-3 flex-1 text-xs">

@@ -1,18 +1,14 @@
 import React, { useState } from 'react';
 import {
   AlertCircle,
-  CheckCircle2,
-  ExternalLink,
   KeyRound,
   Lock,
   LogIn,
   Mail,
   ShieldCheck,
-  User,
-  UserPlus,
   X,
 } from 'lucide-react';
-import { loginWithEmail, loginWithGoogle, registerWithEmail } from '../firebase';
+import { loginWithEmail, loginWithGoogle } from '../firebase';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -25,10 +21,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -40,16 +34,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setLoading(true);
 
     try {
-      if (mode === 'signup') {
-        if (password.length < 6) {
-          setErrorMsg('Password must be at least 6 characters.');
-          setLoading(false);
-          return;
-        }
-        await registerWithEmail(email, password, displayName);
-      } else {
-        await loginWithEmail(email, password);
-      }
+      await loginWithEmail(email, password);
       setLoading(false);
       onSuccess();
       onClose();
@@ -61,9 +46,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           'Email/Password provider is not enabled in Firebase Console yet. Please enable it under Firebase Console -> Authentication -> Sign-in method.'
         );
       } else if (msg.includes('auth/user-not-found') || msg.includes('auth/invalid-credential')) {
-        setErrorMsg('Invalid email or password. Please check credentials or register.');
-      } else if (msg.includes('auth/email-already-in-use')) {
-        setErrorMsg('This email is already registered. Please sign in instead.');
+        setErrorMsg('Invalid email or password. Ask Plant Administration if your account needs setup or a password reset.');
       } else {
         setErrorMsg(msg);
       }
@@ -102,11 +85,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <KeyRound className="h-4 w-4" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-100">
-                {mode === 'signin' ? 'Sign In to DowntimeLog' : 'Create Staff Account'}
-              </h3>
+              <h3 className="text-base font-bold text-slate-100">Sign In to DowntimeLog</h3>
               <p className="text-[11px] text-slate-400">
-                Firebase Project: <code className="text-amber-300">downtime-log-d484f</code>
+                Role-Secured Plant Access • <code className="text-amber-300">downtime-log-d484f</code>
               </p>
             </div>
           </div>
@@ -118,36 +99,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </div>
 
-        {/* Tab switch between Sign In and Sign Up */}
-        <div className="mt-4 grid grid-cols-2 gap-1 rounded-xl bg-slate-950 p-1 border border-slate-800">
-          <button
-            type="button"
-            onClick={() => {
-              setMode('signin');
-              setErrorMsg('');
-            }}
-            className={`py-1.5 text-xs font-bold rounded-lg transition ${
-              mode === 'signin'
-                ? 'bg-amber-500 text-slate-950 shadow'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Sign In
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMode('signup');
-              setErrorMsg('');
-            }}
-            className={`py-1.5 text-xs font-bold rounded-lg transition ${
-              mode === 'signup'
-                ? 'bg-amber-500 text-slate-950 shadow'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Register New Staff
-          </button>
+        {/* Admin-provisioned account notice */}
+        <div className="mt-4 flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-950/70 p-2.5 text-[11px] text-slate-300">
+          <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+          <div>
+            Staff accounts &amp; section permissions are issued by Plant Administration under{' '}
+            <span className="font-semibold text-white">Admin Access &amp; Sync</span>.
+          </div>
         </div>
 
         {/* Error Notification */}
@@ -160,32 +118,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="mt-4 space-y-3">
-          {mode === 'signup' && (
-            <div>
-              <label className="text-[11px] text-slate-400 block mb-1">
-                Full Name (Technician / Supervisor)
-              </label>
-              <div className="relative">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
-                <input
-                  type="text"
-                  placeholder="e.g. Marcus Vance"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-850 pl-8 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 outline-none"
-                  required
-                />
-              </div>
-            </div>
-          )}
-
           <div>
             <label className="text-[11px] text-slate-400 block mb-1">Email Address</label>
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
               <input
                 type="email"
-                placeholder="technician@plant.com"
+                placeholder="staff@plant.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full rounded-xl border border-slate-700 bg-slate-850 pl-8 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 outline-none"
@@ -207,9 +146,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 required
               />
             </div>
-            {mode === 'signup' && (
-              <span className="text-[10px] text-slate-500 mt-1 block">Minimum 6 characters</span>
-            )}
           </div>
 
           <button
@@ -219,15 +155,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           >
             {loading ? (
               <span>Authenticating...</span>
-            ) : mode === 'signin' ? (
+            ) : (
               <>
                 <LogIn className="h-4 w-4" />
                 <span>Sign In with Email</span>
-              </>
-            ) : (
-              <>
-                <UserPlus className="h-4 w-4" />
-                <span>Create Staff Account</span>
               </>
             )}
           </button>

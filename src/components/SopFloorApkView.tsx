@@ -135,16 +135,16 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
       tabs.push('production');
       tabs.push('qc');
     }
-    if (isAdmin || permissions.sopScrapSend || permissions.sopFloorAccess) {
+    if (isAdmin || permissions.sopScrapSend) {
       tabs.push('scrap_send');
     }
     if (isAdmin || permissions.sopRecyclingConfirm) {
       tabs.push('recycling');
     }
-    if (isAdmin || permissions.sopMixingAccess || permissions.dispatchHODConfirm) {
+    if (isAdmin || permissions.sopMixingAccess) {
       tabs.push('mixing');
     }
-    if (isAdmin || permissions.dispatchShiftEntry || permissions.sopFloorAccess) {
+    if (isAdmin || permissions.sopHandoverAccess) {
       tabs.push('handover');
     }
     // Remove duplicates while preserving order

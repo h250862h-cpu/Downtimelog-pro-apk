@@ -484,6 +484,7 @@ export interface UserPermissions {
   sopScrapSend?: boolean;
   sopRecyclingConfirm?: boolean;
   sopMixingAccess?: boolean;
+  sopHandoverAccess?: boolean;
   dieselFuelRequest?: boolean;
   dieselHODApprove?: boolean;
   dieselGRN?: boolean;
@@ -493,6 +494,7 @@ export interface UserPermissions {
   specialOrdersAccess?: boolean;
   qualityTrialsAccess?: boolean;
   maintenanceJobCardsAccess?: boolean;
+  powerGenAccess?: boolean;
 }
 
 export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
@@ -510,6 +512,7 @@ export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
   sopScrapSend: true,
   sopRecyclingConfirm: true,
   sopMixingAccess: true,
+  sopHandoverAccess: true,
   dieselFuelRequest: true,
   dieselHODApprove: true,
   dieselGRN: true,
@@ -519,6 +522,35 @@ export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
   specialOrdersAccess: true,
   qualityTrialsAccess: true,
   maintenanceJobCardsAccess: true,
+  powerGenAccess: true,
+};
+
+export const ZERO_PERMISSIONS: UserPermissions = {
+  viewMachineStatus: false,
+  logDowntime: false,
+  viewDailyHours: false,
+  exportDowntimeExcel: false,
+  dispatchShiftEntry: false,
+  dispatchWHConfirm: false,
+  dispatchHODConfirm: false,
+  exportDispatchExcel: false,
+  attendanceLogger: false,
+  manageMachinesAndSync: false,
+  sopFloorAccess: false,
+  sopScrapSend: false,
+  sopRecyclingConfirm: false,
+  sopMixingAccess: false,
+  sopHandoverAccess: false,
+  dieselFuelRequest: false,
+  dieselHODApprove: false,
+  dieselGRN: false,
+  dieselExportExcel: false,
+  productionPlanningAccess: false,
+  productionReportAccess: false,
+  specialOrdersAccess: false,
+  qualityTrialsAccess: false,
+  maintenanceJobCardsAccess: false,
+  powerGenAccess: false,
 };
 
 export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
@@ -528,232 +560,103 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
       return { ...FULL_ADMIN_PERMISSIONS };
     case 'Forklift Driver':
       return {
+        ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
-        logDowntime: false,
-        viewDailyHours: false,
-        exportDowntimeExcel: false,
-        dispatchShiftEntry: false,
-        dispatchWHConfirm: false,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
-        attendanceLogger: false,
-        manageMachinesAndSync: false,
-        sopFloorAccess: false,
-        sopScrapSend: false,
-        sopRecyclingConfirm: false,
-        sopMixingAccess: false,
         dieselFuelRequest: true,
-        dieselHODApprove: false,
-        dieselGRN: false,
-        dieselExportExcel: false,
-        productionPlanningAccess: false,
-        productionReportAccess: false,
-        specialOrdersAccess: false,
-        qualityTrialsAccess: false,
       };
     case 'WH Personnel':
       return {
-        viewMachineStatus: false,
-        logDowntime: false,
-        viewDailyHours: false,
-        exportDowntimeExcel: false,
-        dispatchShiftEntry: false,
+        ...ZERO_PERMISSIONS,
         dispatchWHConfirm: true,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
-        attendanceLogger: false,
-        manageMachinesAndSync: false,
-        sopFloorAccess: false,
-        sopScrapSend: false,
-        sopRecyclingConfirm: false,
-        sopMixingAccess: false,
-        dieselFuelRequest: false,
-        dieselHODApprove: false,
         dieselGRN: true,
-        dieselExportExcel: false,
-        productionPlanningAccess: false,
-        productionReportAccess: false,
         specialOrdersAccess: true,
-        qualityTrialsAccess: false,
       };
     case 'Shift In Charge':
       return {
+        ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
         logDowntime: true,
-        viewDailyHours: false,
-        exportDowntimeExcel: false,
         dispatchShiftEntry: true,
-        dispatchWHConfirm: false,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
-        attendanceLogger: false,
-        manageMachinesAndSync: false,
-        sopFloorAccess: false,
-        sopScrapSend: false,
-        sopRecyclingConfirm: false,
-        sopMixingAccess: false,
-        dieselFuelRequest: false,
-        dieselHODApprove: false,
-        dieselGRN: false,
-        dieselExportExcel: false,
+        sopHandoverAccess: true,
         productionPlanningAccess: true,
-        productionReportAccess: false,
         specialOrdersAccess: true,
-        qualityTrialsAccess: false,
         maintenanceJobCardsAccess: true,
+        powerGenAccess: true,
       };
     case 'Recycling Team':
       return {
+        ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
-        logDowntime: false,
-        viewDailyHours: false,
-        exportDowntimeExcel: false,
-        dispatchShiftEntry: false,
-        dispatchWHConfirm: false,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
-        attendanceLogger: false,
-        manageMachinesAndSync: false,
         sopFloorAccess: true,
-        sopScrapSend: false,
         sopRecyclingConfirm: true,
-        sopMixingAccess: false,
-        dieselFuelRequest: false,
-        dieselHODApprove: false,
-        dieselGRN: false,
-        dieselExportExcel: false,
-        productionPlanningAccess: false,
-        productionReportAccess: false,
       };
     case 'Mixer Operator':
       return {
+        ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
         logDowntime: true,
-        viewDailyHours: false,
-        exportDowntimeExcel: false,
-        dispatchShiftEntry: false,
-        dispatchWHConfirm: false,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
-        attendanceLogger: false,
-        manageMachinesAndSync: false,
         sopFloorAccess: true,
         sopScrapSend: true,
-        sopRecyclingConfirm: false,
         sopMixingAccess: true,
-        dieselFuelRequest: false,
-        dieselHODApprove: false,
-        dieselGRN: false,
-        dieselExportExcel: false,
-        productionPlanningAccess: false,
-        productionReportAccess: false,
-        specialOrdersAccess: false,
         qualityTrialsAccess: true,
       };
     case 'Shift Supervisor':
       return {
+        ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
         logDowntime: true,
         viewDailyHours: true,
-        exportDowntimeExcel: false,
         dispatchShiftEntry: true,
-        dispatchWHConfirm: false,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
         attendanceLogger: true,
-        manageMachinesAndSync: false,
         sopFloorAccess: true,
         sopScrapSend: true,
-        sopRecyclingConfirm: false,
         sopMixingAccess: true,
+        sopHandoverAccess: true,
         dieselFuelRequest: true,
-        dieselHODApprove: false,
-        dieselGRN: false,
-        dieselExportExcel: false,
         productionPlanningAccess: true,
-        productionReportAccess: false,
         specialOrdersAccess: true,
         qualityTrialsAccess: true,
         maintenanceJobCardsAccess: true,
+        powerGenAccess: true,
       };
     case 'QC Inspector':
       return {
+        ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
         logDowntime: true,
         viewDailyHours: true,
-        exportDowntimeExcel: false,
-        dispatchShiftEntry: false,
-        dispatchWHConfirm: false,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
-        attendanceLogger: false,
-        manageMachinesAndSync: false,
         sopFloorAccess: true,
         sopScrapSend: true,
-        sopRecyclingConfirm: false,
-        sopMixingAccess: false,
-        dieselFuelRequest: false,
-        dieselHODApprove: false,
-        dieselGRN: false,
-        dieselExportExcel: false,
-        productionPlanningAccess: false,
-        productionReportAccess: false,
-        specialOrdersAccess: false,
         qualityTrialsAccess: true,
       };
     case 'Maintenance Technician':
       return {
+        ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
         logDowntime: true,
         viewDailyHours: true,
-        exportDowntimeExcel: false,
-        dispatchShiftEntry: false,
-        dispatchWHConfirm: false,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
-        attendanceLogger: false,
-        manageMachinesAndSync: false,
-        sopFloorAccess: true,
-        sopScrapSend: true,
-        sopRecyclingConfirm: false,
-        sopMixingAccess: false,
-        dieselFuelRequest: false,
-        dieselHODApprove: false,
-        dieselGRN: false,
-        dieselExportExcel: false,
-        productionPlanningAccess: false,
-        productionReportAccess: false,
-        specialOrdersAccess: false,
-        qualityTrialsAccess: false,
         maintenanceJobCardsAccess: true,
+        powerGenAccess: true,
       };
     case 'Machine Operator':
+      return {
+        ...ZERO_PERMISSIONS,
+        viewMachineStatus: true,
+        logDowntime: true,
+        viewDailyHours: true,
+        sopFloorAccess: true,
+        sopScrapSend: true,
+        sopHandoverAccess: true,
+      };
     case 'Operator Assistant':
     default:
       return {
+        ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
         logDowntime: true,
         viewDailyHours: true,
-        exportDowntimeExcel: false,
-        dispatchShiftEntry: false,
-        dispatchWHConfirm: false,
-        dispatchHODConfirm: false,
-        exportDispatchExcel: false,
-        attendanceLogger: false,
-        manageMachinesAndSync: false,
         sopFloorAccess: true,
         sopScrapSend: true,
-        sopRecyclingConfirm: false,
-        sopMixingAccess: false,
-        dieselFuelRequest: false,
-        dieselHODApprove: false,
-        dieselGRN: false,
-        dieselExportExcel: false,
-        productionPlanningAccess: false,
-        productionReportAccess: false,
-        specialOrdersAccess: false,
-        qualityTrialsAccess: false,
-        maintenanceJobCardsAccess: false,
       };
   }
 }
@@ -768,6 +671,10 @@ export interface PlantUserAccount {
   createdBy: string;
   createdAt: string;
   status: 'active' | 'suspended';
+  upd?: number;
+  sy?: number;
+  revoked?: boolean;
+  revokedAt?: string;
 }
 
 export type DispatchStatus = 'PENDING_WH' | 'PENDING_HOD' | 'CONFIRMED';

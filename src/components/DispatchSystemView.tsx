@@ -207,14 +207,15 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   requestedStage,
   onStageHandled,
 }) => {
+  const canExportDispatch = isAdmin || Boolean(permissions.exportDispatchExcel);
   const allowedStages = useMemo<DispatchSubStage[]>(() => {
     const list: DispatchSubStage[] = [];
-    if (permissions.dispatchShiftEntry) list.push('shift');
-    if (permissions.dispatchWHConfirm) list.push('wh');
-    if (permissions.dispatchHODConfirm) list.push('hod');
-    if (permissions.exportDispatchExcel || permissions.dispatchHODConfirm) list.push('ledger');
+    if (isAdmin || permissions.dispatchShiftEntry) list.push('shift');
+    if (isAdmin || permissions.dispatchWHConfirm) list.push('wh');
+    if (isAdmin || permissions.dispatchHODConfirm) list.push('hod');
+    if (canExportDispatch || permissions.dispatchHODConfirm) list.push('ledger');
     return list;
-  }, [permissions]);
+  }, [isAdmin, permissions, canExportDispatch]);
 
   const [activeStage, setActiveStage] = useState<DispatchSubStage>(() => allowedStages[0] || 'shift');
 
@@ -916,13 +917,13 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   };
 
   const handleDownloadDispatchExcel = () => {
-    if (!isAdmin) {
-      setExcelNotice('Confidentiality Lock: Only Plant Admin / Production HOD can download Dispatch Excel reports.');
+    if (!canExportDispatch) {
+      setExcelNotice('Confidentiality Lock: Only Plant Admin / Production HOD or authorized users can download Dispatch Excel reports.');
       return;
     }
     const effectiveFrom = fromDate || '2020-01-01';
     const effectiveTo = toDate || '2099-12-31';
-    exportDispatchExcelWorkbook(ledgerEntries, effectiveFrom, effectiveTo, sopProductionLogs, isAdmin);
+    exportDispatchExcelWorkbook(ledgerEntries, effectiveFrom, effectiveTo, sopProductionLogs, canExportDispatch);
     setExcelNotice(
       `Confidential Dispatch Excel (.xlsx) downloaded (${ledgerEntries.length} filtered records · ${fromDate || 'All Dates'} to ${toDate || 'Latest'}) with Qty (kg) & linked Production Scrap/Wastage.`
     );
@@ -2401,7 +2402,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
                     </button>
                   )}
 
-                {isAdmin ? (
+                {canExportDispatch ? (
                   <button
                     type="button"
                     onClick={handleDownloadDispatchExcel}

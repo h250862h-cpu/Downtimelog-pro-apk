@@ -219,6 +219,22 @@ function clearSyncedIdsFromQueue<T extends { id: string; upd?: number }>(
   });
 }
 
+function queueMissingFromRemote<T extends { id: string; upd?: number }>(
+  pendingKey: string,
+  local: T[],
+  remote: T[]
+) {
+  if (!local.length) return;
+  const remoteMap = new Map(remote.map((x) => [x.id, x]));
+  local.forEach((item) => {
+    if (!item?.id) return;
+    const rem = remoteMap.get(item.id);
+    if (!rem || (item.upd || 0) > (rem.upd || 0)) {
+      addToQueue(pendingKey, item.id);
+    }
+  });
+}
+
 function sanitizeObj<T extends Record<string, any>>(obj: T): T {
   return deepSanitizeForFirestore(obj);
 }
@@ -349,6 +365,7 @@ export async function pollUploadedBackgroundDispatches(): Promise<DispatchEntry[
     const local = getLocalUploadedBackgroundDispatches();
     const merged = mergeById(local, remote);
     writeList(HIST_UPLOAD_KEY, merged);
+    queueMissingFromRemote(HIST_UPLOAD_PENDING_KEY, local, remote);
     clearSyncedIdsFromQueue(HIST_UPLOAD_PENDING_KEY, local, remote);
     return merged;
   } catch (err: any) {
@@ -365,13 +382,26 @@ export function subscribeUploadedBackgroundDispatches(
   onUpdate(getLocalUploadedBackgroundDispatches());
   let unsub: () => void = () => {};
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(HIST_UPLOAD_COLLECTION, false))) return;
+    if (!(await canAccessFirestorePath(HIST_UPLOAD_COLLECTION, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, HIST_UPLOAD_COLLECTION),
         { includeMetadataChanges: true },
@@ -384,20 +414,32 @@ export function subscribeUploadedBackgroundDispatches(
           const local = getLocalUploadedBackgroundDispatches();
           const merged = mergeById(local, remote);
           writeList(HIST_UPLOAD_KEY, merged);
+          if (!snap.metadata.fromCache) {
+            queueMissingFromRemote(HIST_UPLOAD_PENDING_KEY, local, remote);
+          }
           clearSyncedIdsFromQueue(HIST_UPLOAD_PENDING_KEY, local, remote);
           onUpdate(merged);
           if (!snap.metadata.fromCache) {
             flushPendingUploadedBackgroundDispatches().catch(() => {});
           }
         },
-        () => {}
+        () => scheduleRetry()
       );
-    } catch {}
+    } catch {
+      scheduleRetry();
+    }
   };
   start();
 
+  const pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollUploadedBackgroundDispatches().then(onUpdate).catch(() => {});
+  }, 15000);
+
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    clearInterval(pollTimer);
     unsub();
   };
 }
@@ -699,6 +741,7 @@ export async function pollProductionPlans(): Promise<ProductionPlanItem[]> {
     const local = getAllRawLocalProductionPlans();
     const merged = mergeById(local, remote);
     writeList(PLAN_STORAGE_KEY, merged);
+    queueMissingFromRemote(PLAN_PENDING_KEY, local, remote);
     clearSyncedIdsFromQueue(PLAN_PENDING_KEY, local, remote);
     return merged.filter((p) => !p.superseded);
   } catch (err: any) {
@@ -713,13 +756,26 @@ export function subscribeProductionPlans(onUpdate: (items: ProductionPlanItem[])
   onUpdate(getLocalProductionPlans());
   let unsub: () => void = () => {};
   let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleRetry = () => {
+    if (cancelled || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!cancelled) start();
+    }, 15000);
+  };
 
   const start = async () => {
     await ensureFirebaseAuth();
     if (cancelled) return;
-    if (!(await canAccessFirestorePath(PLAN_COLLECTION, false))) return;
+    if (!(await canAccessFirestorePath(PLAN_COLLECTION, false))) {
+      scheduleRetry();
+      return;
+    }
     if (cancelled) return;
     try {
+      unsub();
       unsub = onSnapshot(
         collection(db, PLAN_COLLECTION),
         { includeMetadataChanges: true },
@@ -732,20 +788,32 @@ export function subscribeProductionPlans(onUpdate: (items: ProductionPlanItem[])
           const local = getAllRawLocalProductionPlans();
           const merged = mergeById(local, remote);
           writeList(PLAN_STORAGE_KEY, merged);
+          if (!snap.metadata.fromCache) {
+            queueMissingFromRemote(PLAN_PENDING_KEY, local, remote);
+          }
           clearSyncedIdsFromQueue(PLAN_PENDING_KEY, local, remote);
           onUpdate(merged.filter((p) => !p.superseded));
           if (!snap.metadata.fromCache) {
             flushPendingProductionPlans().catch(() => {});
           }
         },
-        () => {}
+        () => scheduleRetry()
       );
-    } catch {}
+    } catch {
+      scheduleRetry();
+    }
   };
   start();
 
+  const pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollProductionPlans().then(onUpdate).catch(() => {});
+  }, 15000);
+
   return () => {
     cancelled = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    clearInterval(pollTimer);
     unsub();
   };
 }
