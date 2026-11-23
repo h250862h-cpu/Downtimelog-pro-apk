@@ -346,7 +346,7 @@ export function subscribeQualityTrials(
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;

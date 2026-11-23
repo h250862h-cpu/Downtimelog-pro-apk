@@ -441,7 +441,7 @@ export function subscribeAttendanceBatches(
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -813,7 +813,7 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;

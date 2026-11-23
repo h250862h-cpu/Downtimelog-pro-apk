@@ -245,9 +245,25 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   const [isCasualAssistant, setIsCasualAssistant] = useState<boolean>(false);
   const [casualAssistantText, setCasualAssistantText] = useState<string>('');
   const [casualHelperName, setCasualHelperName] = useState<string>('');
-  const [shiftInChargeName, setShiftInChargeName] = useState<string>(
-    SHIFT_IN_CHARGE_OPTIONS[0]?.value || currentUserName
-  );
+  const defaultShiftInCharge = useMemo(() => {
+    const clean = (currentUserName || '').trim().toLowerCase();
+    const cleanEmailLocal = (currentUserEmail || '').trim().toLowerCase().split('@')[0] || '';
+    const match = SHIFT_IN_CHARGE_OPTIONS.find((opt) => {
+      const valLower = opt.value.toLowerCase();
+      return (
+        (clean && (valLower === clean || valLower.includes(clean) || clean.includes(valLower.split(' ')[0]))) ||
+        (cleanEmailLocal && (valLower.includes(cleanEmailLocal) || cleanEmailLocal.includes(valLower.split(' ')[0])))
+      );
+    });
+    return match?.value || SHIFT_IN_CHARGE_OPTIONS[0]?.value || currentUserName;
+  }, [currentUserName, currentUserEmail]);
+
+  const [shiftInChargeName, setShiftInChargeName] = useState<string>(defaultShiftInCharge);
+  useEffect(() => {
+    if (defaultShiftInCharge) {
+      setShiftInChargeName(defaultShiftInCharge);
+    }
+  }, [defaultShiftInCharge]);
   const [shiftNotes, setShiftNotes] = useState<string>('');
   const [shiftSignature, setShiftSignature] = useState<string>('');
   const [shiftBanner, setShiftBanner] = useState<{ text: string; isError?: boolean } | null>(null);

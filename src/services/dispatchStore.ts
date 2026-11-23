@@ -325,7 +325,7 @@ export async function saveDispatchEntryToFirebase(
       sy: syncTs,
     });
     const docRef = doc(db, DISPATCH_COLLECTION, updatedEntry.id);
-    await setDocWithTimeout(docRef, payload, { merge: true }, 4500);
+    await setDocWithTimeout(docRef, payload, { merge: true }, 12000);
 
     removePendingDispatchId(updatedEntry.id);
     lastDispatchSyncError = null;
@@ -518,7 +518,7 @@ export function subscribeDispatchEntries(
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;

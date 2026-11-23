@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -99,6 +99,25 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
   const [reportedBy, setReportedBy] = useState<string>(currentUserName || DEFAULT_REPORTERS[0]);
   const [customReporter, setCustomReporter] = useState<string>('');
   const [reason, setReason] = useState<string>('');
+
+  useEffect(() => {
+    if (selectedMachineDefault) {
+      setIsMultiMachineMode(false);
+      setMachine(selectedMachineDefault);
+    }
+  }, [selectedMachineDefault]);
+
+  useEffect(() => {
+    if (!isMultiMachineMode && (!machine || machine.startsWith('__') || (machines.length > 0 && !machines.includes(machine)))) {
+      setMachine(selectedMachineDefault || machines[0] || 'Extrusion Machine 1');
+    }
+  }, [machines, isMultiMachineMode, machine, selectedMachineDefault]);
+
+  useEffect(() => {
+    if (currentUserName && reportedBy !== 'OTHER') {
+      setReportedBy(currentUserName);
+    }
+  }, [currentUserName]);
 
   // Operational floor fields
   const [shift, setShift] = useState<'Day' | 'Night'>(currentShiftInfo.shift);
@@ -357,6 +376,8 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
         setGenOffFuel('');
         clearSignature();
         setStartTime(dtl(new Date()));
+        setIsMultiMachineMode(false);
+        setMachine(selectedMachineDefault || machines[0] || 'Extrusion Machine 1');
         setFormMsg({
           text: `Saved same stoppage across ${batchEntries.length} machines and synced online!${
             skippedMachines.length > 0 ? ` (${skippedMachines.length} already OFF skipped)` : ''
@@ -585,29 +606,6 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
                 required
                 className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs sm:text-sm text-slate-100 focus:border-amber-500 focus:outline-none font-semibold"
               >
-                <option value="__ALL_MACHINES__">
-                  ★ ALL MACHINES — Select All ({machines.length})
-                </option>
-                <option value="__ALL_PRODUCTION__">
-                  ★ ALL PRODUCTION MACHINES ({machines.length - utilList.length})
-                </option>
-                <option value="__ALL_EXTRUSION__">
-                  ★ ALL EXTRUSION MACHINES ({extList.length})
-                </option>
-                <option value="__ALL_INJECTION__">
-                  ★ ALL INJECTION MACHINES ({injList.length})
-                </option>
-                <option value="__ALL_MIXER__">
-                  ★ ALL MIXER MACHINES ({mixList.length})
-                </option>
-                <option value="__ALL_RECYCLING__">
-                  ★ ALL RECYCLING MACHINES ({recList.length})
-                </option>
-                {machine === '__CUSTOM_MULTI__' && (
-                  <option value="__CUSTOM_MULTI__">
-                    ★ CUSTOM MULTI-SELECTION ({selectedMachines.length} machines)
-                  </option>
-                )}
                 {extList.length > 0 && (
                   <optgroup label="1. EXTRUSION MACHINES">
                     {extList.map((m) => (
@@ -662,6 +660,31 @@ export const LogDowntimeView: React.FC<LogDowntimeViewProps> = ({
                     ))}
                   </optgroup>
                 )}
+                <optgroup label="BULK MULTI-MACHINE (ALL / DEPT)">
+                  <option value="__ALL_MACHINES__">
+                    ★ ALL MACHINES — Select All ({machines.length})
+                  </option>
+                  <option value="__ALL_PRODUCTION__">
+                    ★ ALL PRODUCTION MACHINES ({machines.length - utilList.length})
+                  </option>
+                  <option value="__ALL_EXTRUSION__">
+                    ★ ALL EXTRUSION MACHINES ({extList.length})
+                  </option>
+                  <option value="__ALL_INJECTION__">
+                    ★ ALL INJECTION MACHINES ({injList.length})
+                  </option>
+                  <option value="__ALL_MIXER__">
+                    ★ ALL MIXER MACHINES ({mixList.length})
+                  </option>
+                  <option value="__ALL_RECYCLING__">
+                    ★ ALL RECYCLING MACHINES ({recList.length})
+                  </option>
+                  {machine === '__CUSTOM_MULTI__' && (
+                    <option value="__CUSTOM_MULTI__">
+                      ★ CUSTOM MULTI-SELECTION ({selectedMachines.length} machines)
+                    </option>
+                  )}
+                </optgroup>
               </select>
             </div>
 

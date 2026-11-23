@@ -29,7 +29,6 @@ import {
   Users,
   Volume2,
   VolumeX,
-  Wrench,
   X,
   Zap,
 } from 'lucide-react';
@@ -67,11 +66,6 @@ const DispatchSystemView = lazy(() =>
 const LogDowntimeView = lazy(() =>
   import('./components/LogDowntimeView').then((m) => ({ default: m.LogDowntimeView }))
 );
-const MaintenanceJobCardsView = lazy(() =>
-  import('./components/MaintenanceJobCardsView').then((m) => ({
-    default: m.MaintenanceJobCardsView,
-  }))
-);
 const PeriodProductionReportView = lazy(() =>
   import('./components/PeriodProductionReportView').then((m) => ({
     default: m.PeriodProductionReportView,
@@ -105,8 +99,6 @@ import {
   ensureFirebaseAuth,
   getActiveSessionUser,
   getLocalPlantUsers,
-  isRestrictedShiftInChargeAccount,
-  isRestrictedWHDispatchAccount,
   logoutUser,
   PRIMARY_ADMIN_EMAIL,
   resolveUserPermissions,
@@ -174,10 +166,6 @@ import {
   subscribeQualityTrials,
 } from './services/qualityTrialStore';
 import {
-  getLocalMaintenanceJobCards,
-  subscribeMaintenanceJobCards,
-} from './services/maintenanceJobCardStore';
-import {
   getLocalSpecialOrderProductions,
   getLocalSpecialOrders,
   getLocalSpecialOrderWhDispatches,
@@ -209,7 +197,6 @@ import {
   DispatchEntry,
   DowntimeEntry,
   GeneratorLog,
-  MaintenanceJobCard,
   PlantUserAccount,
   PowerCutLog,
   ProductionPlanItem,
@@ -235,7 +222,6 @@ export type DowntimeTab =
   | 'prod_planning'
   | 'diesel'
   | 'power_gen'
-  | 'maintenance_job_cards'
   | 'sop_overview'
   | 'sop_production'
   | 'sop_qc'
@@ -314,9 +300,6 @@ export default function App() {
   >(() => getLocalSpecialOrderWhDispatches());
   const [qualityTrials, setQualityTrials] = useState<QualityTrialReport[]>(() =>
     getLocalQualityTrials()
-  );
-  const [maintenanceJobCards, setMaintenanceJobCards] = useState<MaintenanceJobCard[]>(() =>
-    getLocalMaintenanceJobCards()
   );
   const [dieselTank, setDieselTank] = useState<DieselTankConfig>(() => getLocalDieselTank());
   const [dieselRequests, setDieselRequests] = useState<DieselFuelRequest[]>(() =>
@@ -653,9 +636,6 @@ export default function App() {
     const unsubQualityTrials = subscribeQualityTrials((rows) => {
       setQualityTrials(rows);
     });
-    const unsubMaintenanceJobCards = subscribeMaintenanceJobCards((rows) => {
-      setMaintenanceJobCards(rows);
-    });
 
     const pendingTimer = setInterval(() => {
       setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
@@ -664,12 +644,11 @@ export default function App() {
       if (!err) {
         setSyncStatus((prev) => (prev === 'error' ? 'synced' : prev));
       }
-    }, 2500);
+    }, 4000);
 
-    // 24/7 Always-Live Keep-Alive Heartbeat & Server-First Cross-Device Reconciliation
+    // 24/7 Live Keep-Alive & Server-First Cross-Device Reconciliation
     let keepAliveInFlight = false;
     let lastKeepAliveAt = 0;
-    let pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
     const runLiveKeepAlive = async () => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) return;
@@ -677,7 +656,7 @@ export default function App() {
       keepAliveInFlight = true;
       lastKeepAliveAt = Date.now();
       try {
-        const res = await withTimeout(runFullCloudSyncNow(), 14000, 'Sync cycle timed out');
+        const res = await withTimeout(runFullCloudSyncNow(), 16000, 'Sync cycle timed out');
         setEntries(res.data.entries);
         setMachines(res.data.machines);
         setDispatchEntries(res.data.dispatches);
@@ -697,7 +676,6 @@ export default function App() {
         setSpecialOrderProductions(res.data.specialOrderProductions);
         setSpecialOrderWhDispatches(res.data.specialOrderWhDispatches);
         setQualityTrials(res.data.qualityTrials);
-        setMaintenanceJobCards(res.data.maintenanceJobCards);
         setAttendanceBatch(res.data.attendanceBatches);
         setPlantUsers(res.data.plantUsers);
         setPendingSyncCount(res.pendingAfter.totalPending);
@@ -721,21 +699,16 @@ export default function App() {
       }
     };
 
-    // Auto-repair stale queues and pull/flush server updates immediately after listeners stabilize
+    // Auto-repair stale queues and pull/flush server updates on session start
     repairAllPendingSyncQueues();
     setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
     const initialPullTimer = setTimeout(() => {
       runLiveKeepAlive();
     }, 50);
 
-    // Zero-delay local save / cross-tab bus listener triggers immediate count refresh & fast cloud flush
+    // Refresh pending badge instantaneously when any store saves or clears items (onSnapshot handles live push)
     const unsubSyncBus = subscribeCloudSyncBus(() => {
       setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
-      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-      if (pendingFlushTimer) clearTimeout(pendingFlushTimer);
-      pendingFlushTimer = setTimeout(() => {
-        runLiveKeepAlive();
-      }, 350);
     });
 
     const handleOnlineNow = () => {
@@ -744,7 +717,7 @@ export default function App() {
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
-        if (Date.now() - lastKeepAliveAt > 800) {
+        if (Date.now() - lastKeepAliveAt > 10000) {
           runLiveKeepAlive();
         }
       }
@@ -757,7 +730,7 @@ export default function App() {
       }
     };
 
-    const keepAliveTimer = setInterval(runLiveKeepAlive, 5000);
+    const keepAliveTimer = setInterval(runLiveKeepAlive, 60000);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     window.addEventListener('online', handleOnlineNow);
     window.addEventListener('focus', handleVisibilityOrFocus);
@@ -785,10 +758,8 @@ export default function App() {
       unsubSpecialOrderProd();
       unsubSpecialOrderWh();
       unsubQualityTrials();
-      unsubMaintenanceJobCards();
       unsubSyncBus();
       clearTimeout(initialPullTimer);
-      if (pendingFlushTimer) clearTimeout(pendingFlushTimer);
       clearInterval(pendingTimer);
       clearInterval(keepAliveTimer);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
@@ -857,20 +828,8 @@ export default function App() {
     matchedUserRecord && !isPrimaryAdmin && matchedUserRecord.status === 'suspended'
   );
 
-  const isRestrictedSIC = isRestrictedShiftInChargeAccount(
-    user?.email,
-    matchedUserRecord?.displayName || user?.displayName
-  );
-
-  const isRestrictedWH = isRestrictedWHDispatchAccount(
-    user?.email,
-    matchedUserRecord?.displayName || user?.displayName
-  );
-
   const isAdmin =
     !isSuspendedAccount &&
-    !isRestrictedSIC &&
-    !isRestrictedWH &&
     (isPrimaryAdmin ||
       (matchedUserRecord
         ? matchedUserRecord.role === 'Plant Administrator' ||
@@ -912,10 +871,6 @@ export default function App() {
         user.email.split('@')[0].toUpperCase();
       const resolvedRole = isPrimaryAdmin
         ? 'Plant Administrator'
-        : isRestrictedSIC
-        ? 'Shift In Charge'
-        : isRestrictedWH
-        ? 'WH Personnel'
         : matchedUserRecord.role;
       setActiveSessionUser({
         uid: user.uid || matchedUserRecord.uid,
@@ -937,8 +892,6 @@ export default function App() {
     user?.displayName,
     matchedUserRecord,
     isPrimaryAdmin,
-    isRestrictedSIC,
-    isRestrictedWH,
     isAdmin,
     isSuspendedAccount,
     effectivePermissions,
@@ -946,10 +899,6 @@ export default function App() {
 
   const effectiveRoleLabel = isSuspendedAccount
     ? 'Account Suspended'
-    : isRestrictedSIC
-    ? 'Shift In Charge'
-    : isRestrictedWH
-    ? 'WH Personnel'
     : matchedUserRecord?.role === 'Production HOD' || user?.role === 'Production HOD'
     ? 'Production HOD (Admin)'
     : isAdmin
@@ -990,8 +939,7 @@ export default function App() {
 
   const isShiftInChargeWeightCheckUser =
     !isSuspendedAccount &&
-    (isRestrictedSIC ||
-      matchedUserRecord?.role === 'Shift In Charge' ||
+    (matchedUserRecord?.role === 'Shift In Charge' ||
       user?.role === 'Shift In Charge' ||
       (effectivePermissions.dispatchShiftEntry && effectivePermissions.logDowntime));
 
@@ -1195,9 +1143,6 @@ export default function App() {
   const hasQualityTrialAccess =
     !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.qualityTrialsAccess));
 
-  const hasMaintenanceJobCardAccess =
-    !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.maintenanceJobCardsAccess));
-
   // Compute allowed sidebar navigation tabs strictly from effectivePermissions
   const allowedTabs = useMemo<DowntimeTab[]>(() => {
     if (isSuspendedAccount) return [];
@@ -1214,7 +1159,6 @@ export default function App() {
     if (isAdmin || effectivePermissions.powerGenAccess) {
       tabs.push('power_gen');
     }
-    if (hasMaintenanceJobCardAccess) tabs.push('maintenance_job_cards');
     if (isAdmin || effectivePermissions.sopFloorAccess) {
       tabs.push('sop_overview', 'sop_production', 'sop_qc');
     }
@@ -1242,7 +1186,6 @@ export default function App() {
     hasDispatchAccess,
     hasSpecialOrderAccess,
     hasQualityTrialAccess,
-    hasMaintenanceJobCardAccess,
     hasDieselAccess,
     isAdmin,
   ]);
@@ -1362,7 +1305,6 @@ export default function App() {
       setSpecialOrderProductions(res.data.specialOrderProductions);
       setSpecialOrderWhDispatches(res.data.specialOrderWhDispatches);
       setQualityTrials(res.data.qualityTrials);
-      setMaintenanceJobCards(res.data.maintenanceJobCards);
       setAttendanceBatch(res.data.attendanceBatches);
       setPlantUsers(res.data.plantUsers);
       setPendingSyncCount(res.pendingAfter.totalPending);
@@ -1520,14 +1462,6 @@ export default function App() {
       subtitle: 'Outages · Gen Fuel (L)',
       icon: <Zap className="h-4 w-4" />,
       badge: powerCutLogs.filter((p) => p.status === 'ONGOING' || !p.timeBack).length,
-    },
-    {
-      id: 'maintenance_job_cards',
-      group: '1. Live Floor Operations',
-      label: 'Maintenance Job Cards',
-      subtitle: 'Mntce · Die & Mould PDF',
-      icon: <Wrench className="h-4 w-4" />,
-      badge: maintenanceJobCards.filter((c) => c.status !== 'COMPLETED').length,
     },
     // Priority 2: Daily SOP Floor APKs
     {
@@ -2255,19 +2189,6 @@ export default function App() {
                       }}
                     />
                   )}
-
-                {activeDowntimeTab === 'maintenance_job_cards' && hasMaintenanceJobCardAccess && (
-                  <MaintenanceJobCardsView
-                    machines={machines}
-                    jobCards={maintenanceJobCards}
-                    currentUserName={user.displayName || currentReporter}
-                    currentUserEmail={user.email || ''}
-                    canIssueOrEdit={hasMaintenanceJobCardAccess}
-                    onDataChanged={() => {
-                      setMaintenanceJobCards(getLocalMaintenanceJobCards());
-                    }}
-                  />
-                )}
 
                 {activeDowntimeTab === 'quality_trials' && hasQualityTrialAccess && (
                   <QualityTrialView

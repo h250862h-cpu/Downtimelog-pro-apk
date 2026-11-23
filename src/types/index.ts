@@ -493,7 +493,6 @@ export interface UserPermissions {
   productionReportAccess?: boolean;
   specialOrdersAccess?: boolean;
   qualityTrialsAccess?: boolean;
-  maintenanceJobCardsAccess?: boolean;
   powerGenAccess?: boolean;
 }
 
@@ -521,7 +520,6 @@ export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
   productionReportAccess: true,
   specialOrdersAccess: true,
   qualityTrialsAccess: true,
-  maintenanceJobCardsAccess: true,
   powerGenAccess: true,
 };
 
@@ -549,7 +547,6 @@ export const ZERO_PERMISSIONS: UserPermissions = {
   productionReportAccess: false,
   specialOrdersAccess: false,
   qualityTrialsAccess: false,
-  maintenanceJobCardsAccess: false,
   powerGenAccess: false,
 };
 
@@ -574,11 +571,16 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         ...ZERO_PERMISSIONS,
         viewMachineStatus: true,
         logDowntime: true,
+        viewDailyHours: true,
         dispatchShiftEntry: true,
+        attendanceLogger: true,
+        sopFloorAccess: true,
+        sopScrapSend: true,
         sopHandoverAccess: true,
+        dieselFuelRequest: true,
         productionPlanningAccess: true,
         specialOrdersAccess: true,
-        maintenanceJobCardsAccess: true,
+        qualityTrialsAccess: true,
         powerGenAccess: true,
       };
     case 'Recycling Team':
@@ -614,7 +616,6 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         productionPlanningAccess: true,
         specialOrdersAccess: true,
         qualityTrialsAccess: true,
-        maintenanceJobCardsAccess: true,
         powerGenAccess: true,
       };
     case 'QC Inspector':
@@ -633,7 +634,6 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         viewMachineStatus: true,
         logDowntime: true,
         viewDailyHours: true,
-        maintenanceJobCardsAccess: true,
         powerGenAccess: true,
       };
     case 'Machine Operator':
@@ -1323,106 +1323,3 @@ export interface QualityTrialReport {
   upd: number;
   sy?: number;
 }
-
-// ======================================================
-// MAINTENANCE JOB CARDS & DIE / MOULD CHANGE JOB CARDS
-// ======================================================
-
-export type MaintenanceJobCardType =
-  | 'STANDARD_MAINTENANCE'
-  | 'EXTRUSION_DIE_CHANGE'
-  | 'INJECTION_MOULD_CHANGE';
-
-export type MaintenanceJobCardPriority = 'NORMAL' | 'URGENT' | 'CRITICAL_BREAKDOWN';
-
-export type MaintenanceJobCardStatus =
-  | 'ISSUED'
-  | 'IN_PROGRESS'
-  | 'AWAITING_ENGINEER_SIGNS'
-  | 'COMPLETED';
-
-export interface MaintenanceStageStep {
-  id: string;
-  stageNo: number;
-  stageTitle: string;
-  instruction: string;
-  safetyNote?: string;
-  completed: boolean;
-  completedBy?: string;
-  completedAt?: string;
-  remarks?: string;
-}
-
-export interface MaintenanceSparePartRow {
-  partName: string;
-  partCodeOrSpec: string;
-  qty: string;
-  unit: string;
-  isReplacement: boolean;
-  reason: string;
-}
-
-export interface MaintenanceSignerBlock {
-  name?: string;
-  roleTitle?: string;
-  signature?: string;
-  signedAt?: string;
-}
-
-export interface MaintenanceJobCard {
-  id: string;
-  jobCardNo: string;
-  docCode: string; // e.g. 'LG-MNT-JC-01', 'LG-MNT-DIE-02', 'LG-MNT-MLD-03'
-  cardType: MaintenanceJobCardType;
-  date: string; // YYYY-MM-DD
-  shift: 'Day' | 'Night';
-  machine: string;
-  department: MachineDepartment | string;
-  priority: MaintenanceJobCardPriority;
-  requestedStartTime?: string;
-  targetCompletionTime?: string;
-
-  // Fault / Work Scope (or Die/Mould Changeover Details)
-  workTitle: string;
-  faultOrChangeoverDetails: string;
-  assignedToTeam: string; // e.g. 'Mechanical & Electrical Maintenance' | 'Mould Setter Team'
-  assignedTechnicianName?: string;
-
-  // Die / Mould Change Specifics (Extrusion & Injection -> Up to Toolroom Storage)
-  outgoingDieOrMould?: string;
-  incomingDieOrMould?: string;
-  productToRun?: string;
-  storageRackLocation?: string;
-  removedToolingCleanedAndPreserved?: boolean;
-  removedToolingStoredVerified?: boolean;
-  lotoIsolatedConfirmed?: boolean;
-
-  // Standard Maintenance Execution Notes
-  rootCauseFindings?: string;
-  correctiveActionTaken?: string;
-
-  // Stage-by-Stage Instructions & Log
-  stages: MaintenanceStageStep[];
-
-  // Spares / Component Replacements Table
-  replacementRequired: boolean;
-  sparesUsed: MaintenanceSparePartRow[];
-
-  // Mandatory Signatures (Easy Canvas Pad + Official Policy)
-  issuedByShiftInCharge: MaintenanceSignerBlock;
-  technicianOrSetter: MaintenanceSignerBlock;
-  engineer1: MaintenanceSignerBlock;
-  engineer2: MaintenanceSignerBlock;
-  engineer3: MaintenanceSignerBlock;
-
-  issuedByEmail: string;
-  issuedAt: string;
-  pdfIssuedCount?: number;
-  lastPdfIssuedAt?: string;
-  status: MaintenanceJobCardStatus;
-  upd: number;
-  sy?: number;
-}
-
-
-

@@ -444,7 +444,7 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
         if (!cancelled) onUpdate(t);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -610,7 +610,7 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -776,7 +776,7 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;

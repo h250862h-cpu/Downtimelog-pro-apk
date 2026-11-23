@@ -242,7 +242,6 @@ export async function canAccessFirestorePath(
 export type CloudSyncTopic =
   | 'downtime'
   | 'dispatch'
-  | 'maintenance'
   | 'sop'
   | 'special_orders'
   | 'quality_trials'
@@ -324,7 +323,7 @@ export async function setDocWithTimeout(
   docRef: DocumentReference<DocumentData>,
   data: Record<string, any>,
   options: { merge?: boolean } = { merge: true },
-  timeoutMs: number = 4500
+  timeoutMs: number = 12000
 ): Promise<void> {
   await withTimeout(
     setDoc(docRef, data, options),
@@ -347,7 +346,7 @@ export async function getCollectionDocsServerFirst<T = DocumentData>(
     try {
       return await withTimeout(
         getDocsFromServer(colOrQuery),
-        6000,
+        10000,
         'Firestore server collection query timed out'
       );
     } catch (err: any) {
@@ -359,7 +358,7 @@ export async function getCollectionDocsServerFirst<T = DocumentData>(
       }
     }
   }
-  return await withTimeout(getDocs(colOrQuery), 3500, 'Firestore local cache query timed out');
+  return await withTimeout(getDocs(colOrQuery), 5000, 'Firestore local cache query timed out');
 }
 
 /**
@@ -375,7 +374,7 @@ export async function getDocServerFirst<T = DocumentData>(
     try {
       return await withTimeout(
         getDocFromServer(docRef),
-        5000,
+        8000,
         'Firestore server document read timed out'
       );
     } catch (err: any) {
@@ -387,7 +386,7 @@ export async function getDocServerFirst<T = DocumentData>(
       }
     }
   }
-  return await withTimeout(getDoc(docRef), 3000, 'Firestore local cache document read timed out');
+  return await withTimeout(getDoc(docRef), 4000, 'Firestore local cache document read timed out');
 }
 
 export async function reconnectFirestoreNetwork(force: boolean = false): Promise<boolean> {
@@ -510,30 +509,9 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-export function isRestrictedShiftInChargeAccount(
-  email?: string | null,
-  displayName?: string | null
-): boolean {
+function inferDefaultWhRoleFromEmail(email?: string | null, displayName?: string | null): boolean {
   const normEmail = (email || '').trim().toLowerCase();
-  if (normEmail === PRIMARY_ADMIN_EMAIL.toLowerCase()) return false;
-  const emailLocal = normEmail.split('@')[0] || '';
-  const combined = `${emailLocal} ${(displayName || '').trim().toLowerCase()}`;
-  return (
-    combined.includes('eric') ||
-    combined.includes('trust') ||
-    combined.includes('innocent')
-  );
-}
-
-export function isRestrictedWHDispatchAccount(
-  email?: string | null,
-  displayName?: string | null
-): boolean {
-  const normEmail = (email || '').trim().toLowerCase();
-  if (!normEmail && !(displayName || '').trim()) return false;
-  if (normEmail === PRIMARY_ADMIN_EMAIL.toLowerCase()) return false;
-  if (normEmail === SYNC_SERVICE_EMAIL.toLowerCase()) return false;
-  if (isRestrictedShiftInChargeAccount(normEmail, displayName)) return false;
+  if (!normEmail) return false;
   const emailLocal = normEmail.split('@')[0] || '';
   const displayLower = (displayName || '').trim().toLowerCase();
   return (
@@ -547,147 +525,6 @@ export function isRestrictedWHDispatchAccount(
     emailLocal === 'amharandu' ||
     displayLower.includes('allan')
   );
-}
-
-function enforceShiftInChargeAccount(u: PlantUserAccount): {
-  account: PlantUserAccount;
-  changed: boolean;
-} {
-  if (!isRestrictedShiftInChargeAccount(u.email, u.displayName)) {
-    return { account: u, changed: false };
-  }
-  const strictPerms = getDefaultPermissionsForRole('Shift In Charge');
-  const needsUpdate =
-    u.role !== 'Shift In Charge' ||
-    !u.permissions ||
-    Object.keys(strictPerms).some(
-      (k) =>
-        u.permissions![k as keyof UserPermissions] !==
-        strictPerms[k as keyof UserPermissions]
-    );
-  if (!needsUpdate) {
-    return { account: u, changed: false };
-  }
-  return {
-    account: {
-      ...u,
-      role: 'Shift In Charge',
-      permissions: strictPerms,
-    },
-    changed: true,
-  };
-}
-
-function enforceWhDispatchAccount(u: PlantUserAccount): {
-  account: PlantUserAccount;
-  changed: boolean;
-} {
-  if (!isRestrictedWHDispatchAccount(u.email, u.displayName)) {
-    return { account: u, changed: false };
-  }
-  const isSuspended = u.status === 'suspended' || Boolean(u.revoked);
-  const strictPerms = isSuspended
-    ? { ...ZERO_PERMISSIONS }
-    : getDefaultPermissionsForRole('WH Personnel');
-  const needsUpdate =
-    u.role !== 'WH Personnel' ||
-    !u.permissions ||
-    Object.keys(ZERO_PERMISSIONS).some(
-      (k) =>
-        Boolean(u.permissions![k as keyof UserPermissions]) !==
-        Boolean(strictPerms[k as keyof UserPermissions])
-    );
-  if (!needsUpdate) {
-    return { account: u, changed: false };
-  }
-  return {
-    account: {
-      ...u,
-      role: 'WH Personnel',
-      permissions: strictPerms,
-    },
-    changed: true,
-  };
-}
-
-function enforceLockedAccountPolicies(u: PlantUserAccount): {
-  account: PlantUserAccount;
-  changed: boolean;
-} {
-  const sic = enforceShiftInChargeAccount(u);
-  const wh = enforceWhDispatchAccount(sic.account);
-  return {
-    account: wh.account,
-    changed: sic.changed || wh.changed,
-  };
-}
-
-function ensureRestrictedWhProfileRecord(
-  uid: string,
-  email: string,
-  displayName: string,
-  existing?: PlantUserAccount
-): void {
-  if (!isRestrictedWHDispatchAccount(email, displayName)) return;
-  if (existing && !enforceLockedAccountPolicies(existing).changed) return;
-  const nowMs = Date.now();
-  const strictPerms = getDefaultPermissionsForRole('WH Personnel');
-  const nextRecord: PlantUserAccount = existing
-    ? {
-        ...existing,
-        uid: existing.uid || uid,
-        email,
-        displayName: existing.displayName || displayName,
-        role: 'WH Personnel',
-        permissions: strictPerms,
-        upd: Math.max(nowMs, existing.upd || 0),
-        sy: 0,
-      }
-    : {
-        uid,
-        email,
-        displayName,
-        role: 'WH Personnel',
-        department: 'Warehouse & Dispatch',
-        permissions: strictPerms,
-        createdBy: 'System WH Policy',
-        createdAt: new Date(nowMs).toISOString(),
-        status: 'active',
-        upd: nowMs,
-        sy: 0,
-        revoked: false,
-      };
-
-  const local = getLocalPlantUsers();
-  const nextLocal = [
-    nextRecord,
-    ...local.filter(
-      (u) =>
-        u.uid !== nextRecord.uid &&
-        u.email.trim().toLowerCase() !== email.trim().toLowerCase()
-    ),
-  ];
-  saveLocalPlantUsers(nextLocal);
-  addPendingPlantUser(nextRecord.uid);
-  notifyCloudSyncBus('plant_users');
-
-  ensureFirebaseAuth()
-    .then(async () => {
-      const syncTs = Math.max(Date.now(), nowMs);
-      await setDocWithTimeout(
-        doc(db, 'plant_users', nextRecord.uid),
-        deepSanitizeForFirestore({ ...nextRecord, sy: syncTs }),
-        { merge: true }
-      );
-      removePendingPlantUser(nextRecord.uid);
-      saveLocalPlantUsers(
-        getLocalPlantUsers().map((u) =>
-          u.uid === nextRecord.uid ? { ...u, sy: syncTs } : u
-        )
-      );
-      notifyCloudSyncBus('plant_users');
-    })
-    .catch(() => {});
 }
 
 export async function loginWithGoogle() {
@@ -705,28 +542,17 @@ export async function loginWithGoogle() {
       }
       const resolvedDisplayName =
         matched?.displayName || cred.user.displayName || email.split('@')[0].toUpperCase();
-      const isRestrictedSIC = isRestrictedShiftInChargeAccount(email, resolvedDisplayName);
-      const isRestrictedWH = isRestrictedWHDispatchAccount(email, resolvedDisplayName);
-      if (isRestrictedWH) {
-        ensureRestrictedWhProfileRecord(cred.user.uid, email, resolvedDisplayName, matched);
-      }
       const role: PlantRole = isMaster
         ? 'Plant Administrator'
-        : isRestrictedSIC
-        ? 'Shift In Charge'
-        : isRestrictedWH
-        ? 'WH Personnel'
-        : matched?.role || 'Machine Operator';
+        : matched?.role ||
+          (inferDefaultWhRoleFromEmail(email, resolvedDisplayName) ? 'WH Personnel' : 'Machine Operator');
       resetFirestorePathAccessCache();
       setActiveSessionUser({
         uid: cred.user.uid,
         email,
         displayName: resolvedDisplayName,
         role,
-        isAdmin:
-          !isRestrictedSIC &&
-          !isRestrictedWH &&
-          (isMaster || role === 'Plant Administrator' || role === 'Production HOD'),
+        isAdmin: isMaster || role === 'Plant Administrator' || role === 'Production HOD',
         permissions: resolveUserPermissions(email, role, undefined, resolvedDisplayName),
       });
     }
@@ -777,14 +603,6 @@ export function resolveUserPermissions(
     return { ...ZERO_PERMISSIONS };
   }
 
-  if (isRestrictedShiftInChargeAccount(normEmail, displayName || matched?.displayName)) {
-    return getDefaultPermissionsForRole('Shift In Charge');
-  }
-
-  if (isRestrictedWHDispatchAccount(normEmail, displayName || matched?.displayName)) {
-    return getDefaultPermissionsForRole('WH Personnel');
-  }
-
   if (matched) {
     if (matched.permissions) {
       return { ...ZERO_PERMISSIONS, ...matched.permissions };
@@ -794,6 +612,9 @@ export function resolveUserPermissions(
 
   if (fallbackRole) {
     return getDefaultPermissionsForRole(fallbackRole as PlantRole);
+  }
+  if (inferDefaultWhRoleFromEmail(normEmail, displayName)) {
+    return getDefaultPermissionsForRole('WH Personnel');
   }
   return getDefaultPermissionsForRole('Machine Operator');
 }
@@ -876,23 +697,10 @@ export async function loginWithEmail(identifier: string, pass: string) {
       localMatch?.displayName ||
       cred.user.displayName ||
       (isMasterAdminCred ? 'PLANT ADMINISTRATOR' : normEmail.split('@')[0].toUpperCase());
-    const isRestrictedSIC = isRestrictedShiftInChargeAccount(normEmail, resolvedDisplayName);
-    const isRestrictedWH = isRestrictedWHDispatchAccount(normEmail, resolvedDisplayName);
-    if (isRestrictedWH) {
-      ensureRestrictedWhProfileRecord(
-        cred.user.uid,
-        cred.user.email || normEmail,
-        resolvedDisplayName,
-        localMatch
-      );
-    }
-    const resolvedRole = isMasterAdminCred
+    const resolvedRole: PlantRole = isMasterAdminCred
       ? 'Plant Administrator'
-      : isRestrictedSIC
-      ? 'Shift In Charge'
-      : isRestrictedWH
-      ? 'WH Personnel'
-      : localMatch?.role || 'Machine Operator';
+      : localMatch?.role ||
+        (inferDefaultWhRoleFromEmail(normEmail, resolvedDisplayName) ? 'WH Personnel' : 'Machine Operator');
     resetFirestorePathAccessCache();
     setActiveSessionUser({
       uid: cred.user.uid,
@@ -900,11 +708,9 @@ export async function loginWithEmail(identifier: string, pass: string) {
       displayName: resolvedDisplayName,
       role: resolvedRole,
       isAdmin:
-        !isRestrictedSIC &&
-        !isRestrictedWH &&
-        (isMasterAdminCred ||
-          resolvedRole === 'Plant Administrator' ||
-          resolvedRole === 'Production HOD'),
+        isMasterAdminCred ||
+        resolvedRole === 'Plant Administrator' ||
+        resolvedRole === 'Production HOD',
       permissions: resolveUserPermissions(normEmail, resolvedRole, undefined, resolvedDisplayName),
     });
     return cred;
@@ -1129,20 +935,19 @@ function ensureSystemMasterAdminInList(list: PlantUserAccount[]): PlantUserAccou
 function mergePlantUsers(local: PlantUserAccount[], remote: PlantUserAccount[]): PlantUserAccount[] {
   const map = new Map<string, PlantUserAccount>();
   local.forEach((u) => {
-    if (u?.uid) map.set(u.uid, enforceLockedAccountPolicies(u).account);
+    if (u?.uid) map.set(u.uid, u);
   });
   remote.forEach((r) => {
     if (!r?.uid) return;
-    const normR = enforceLockedAccountPolicies(r).account;
-    const existing = map.get(normR.uid);
+    const existing = map.get(r.uid);
     if (!existing) {
-      map.set(normR.uid, normR);
-    } else if (existing.status === 'suspended' && normR.status !== 'suspended') {
-      if ((normR.upd || 0) > (existing.upd || 0)) {
-        map.set(normR.uid, normR);
+      map.set(r.uid, r);
+    } else if (existing.status === 'suspended' && r.status !== 'suspended') {
+      if ((r.upd || 0) > (existing.upd || 0)) {
+        map.set(r.uid, r);
       }
-    } else if ((normR.upd || 0) >= (existing.upd || 0)) {
-      map.set(normR.uid, normR);
+    } else if ((r.upd || 0) >= (existing.upd || 0)) {
+      map.set(r.uid, r);
     }
   });
   return ensureSystemMasterAdminInList(Array.from(map.values()));
@@ -1175,13 +980,12 @@ export async function flushPendingPlantUsers(): Promise<number> {
       continue;
     }
     try {
-      const enforced = enforceLockedAccountPolicies(found).account;
-      const syncTs = Math.max(Date.now(), enforced.upd || 0);
-      const payload = deepSanitizeForFirestore({ ...enforced, sy: syncTs });
+      const syncTs = Math.max(Date.now(), found.upd || 0);
+      const payload = deepSanitizeForFirestore({ ...found, sy: syncTs });
       await setDocWithTimeout(doc(db, 'plant_users', uid), payload, { merge: true });
       removePendingPlantUser(uid);
       const latest = getLocalPlantUsers().map((u) =>
-        u.uid === uid ? { ...enforced, sy: syncTs } : u
+        u.uid === uid ? { ...found, sy: syncTs } : u
       );
       saveLocalPlantUsers(latest);
       flushed++;
@@ -1203,26 +1007,14 @@ export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
     await ensureFirebaseAuth().catch(() => false);
     const snap = await getCollectionDocsServerFirst(collection(db, 'plant_users'));
     const remote: PlantUserAccount[] = [];
-    const docsToPatch: PlantUserAccount[] = [];
     snap.forEach((d) => {
       const rawUser = d.data() as PlantUserAccount;
-      const { account, changed } = enforceLockedAccountPolicies({
+      remote.push({
         ...rawUser,
         uid: rawUser.uid || d.id,
         sy: rawUser.sy || rawUser.upd || 1,
       });
-      remote.push(account);
-      if (changed) docsToPatch.push(account);
     });
-    if (docsToPatch.length > 0) {
-      Promise.all(
-        docsToPatch.map((u) =>
-          setDocWithTimeout(doc(db, 'plant_users', u.uid), deepSanitizeForFirestore(u), {
-            merge: true,
-          }).catch(() => {})
-        )
-      ).catch(() => {});
-    }
     const local = getLocalPlantUsers();
     const mergedRaw = mergePlantUsers(local, remote);
     clearSyncedPlantUsersFromQueue(local, remote);
@@ -1232,14 +1024,12 @@ export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
   } catch (e) {
     console.warn('fetchPlantUsersDirectory note:', e);
   }
-  return getLocalPlantUsers().map((u) => enforceLockedAccountPolicies(u).account);
+  return getLocalPlantUsers();
 }
 
 function isAuthorizedAdminEmail(email: string): boolean {
   const norm = email.trim().toLowerCase();
   if (norm === PRIMARY_ADMIN_EMAIL.toLowerCase()) return true;
-  if (isRestrictedShiftInChargeAccount(norm)) return false;
-  if (isRestrictedWHDispatchAccount(norm)) return false;
   try {
     const raw = localStorage.getItem('dtadmins');
     const list: string[] = raw ? JSON.parse(raw) : [];
@@ -1249,8 +1039,6 @@ function isAuthorizedAdminEmail(email: string): boolean {
   if (
     staff &&
     staff.status !== 'suspended' &&
-    !isRestrictedShiftInChargeAccount(staff.email, staff.displayName) &&
-    !isRestrictedWHDispatchAccount(staff.email, staff.displayName) &&
     (staff.role === 'Plant Administrator' || staff.role === 'Production HOD')
   ) {
     return true;
@@ -1259,12 +1047,12 @@ function isAuthorizedAdminEmail(email: string): boolean {
 }
 
 /**
- * Real-time subscription to plant_users collection (auto-retry + periodic server reconcile + online wake)
+ * Real-time subscription to plant_users collection (auto-retry + safety reconcile + online wake)
  */
 export function subscribePlantUsers(
   onUpdate: (users: PlantUserAccount[]) => void
 ) {
-  const initial = getLocalPlantUsers().map((u) => enforceLockedAccountPolicies(u).account);
+  const initial = getLocalPlantUsers();
   onUpdate(initial);
 
   let unsub: (() => void) | null = null;
@@ -1282,7 +1070,7 @@ export function subscribePlantUsers(
 
   const unsubBus = subscribeCloudSyncBus((topic) => {
     if (!cancelled && (topic === 'plant_users' || topic === 'all')) {
-      onUpdate(getLocalPlantUsers().map((u) => enforceLockedAccountPolicies(u).account));
+      onUpdate(getLocalPlantUsers());
     }
   });
 
@@ -1300,26 +1088,14 @@ export function subscribePlantUsers(
         { includeMetadataChanges: true },
         (snapshot) => {
           const remote: PlantUserAccount[] = [];
-          const docsToPatch: PlantUserAccount[] = [];
           snapshot.forEach((d) => {
             const rawUser = d.data() as PlantUserAccount;
-            const { account, changed } = enforceLockedAccountPolicies({
+            remote.push({
               ...rawUser,
               uid: rawUser.uid || d.id,
               sy: rawUser.sy || rawUser.upd || 1,
             });
-            remote.push(account);
-            if (changed) docsToPatch.push(account);
           });
-          if (docsToPatch.length > 0) {
-            Promise.all(
-              docsToPatch.map((u) =>
-                setDocWithTimeout(doc(db, 'plant_users', u.uid), deepSanitizeForFirestore(u), {
-                  merge: true,
-                }).catch(() => {})
-              )
-            ).catch(() => {});
-          }
           const local = getLocalPlantUsers();
           const mergedRaw = mergePlantUsers(local, remote);
           const merged = !snapshot.metadata.fromCache
@@ -1363,7 +1139,7 @@ export function subscribePlantUsers(
   }
 
   pollInterval = setInterval(() => {
-    if (!cancelled) {
+    if (!cancelled && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
       flushPendingPlantUsers().catch(() => {});
       fetchPlantUsersDirectory()
         .then((users) => {
@@ -1371,7 +1147,7 @@ export function subscribePlantUsers(
         })
         .catch(() => {});
     }
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -1434,18 +1210,8 @@ export async function adminCreateOperatorAccount(
     }
 
     const resolvedDisplayName = displayName.trim() || normalizedEmail.split('@')[0].toUpperCase();
-    const isRestrictedSIC = isRestrictedShiftInChargeAccount(normalizedEmail, resolvedDisplayName);
-    const isRestrictedWH = isRestrictedWHDispatchAccount(normalizedEmail, resolvedDisplayName);
-    const effectiveRole: PlantRole = isRestrictedSIC
-      ? 'Shift In Charge'
-      : isRestrictedWH
-      ? 'WH Personnel'
-      : role;
-    const effectivePermissions: UserPermissions = isRestrictedSIC
-      ? getDefaultPermissionsForRole('Shift In Charge')
-      : isRestrictedWH
-      ? getDefaultPermissionsForRole('WH Personnel')
-      : permissions
+    const effectiveRole: PlantRole = role;
+    const effectivePermissions: UserPermissions = permissions
       ? { ...ZERO_PERMISSIONS, ...permissions }
       : getDefaultPermissionsForRole(effectiveRole);
 
@@ -1520,27 +1286,17 @@ export async function adminUpdateUserAccess(
   }
 
   const nextDisplayName = updates.displayName?.trim() || targetUser.displayName;
-  const isRestrictedSIC = isRestrictedShiftInChargeAccount(targetUser.email, nextDisplayName);
-  const isRestrictedWH = isRestrictedWHDispatchAccount(targetUser.email, nextDisplayName);
   const nextStatus = updates.status || targetUser.status || 'active';
   const nowMs = Date.now();
 
   const updatedAccount: PlantUserAccount = {
     ...targetUser,
     displayName: nextDisplayName,
-    role: isRestrictedSIC
-      ? 'Shift In Charge'
-      : isRestrictedWH
-      ? 'WH Personnel'
-      : updates.role,
+    role: updates.role,
     department: updates.department,
     permissions:
       nextStatus === 'suspended'
         ? { ...ZERO_PERMISSIONS }
-        : isRestrictedSIC
-        ? getDefaultPermissionsForRole('Shift In Charge')
-        : isRestrictedWH
-        ? getDefaultPermissionsForRole('WH Personnel')
         : { ...ZERO_PERMISSIONS, ...updates.permissions },
     status: nextStatus,
     revoked: nextStatus === 'suspended',

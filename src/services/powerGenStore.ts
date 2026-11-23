@@ -381,7 +381,7 @@ export function subscribePowerCutLogs(onUpdate: (logs: PowerCutLog[]) => void) {
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -776,7 +776,7 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;

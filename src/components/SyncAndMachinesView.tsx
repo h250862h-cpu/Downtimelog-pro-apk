@@ -35,8 +35,6 @@ import {
   deletePlantUserAccount,
   getActiveSessionUser,
   getLocalPlantUsers,
-  isRestrictedShiftInChargeAccount,
-  isRestrictedWHDispatchAccount,
   logoutUser,
   PRIMARY_ADMIN_EMAIL,
   subscribePlantUsers,
@@ -1155,7 +1153,6 @@ git push -u origin main`}
                       ['dieselExportExcel', 'Diesel Bowser: Export Fuel Excel (Admin Only)'],
                       ['specialOrdersAccess', 'Special Orders: Gum Boots & Factory/WH Stock'],
                       ['qualityTrialsAccess', 'Quality Trials: ISO/QMS/ASTM/SAZ Trials & PDF'],
-                      ['maintenanceJobCardsAccess', 'Maintenance Job Cards: Issue, Die/Mould & PDF'],
                       ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                     ] as [keyof UserPermissions, string][]
                   ).map(([permKey, permLabel]) => (
@@ -1359,7 +1356,6 @@ git push -u origin main`}
                   ['dieselExportExcel', 'Diesel Bowser: Export Fuel Excel (Admin Only)'],
                   ['specialOrdersAccess', 'Special Orders: Gum Boots & Factory/WH Stock'],
                   ['qualityTrialsAccess', 'Quality Trials: ISO/QMS/ASTM/SAZ Trials & PDF'],
-                  ['maintenanceJobCardsAccess', 'Maintenance Job Cards: Issue, Die/Mould & PDF'],
                   ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                 ] as [keyof UserPermissions, string][]
               ).map(([permKey, permLabel]) => (
@@ -1408,15 +1404,9 @@ git push -u origin main`}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
             {plantUsers.map((u) => {
               const isItemAdmin = u.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase();
-              const isLockedSIC = isRestrictedShiftInChargeAccount(u.email, u.displayName);
-              const isLockedWH = isRestrictedWHDispatchAccount(u.email, u.displayName);
               const isSuspended = u.status === 'suspended' || Boolean(u.revoked);
               const resolvedPerms: UserPermissions = isSuspended
                 ? { ...ZERO_PERMISSIONS }
-                : isLockedSIC
-                ? { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole('Shift In Charge') }
-                : isLockedWH
-                ? { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole('WH Personnel') }
                 : u.permissions
                 ? { ...ZERO_PERMISSIONS, ...u.permissions }
                 : { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole(u.role) };
@@ -1446,14 +1436,12 @@ git push -u origin main`}
                           className={`rounded px-1.5 py-0.5 text-[9px] font-black uppercase ${
                             isItemAdmin
                               ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                              : isLockedSIC
-                              ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                              : isLockedWH
+                              : u.role === 'WH Personnel'
                               ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                               : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                           }`}
                         >
-                          {isLockedSIC ? 'Shift In Charge' : isLockedWH ? 'WH Personnel' : u.role}
+                          {u.role}
                         </span>
                       </div>
                     </div>
@@ -1472,16 +1460,6 @@ git push -u origin main`}
                         {allowedCount}/{totalSections} sections
                       </span>
                     </div>
-                    {isLockedSIC && (
-                      <div className="mt-1.5 rounded bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[9px] font-bold text-amber-300">
-                        Locked: Machines &amp; Shift Dispatch Only
-                      </div>
-                    )}
-                    {isLockedWH && (
-                      <div className="mt-1.5 rounded bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[9px] font-bold text-emerald-300">
-                        Locked: WH Confirmation Dispatch Only
-                      </div>
-                    )}
                   </div>
 
                   {userIsAdmin && !isItemAdmin && (
@@ -1633,7 +1611,6 @@ git push -u origin main`}
               {pendingBreakdown.dispatch > 0 && <span>Dispatch: {pendingBreakdown.dispatch}</span>}
               {pendingBreakdown.specialOrders > 0 && <span>Special Orders: {pendingBreakdown.specialOrders}</span>}
               {pendingBreakdown.qualityTrials > 0 && <span>Trials: {pendingBreakdown.qualityTrials}</span>}
-              {pendingBreakdown.maintenanceJobCards > 0 && <span>Maint Job Cards: {pendingBreakdown.maintenanceJobCards}</span>}
               {pendingBreakdown.sop > 0 && <span>SOP Logs: {pendingBreakdown.sop}</span>}
               {pendingBreakdown.diesel > 0 && <span>Diesel: {pendingBreakdown.diesel}</span>}
               {pendingBreakdown.powerGen > 0 && <span>Power/Gen: {pendingBreakdown.powerGen}</span>}
@@ -1662,10 +1639,6 @@ git push -u origin main`}
               <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
                 <div className="text-slate-400">Quality Trials</div>
                 <div className="font-bold text-white">{cloudDiag.counts.trials}</div>
-              </div>
-              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
-                <div className="text-slate-400">Maint Job Cards</div>
-                <div className="font-bold text-white">{cloudDiag.counts.maintenanceJobCards}</div>
               </div>
               <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
                 <div className="text-slate-400">SOP Floor / QC</div>

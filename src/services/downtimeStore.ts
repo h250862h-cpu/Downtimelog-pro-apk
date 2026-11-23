@@ -14,8 +14,6 @@ import {
   getDocServerFirst,
   handleFirestoreError,
   isPermissionDeniedError,
-  isRestrictedShiftInChargeAccount,
-  isRestrictedWHDispatchAccount,
   notifyCloudSyncBus,
   OperationType,
   reconnectFirestoreNetwork,
@@ -60,9 +58,6 @@ export function isUserAdmin(email?: string | null): boolean {
     return false;
   }
   const norm = effectiveEmail.trim().toLowerCase();
-  if (isRestrictedShiftInChargeAccount(norm) || isRestrictedWHDispatchAccount(norm)) {
-    return false;
-  }
   const admins = getAdminEmails();
   if (admins.some((a) => a.toLowerCase() === norm)) {
     return true;
@@ -80,8 +75,6 @@ export function isUserAdmin(email?: string | null): boolean {
       if (
         matched &&
         matched.status !== 'suspended' &&
-        !isRestrictedShiftInChargeAccount(matched.email, matched.displayName) &&
-        !isRestrictedWHDispatchAccount(matched.email, matched.displayName) &&
         (matched.role === 'Plant Administrator' || matched.role === 'Production HOD')
       ) {
         return true;
@@ -906,8 +899,9 @@ export function subscribeFirebaseEntries(
 
   const flushInterval = setInterval(() => {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    if (getPendingSyncQueue().length === 0) return;
     flushPendingSyncQueue().catch(() => {});
-  }, 2500);
+  }, 15000);
 
   const pollInterval = setInterval(() => {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
@@ -918,7 +912,7 @@ export function subscribeFirebaseEntries(
         }
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   const handleOnline = () => {
     onSyncStatus('syncing', 'Network reconnected. Reconnecting to Firestore server...');

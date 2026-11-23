@@ -203,13 +203,6 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    match /maintenance_job_cards/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
-      allow delete: if false;
-    }
-
     match /attendance_batches/{docId} {
       allow get: if isSignedIn() && isValidDocId(docId);
       allow list: if isSignedIn();

@@ -291,7 +291,7 @@ export function getLocalSpecialOrderWhDispatches(): SpecialOrderWhDispatch[] {
 // CLOUD SAVE + FLUSH + POLL + SUBSCRIBE
 // ======================================================
 
-const FIRESTORE_WRITE_TIMEOUT_MS = 3500;
+const FIRESTORE_WRITE_TIMEOUT_MS = 12000;
 
 async function commitDocWithUiTimeout(
   colName: string,
@@ -731,7 +731,7 @@ export function subscribeSpecialOrders(onUpdate: (rows: SpecialOrder[]) => void)
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -840,7 +840,7 @@ export function subscribeSpecialOrderProductions(
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -949,7 +949,7 @@ export function subscribeSpecialOrderWhDispatches(
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;

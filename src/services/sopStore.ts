@@ -399,7 +399,7 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
           if (!listenerActive) attachListener();
         })
         .catch(() => {});
-    }, 6000);
+    }, 60000);
 
     return () => {
       cancelled = true;
@@ -646,7 +646,20 @@ export function getLinkedScrapAndWastageForDispatch(
   const productMatches = dateShiftMachineMatches.filter((p) =>
     productsLooselyMatch(entry.product, p.product)
   );
-  const chosen = productMatches.length > 0 ? productMatches : dateShiftMachineMatches;
+  // Only fall back to machine/shift match if the logs have no conflicting distinct product name
+  const hasNamedProducts = dateShiftMachineMatches.some(
+    (p) => (p.product || '').trim().length > 0
+  );
+  const chosen =
+    productMatches.length > 0
+      ? productMatches
+      : hasNamedProducts
+      ? []
+      : dateShiftMachineMatches;
+
+  if (chosen.length === 0) {
+    return { scrapKg: 0, wastageKg: 0, matchedCount: 0 };
+  }
 
   const scrapKg = chosen.reduce((acc, r) => acc + (Number(r.scrapKg) || 0), 0);
   const wastageKg = chosen.reduce((acc, r) => acc + (Number(r.wastageCdKg) || 0), 0);

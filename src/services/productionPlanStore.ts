@@ -472,7 +472,7 @@ export function subscribeUploadedBackgroundDispatches(
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -895,7 +895,7 @@ export function subscribeProductionPlans(onUpdate: (items: ProductionPlanItem[])
         if (!cancelled) onUpdate(merged);
       })
       .catch(() => {});
-  }, 6000);
+  }, 60000);
 
   return () => {
     cancelled = true;
@@ -1346,7 +1346,8 @@ export function buildUnifiedProductionReport(params: {
         ? qty * e.unitWeightKg
         : e.totalWeightKg || 0;
     const machNorm = normalizeMachineName(e.machine) || 'Unassigned';
-    const matchKey = `${e.date}|${e.shift}|${machNorm.toUpperCase()}`;
+    const prodNorm = (e.product || '').trim().toUpperCase();
+    const matchKey = `${e.date}|${e.shift}|${machNorm.toUpperCase()}|${prodNorm}`;
     const linked = getLinkedScrapAndWastageForDispatch(e, shiftProductionRows);
 
     let rowScrap = e.backgroundScrapKg || 0;
@@ -1405,13 +1406,13 @@ export function buildUnifiedProductionReport(params: {
   const totalScrapKg = r2(
     dispatchRows.reduce((s, r) => s + r.scrapKg, 0) +
       shiftProductionRows
-        .filter((p) => !usedProdLogKeys.has(`${p.date}|${p.shift}|${normalizeMachineName(p.machine).toUpperCase()}`))
+        .filter((p) => !usedProdLogKeys.has(`${p.date}|${p.shift}|${normalizeMachineName(p.machine).toUpperCase()}|${(p.product || '').trim().toUpperCase()}`))
         .reduce((s, p) => s + (p.scrapKg || 0), 0)
   );
   const totalWastageKg = r2(
     dispatchRows.reduce((s, r) => s + r.wastageKg, 0) +
       shiftProductionRows
-        .filter((p) => !usedProdLogKeys.has(`${p.date}|${p.shift}|${normalizeMachineName(p.machine).toUpperCase()}`))
+        .filter((p) => !usedProdLogKeys.has(`${p.date}|${p.shift}|${normalizeMachineName(p.machine).toUpperCase()}|${(p.product || '').trim().toUpperCase()}`))
         .reduce((s, p) => s + (p.wastageCdKg || 0), 0)
   );
 
