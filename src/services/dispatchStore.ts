@@ -12,6 +12,9 @@ import {
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
   isPermissionDeniedError,
+  notifyCloudSyncBus,
+  setDocWithTimeout,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import { DispatchEntry, normalizeMachineName, SopProductionRecord } from '../types';
 import { FACTORY_STAFF_ROSTER } from '../types/factoryStaff';
@@ -312,6 +315,7 @@ export async function saveDispatchEntryToFirebase(
   }
   saveStoredDispatches(nextLocal);
   addPendingDispatchId(updatedEntry.id);
+  notifyCloudSyncBus('dispatch');
 
   try {
     await ensureFirebaseAuth();
@@ -321,15 +325,7 @@ export async function saveDispatchEntryToFirebase(
       sy: syncTs,
     });
     const docRef = doc(db, DISPATCH_COLLECTION, updatedEntry.id);
-    const writePromise = setDoc(docRef, payload, { merge: true }).then(() => ({ ok: true as const }));
-    const timeoutPromise = new Promise<{ ok: false; error: string }>((resolve) =>
-      setTimeout(() => resolve({ ok: false, error: 'Saved locally — queued for cloud sync' }), 5000)
-    );
-    const race = await Promise.race([writePromise, timeoutPromise]);
-    if (!race.ok) {
-      lastDispatchSyncError = race.error;
-      return race;
-    }
+    await setDocWithTimeout(docRef, payload, { merge: true }, 4500);
 
     removePendingDispatchId(updatedEntry.id);
     lastDispatchSyncError = null;
@@ -339,6 +335,7 @@ export async function saveDispatchEntryToFirebase(
       x.id === updatedEntry.id ? { ...x, sy: syncTs } : x
     );
     saveStoredDispatches(latest);
+    notifyCloudSyncBus('dispatch');
 
     return { ok: true };
   } catch (err: any) {
@@ -435,6 +432,12 @@ export function subscribeDispatchEntries(
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let cancelled = false;
 
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'dispatch' || topic === 'all')) {
+      onUpdate(getStoredDispatches());
+    }
+  });
+
   const attachSnapshot = async () => {
     if (cancelled) return;
     await ensureFirebaseAuth();
@@ -442,6 +445,7 @@ export function subscribeDispatchEntries(
 
     try {
       const colRef = collection(db, DISPATCH_COLLECTION);
+      unsub();
       unsub = onSnapshot(
         colRef,
         { includeMetadataChanges: true },
@@ -474,7 +478,7 @@ export function subscribeDispatchEntries(
             retryTimer = setTimeout(() => {
               retryTimer = null;
               if (!cancelled) attachSnapshot().catch(() => {});
-            }, 12000);
+            }, 3000);
           }
         }
       );
@@ -487,20 +491,44 @@ export function subscribeDispatchEntries(
   attachSnapshot();
 
   pollDispatchEntries()
-    .then((merged) => onUpdate(merged))
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
     .catch(() => {});
 
-  pollTimer = setInterval(() => {
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingDispatches().catch(() => {});
     pollDispatchEntries()
-      .then((merged) => onUpdate(merged))
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
       .catch(() => {});
-  }, 15000);
+    attachSnapshot().catch(() => {});
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    flushPendingDispatches().catch(() => {});
+    pollDispatchEntries()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     unsub();
     if (pollTimer) clearInterval(pollTimer);
     if (retryTimer) clearTimeout(retryTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
   };
 }
 

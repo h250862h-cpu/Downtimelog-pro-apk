@@ -239,9 +239,103 @@ export async function canAccessFirestorePath(
   return !isFirestorePathBlockedByRules(firestorePath);
 }
 
+export type CloudSyncTopic =
+  | 'downtime'
+  | 'dispatch'
+  | 'maintenance'
+  | 'sop'
+  | 'special_orders'
+  | 'quality_trials'
+  | 'power_gen'
+  | 'diesel'
+  | 'production_plans'
+  | 'attendance'
+  | 'plant_users'
+  | 'all';
+
+const realtimeBusListeners = new Set<(topic: CloudSyncTopic) => void>();
+let realtimeBusChannel: BroadcastChannel | null = null;
+
+function getRealtimeBusChannel(): BroadcastChannel | null {
+  if (realtimeBusChannel) return realtimeBusChannel;
+  if (typeof BroadcastChannel === 'undefined') return null;
+  try {
+    realtimeBusChannel = new BroadcastChannel('lgplast_realtime_bus_v1');
+    realtimeBusChannel.onmessage = (event) => {
+      const topic = (event?.data?.topic || 'all') as CloudSyncTopic;
+      realtimeBusListeners.forEach((cb) => {
+        try {
+          cb(topic);
+        } catch {}
+      });
+    };
+  } catch {
+    realtimeBusChannel = null;
+  }
+  return realtimeBusChannel;
+}
+
+/**
+ * Notifies in-app listeners and other open tabs/windows on the same device immediately (0ms delay)
+ * whenever any store records/updates data or clears pending items.
+ */
+export function notifyCloudSyncBus(topic: CloudSyncTopic = 'all') {
+  realtimeBusListeners.forEach((cb) => {
+    try {
+      cb(topic);
+    } catch {}
+  });
+  try {
+    getRealtimeBusChannel()?.postMessage({ topic, ts: Date.now() });
+  } catch {}
+}
+
+export function subscribeCloudSyncBus(cb: (topic: CloudSyncTopic) => void): () => void {
+  getRealtimeBusChannel();
+  realtimeBusListeners.add(cb);
+  return () => {
+    realtimeBusListeners.delete(cb);
+  };
+}
+
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string = 'Request timed out'
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+export async function setDocWithTimeout(
+  docRef: DocumentReference<DocumentData>,
+  data: Record<string, any>,
+  options: { merge?: boolean } = { merge: true },
+  timeoutMs: number = 4500
+): Promise<void> {
+  await withTimeout(
+    setDoc(docRef, data, options),
+    timeoutMs,
+    'Saved locally — queued for cloud sync'
+  );
+}
+
 /**
  * Server-first collection read so manual sync & polling always pull
- * updates created by other phones/devices when online.
+ * updates created by other phones/devices when online (bounded by timeout).
  */
 export async function getCollectionDocsServerFirst<T = DocumentData>(
   colOrQuery: CollectionReference<T> | Query<T>
@@ -251,7 +345,11 @@ export async function getCollectionDocsServerFirst<T = DocumentData>(
     await ensureFirebaseAuth().catch(() => false);
     const refPath = (colOrQuery as any)?.path;
     try {
-      return await getDocsFromServer(colOrQuery);
+      return await withTimeout(
+        getDocsFromServer(colOrQuery),
+        6000,
+        'Firestore server collection query timed out'
+      );
     } catch (err: any) {
       if (isPermissionDeniedError(err)) {
         if (typeof refPath === 'string') {
@@ -261,7 +359,7 @@ export async function getCollectionDocsServerFirst<T = DocumentData>(
       }
     }
   }
-  return await getDocs(colOrQuery);
+  return await withTimeout(getDocs(colOrQuery), 3500, 'Firestore local cache query timed out');
 }
 
 /**
@@ -275,7 +373,11 @@ export async function getDocServerFirst<T = DocumentData>(
     await ensureFirebaseAuth().catch(() => false);
     const refPath = (docRef as any)?.path;
     try {
-      return await getDocFromServer(docRef);
+      return await withTimeout(
+        getDocFromServer(docRef),
+        5000,
+        'Firestore server document read timed out'
+      );
     } catch (err: any) {
       if (isPermissionDeniedError(err)) {
         if (typeof refPath === 'string') {
@@ -285,7 +387,7 @@ export async function getDocServerFirst<T = DocumentData>(
       }
     }
   }
-  return await getDoc(docRef);
+  return await withTimeout(getDoc(docRef), 3000, 'Firestore local cache document read timed out');
 }
 
 export async function reconnectFirestoreNetwork(force: boolean = false): Promise<boolean> {
@@ -306,7 +408,11 @@ export async function probeFirestoreCloudHealth(): Promise<{
   const started = Date.now();
   try {
     await ensureFirebaseAuth().catch(() => false);
-    await getDocFromServer(doc(db, 'app_config', 'machinery'));
+    await withTimeout(
+      getDocFromServer(doc(db, 'app_config', 'machinery')),
+      4500,
+      'Cloud health probe timed out'
+    );
     return {
       ok: true,
       latencyMs: Math.max(1, Date.now() - started),
@@ -328,16 +434,24 @@ export async function testConnection() {
   }
   try {
     await ensureFirebaseAuth().catch(() => false);
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await withTimeout(
+      getDocFromServer(doc(db, 'test', 'connection')),
+      3500,
+      'Initial connection check timed out'
+    );
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await new Promise((resolve) => setTimeout(resolve, 600));
       try {
         await reconnectFirestoreNetwork(true);
-        await getDocFromServer(doc(db, 'test', 'connection'));
+        await withTimeout(
+          getDocFromServer(doc(db, 'test', 'connection')),
+          3500,
+          'Retry connection check timed out'
+        );
         return;
       } catch (retryError) {
         if (retryError instanceof Error && retryError.message.includes('the client is offline')) {
@@ -411,6 +525,30 @@ export function isRestrictedShiftInChargeAccount(
   );
 }
 
+export function isRestrictedWHDispatchAccount(
+  email?: string | null,
+  displayName?: string | null
+): boolean {
+  const normEmail = (email || '').trim().toLowerCase();
+  if (!normEmail && !(displayName || '').trim()) return false;
+  if (normEmail === PRIMARY_ADMIN_EMAIL.toLowerCase()) return false;
+  if (normEmail === SYNC_SERVICE_EMAIL.toLowerCase()) return false;
+  if (isRestrictedShiftInChargeAccount(normEmail, displayName)) return false;
+  const emailLocal = normEmail.split('@')[0] || '';
+  const displayLower = (displayName || '').trim().toLowerCase();
+  return (
+    normEmail === 'clerk@plant.com' ||
+    emailLocal === 'clerk' ||
+    emailLocal.startsWith('clerk.') ||
+    emailLocal.startsWith('whclerk') ||
+    emailLocal.startsWith('wh_clerk') ||
+    emailLocal === 'allan' ||
+    emailLocal.startsWith('allan') ||
+    emailLocal === 'amharandu' ||
+    displayLower.includes('allan')
+  );
+}
+
 function enforceShiftInChargeAccount(u: PlantUserAccount): {
   account: PlantUserAccount;
   changed: boolean;
@@ -440,6 +578,118 @@ function enforceShiftInChargeAccount(u: PlantUserAccount): {
   };
 }
 
+function enforceWhDispatchAccount(u: PlantUserAccount): {
+  account: PlantUserAccount;
+  changed: boolean;
+} {
+  if (!isRestrictedWHDispatchAccount(u.email, u.displayName)) {
+    return { account: u, changed: false };
+  }
+  const isSuspended = u.status === 'suspended' || Boolean(u.revoked);
+  const strictPerms = isSuspended
+    ? { ...ZERO_PERMISSIONS }
+    : getDefaultPermissionsForRole('WH Personnel');
+  const needsUpdate =
+    u.role !== 'WH Personnel' ||
+    !u.permissions ||
+    Object.keys(ZERO_PERMISSIONS).some(
+      (k) =>
+        Boolean(u.permissions![k as keyof UserPermissions]) !==
+        Boolean(strictPerms[k as keyof UserPermissions])
+    );
+  if (!needsUpdate) {
+    return { account: u, changed: false };
+  }
+  return {
+    account: {
+      ...u,
+      role: 'WH Personnel',
+      permissions: strictPerms,
+    },
+    changed: true,
+  };
+}
+
+function enforceLockedAccountPolicies(u: PlantUserAccount): {
+  account: PlantUserAccount;
+  changed: boolean;
+} {
+  const sic = enforceShiftInChargeAccount(u);
+  const wh = enforceWhDispatchAccount(sic.account);
+  return {
+    account: wh.account,
+    changed: sic.changed || wh.changed,
+  };
+}
+
+function ensureRestrictedWhProfileRecord(
+  uid: string,
+  email: string,
+  displayName: string,
+  existing?: PlantUserAccount
+): void {
+  if (!isRestrictedWHDispatchAccount(email, displayName)) return;
+  if (existing && !enforceLockedAccountPolicies(existing).changed) return;
+  const nowMs = Date.now();
+  const strictPerms = getDefaultPermissionsForRole('WH Personnel');
+  const nextRecord: PlantUserAccount = existing
+    ? {
+        ...existing,
+        uid: existing.uid || uid,
+        email,
+        displayName: existing.displayName || displayName,
+        role: 'WH Personnel',
+        permissions: strictPerms,
+        upd: Math.max(nowMs, existing.upd || 0),
+        sy: 0,
+      }
+    : {
+        uid,
+        email,
+        displayName,
+        role: 'WH Personnel',
+        department: 'Warehouse & Dispatch',
+        permissions: strictPerms,
+        createdBy: 'System WH Policy',
+        createdAt: new Date(nowMs).toISOString(),
+        status: 'active',
+        upd: nowMs,
+        sy: 0,
+        revoked: false,
+      };
+
+  const local = getLocalPlantUsers();
+  const nextLocal = [
+    nextRecord,
+    ...local.filter(
+      (u) =>
+        u.uid !== nextRecord.uid &&
+        u.email.trim().toLowerCase() !== email.trim().toLowerCase()
+    ),
+  ];
+  saveLocalPlantUsers(nextLocal);
+  addPendingPlantUser(nextRecord.uid);
+  notifyCloudSyncBus('plant_users');
+
+  ensureFirebaseAuth()
+    .then(async () => {
+      const syncTs = Math.max(Date.now(), nowMs);
+      await setDocWithTimeout(
+        doc(db, 'plant_users', nextRecord.uid),
+        deepSanitizeForFirestore({ ...nextRecord, sy: syncTs }),
+        { merge: true }
+      );
+      removePendingPlantUser(nextRecord.uid);
+      saveLocalPlantUsers(
+        getLocalPlantUsers().map((u) =>
+          u.uid === nextRecord.uid ? { ...u, sy: syncTs } : u
+        )
+      );
+      notifyCloudSyncBus('plant_users');
+    })
+    .catch(() => {});
+}
+
 export async function loginWithGoogle() {
   try {
     const cred = await signInWithPopup(auth, googleProvider);
@@ -456,10 +706,16 @@ export async function loginWithGoogle() {
       const resolvedDisplayName =
         matched?.displayName || cred.user.displayName || email.split('@')[0].toUpperCase();
       const isRestrictedSIC = isRestrictedShiftInChargeAccount(email, resolvedDisplayName);
+      const isRestrictedWH = isRestrictedWHDispatchAccount(email, resolvedDisplayName);
+      if (isRestrictedWH) {
+        ensureRestrictedWhProfileRecord(cred.user.uid, email, resolvedDisplayName, matched);
+      }
       const role: PlantRole = isMaster
         ? 'Plant Administrator'
         : isRestrictedSIC
         ? 'Shift In Charge'
+        : isRestrictedWH
+        ? 'WH Personnel'
         : matched?.role || 'Machine Operator';
       resetFirestorePathAccessCache();
       setActiveSessionUser({
@@ -469,6 +725,7 @@ export async function loginWithGoogle() {
         role,
         isAdmin:
           !isRestrictedSIC &&
+          !isRestrictedWH &&
           (isMaster || role === 'Plant Administrator' || role === 'Production HOD'),
         permissions: resolveUserPermissions(email, role, undefined, resolvedDisplayName),
       });
@@ -524,12 +781,15 @@ export function resolveUserPermissions(
     return getDefaultPermissionsForRole('Shift In Charge');
   }
 
+  if (isRestrictedWHDispatchAccount(normEmail, displayName || matched?.displayName)) {
+    return getDefaultPermissionsForRole('WH Personnel');
+  }
+
   if (matched) {
-    const defaults = getDefaultPermissionsForRole(matched.role);
     if (matched.permissions) {
-      return { ...ZERO_PERMISSIONS, ...defaults, ...matched.permissions };
+      return { ...ZERO_PERMISSIONS, ...matched.permissions };
     }
-    return defaults;
+    return getDefaultPermissionsForRole(matched.role);
   }
 
   if (fallbackRole) {
@@ -617,10 +877,21 @@ export async function loginWithEmail(identifier: string, pass: string) {
       cred.user.displayName ||
       (isMasterAdminCred ? 'PLANT ADMINISTRATOR' : normEmail.split('@')[0].toUpperCase());
     const isRestrictedSIC = isRestrictedShiftInChargeAccount(normEmail, resolvedDisplayName);
+    const isRestrictedWH = isRestrictedWHDispatchAccount(normEmail, resolvedDisplayName);
+    if (isRestrictedWH) {
+      ensureRestrictedWhProfileRecord(
+        cred.user.uid,
+        cred.user.email || normEmail,
+        resolvedDisplayName,
+        localMatch
+      );
+    }
     const resolvedRole = isMasterAdminCred
       ? 'Plant Administrator'
       : isRestrictedSIC
       ? 'Shift In Charge'
+      : isRestrictedWH
+      ? 'WH Personnel'
       : localMatch?.role || 'Machine Operator';
     resetFirestorePathAccessCache();
     setActiveSessionUser({
@@ -630,6 +901,7 @@ export async function loginWithEmail(identifier: string, pass: string) {
       role: resolvedRole,
       isAdmin:
         !isRestrictedSIC &&
+        !isRestrictedWH &&
         (isMasterAdminCred ||
           resolvedRole === 'Plant Administrator' ||
           resolvedRole === 'Production HOD'),
@@ -857,11 +1129,11 @@ function ensureSystemMasterAdminInList(list: PlantUserAccount[]): PlantUserAccou
 function mergePlantUsers(local: PlantUserAccount[], remote: PlantUserAccount[]): PlantUserAccount[] {
   const map = new Map<string, PlantUserAccount>();
   local.forEach((u) => {
-    if (u?.uid) map.set(u.uid, enforceShiftInChargeAccount(u).account);
+    if (u?.uid) map.set(u.uid, enforceLockedAccountPolicies(u).account);
   });
   remote.forEach((r) => {
     if (!r?.uid) return;
-    const normR = enforceShiftInChargeAccount(r).account;
+    const normR = enforceLockedAccountPolicies(r).account;
     const existing = map.get(normR.uid);
     if (!existing) {
       map.set(normR.uid, normR);
@@ -903,12 +1175,13 @@ export async function flushPendingPlantUsers(): Promise<number> {
       continue;
     }
     try {
-      const syncTs = Math.max(Date.now(), found.upd || 0);
-      const payload = deepSanitizeForFirestore({ ...found, sy: syncTs });
-      await setDoc(doc(db, 'plant_users', uid), payload, { merge: true });
+      const enforced = enforceLockedAccountPolicies(found).account;
+      const syncTs = Math.max(Date.now(), enforced.upd || 0);
+      const payload = deepSanitizeForFirestore({ ...enforced, sy: syncTs });
+      await setDocWithTimeout(doc(db, 'plant_users', uid), payload, { merge: true });
       removePendingPlantUser(uid);
       const latest = getLocalPlantUsers().map((u) =>
-        u.uid === uid ? { ...u, sy: syncTs } : u
+        u.uid === uid ? { ...enforced, sy: syncTs } : u
       );
       saveLocalPlantUsers(latest);
       flushed++;
@@ -933,7 +1206,7 @@ export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
     const docsToPatch: PlantUserAccount[] = [];
     snap.forEach((d) => {
       const rawUser = d.data() as PlantUserAccount;
-      const { account, changed } = enforceShiftInChargeAccount({
+      const { account, changed } = enforceLockedAccountPolicies({
         ...rawUser,
         uid: rawUser.uid || d.id,
         sy: rawUser.sy || rawUser.upd || 1,
@@ -944,9 +1217,9 @@ export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
     if (docsToPatch.length > 0) {
       Promise.all(
         docsToPatch.map((u) =>
-          setDoc(doc(db, 'plant_users', u.uid), deepSanitizeForFirestore(u), { merge: true }).catch(
-            () => {}
-          )
+          setDocWithTimeout(doc(db, 'plant_users', u.uid), deepSanitizeForFirestore(u), {
+            merge: true,
+          }).catch(() => {})
         )
       ).catch(() => {});
     }
@@ -959,13 +1232,14 @@ export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
   } catch (e) {
     console.warn('fetchPlantUsersDirectory note:', e);
   }
-  return getLocalPlantUsers();
+  return getLocalPlantUsers().map((u) => enforceLockedAccountPolicies(u).account);
 }
 
 function isAuthorizedAdminEmail(email: string): boolean {
   const norm = email.trim().toLowerCase();
   if (norm === PRIMARY_ADMIN_EMAIL.toLowerCase()) return true;
   if (isRestrictedShiftInChargeAccount(norm)) return false;
+  if (isRestrictedWHDispatchAccount(norm)) return false;
   try {
     const raw = localStorage.getItem('dtadmins');
     const list: string[] = raw ? JSON.parse(raw) : [];
@@ -976,6 +1250,7 @@ function isAuthorizedAdminEmail(email: string): boolean {
     staff &&
     staff.status !== 'suspended' &&
     !isRestrictedShiftInChargeAccount(staff.email, staff.displayName) &&
+    !isRestrictedWHDispatchAccount(staff.email, staff.displayName) &&
     (staff.role === 'Plant Administrator' || staff.role === 'Production HOD')
   ) {
     return true;
@@ -984,12 +1259,12 @@ function isAuthorizedAdminEmail(email: string): boolean {
 }
 
 /**
- * Real-time subscription to plant_users collection (auto-retry + periodic server reconcile)
+ * Real-time subscription to plant_users collection (auto-retry + periodic server reconcile + online wake)
  */
 export function subscribePlantUsers(
   onUpdate: (users: PlantUserAccount[]) => void
 ) {
-  const initial = getLocalPlantUsers().map((u) => enforceShiftInChargeAccount(u).account);
+  const initial = getLocalPlantUsers().map((u) => enforceLockedAccountPolicies(u).account);
   onUpdate(initial);
 
   let unsub: (() => void) | null = null;
@@ -1002,8 +1277,14 @@ export function subscribePlantUsers(
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'plant_users' || topic === 'all')) {
+      onUpdate(getLocalPlantUsers().map((u) => enforceLockedAccountPolicies(u).account));
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth().catch(() => false);
@@ -1022,7 +1303,7 @@ export function subscribePlantUsers(
           const docsToPatch: PlantUserAccount[] = [];
           snapshot.forEach((d) => {
             const rawUser = d.data() as PlantUserAccount;
-            const { account, changed } = enforceShiftInChargeAccount({
+            const { account, changed } = enforceLockedAccountPolicies({
               ...rawUser,
               uid: rawUser.uid || d.id,
               sy: rawUser.sy || rawUser.upd || 1,
@@ -1033,7 +1314,7 @@ export function subscribePlantUsers(
           if (docsToPatch.length > 0) {
             Promise.all(
               docsToPatch.map((u) =>
-                setDoc(doc(db, 'plant_users', u.uid), deepSanitizeForFirestore(u), {
+                setDocWithTimeout(doc(db, 'plant_users', u.uid), deepSanitizeForFirestore(u), {
                   merge: true,
                 }).catch(() => {})
               )
@@ -1067,6 +1348,20 @@ export function subscribePlantUsers(
 
   start();
 
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingPlantUsers().catch(() => {});
+    fetchPlantUsersDirectory()
+      .then((users) => {
+        if (!cancelled) onUpdate(users);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
   pollInterval = setInterval(() => {
     if (!cancelled) {
       flushPendingPlantUsers().catch(() => {});
@@ -1076,12 +1371,16 @@ export function subscribePlantUsers(
         })
         .catch(() => {});
     }
-  }, 15000);
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
     if (pollInterval) clearInterval(pollInterval);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     if (unsub) unsub();
   };
 }
@@ -1136,9 +1435,16 @@ export async function adminCreateOperatorAccount(
 
     const resolvedDisplayName = displayName.trim() || normalizedEmail.split('@')[0].toUpperCase();
     const isRestrictedSIC = isRestrictedShiftInChargeAccount(normalizedEmail, resolvedDisplayName);
-    const effectiveRole: PlantRole = isRestrictedSIC ? 'Shift In Charge' : role;
+    const isRestrictedWH = isRestrictedWHDispatchAccount(normalizedEmail, resolvedDisplayName);
+    const effectiveRole: PlantRole = isRestrictedSIC
+      ? 'Shift In Charge'
+      : isRestrictedWH
+      ? 'WH Personnel'
+      : role;
     const effectivePermissions: UserPermissions = isRestrictedSIC
       ? getDefaultPermissionsForRole('Shift In Charge')
+      : isRestrictedWH
+      ? getDefaultPermissionsForRole('WH Personnel')
       : permissions
       ? { ...ZERO_PERMISSIONS, ...permissions }
       : getDefaultPermissionsForRole(effectiveRole);
@@ -1164,18 +1470,20 @@ export async function adminCreateOperatorAccount(
     const updatedLocal = [newAccount, ...stored.filter((u) => u.uid !== newAccount.uid)];
     saveLocalPlantUsers(updatedLocal);
     addPendingPlantUser(newAccount.uid);
+    notifyCloudSyncBus('plant_users');
 
     try {
       await ensureFirebaseAuth();
       const syncTs = Math.max(Date.now(), nowMs);
       const userDocRef = doc(db, 'plant_users', createdUid);
-      await setDoc(userDocRef, deepSanitizeForFirestore({ ...newAccount, sy: syncTs }), {
+      await setDocWithTimeout(userDocRef, deepSanitizeForFirestore({ ...newAccount, sy: syncTs }), {
         merge: true,
       });
       removePendingPlantUser(createdUid);
       saveLocalPlantUsers(
         getLocalPlantUsers().map((u) => (u.uid === createdUid ? { ...u, sy: syncTs } : u))
       );
+      notifyCloudSyncBus('plant_users');
     } catch (dbErr) {
       console.warn('Could not write to plant_users Firestore collection; queued in outbox:', dbErr);
     }
@@ -1213,19 +1521,26 @@ export async function adminUpdateUserAccess(
 
   const nextDisplayName = updates.displayName?.trim() || targetUser.displayName;
   const isRestrictedSIC = isRestrictedShiftInChargeAccount(targetUser.email, nextDisplayName);
+  const isRestrictedWH = isRestrictedWHDispatchAccount(targetUser.email, nextDisplayName);
   const nextStatus = updates.status || targetUser.status || 'active';
   const nowMs = Date.now();
 
   const updatedAccount: PlantUserAccount = {
     ...targetUser,
     displayName: nextDisplayName,
-    role: isRestrictedSIC ? 'Shift In Charge' : updates.role,
+    role: isRestrictedSIC
+      ? 'Shift In Charge'
+      : isRestrictedWH
+      ? 'WH Personnel'
+      : updates.role,
     department: updates.department,
     permissions:
       nextStatus === 'suspended'
         ? { ...ZERO_PERMISSIONS }
         : isRestrictedSIC
         ? getDefaultPermissionsForRole('Shift In Charge')
+        : isRestrictedWH
+        ? getDefaultPermissionsForRole('WH Personnel')
         : { ...ZERO_PERMISSIONS, ...updates.permissions },
     status: nextStatus,
     revoked: nextStatus === 'suspended',
@@ -1246,18 +1561,22 @@ export async function adminUpdateUserAccess(
   }
   saveLocalPlantUsers(stored);
   addPendingPlantUser(updatedAccount.uid);
+  notifyCloudSyncBus('plant_users');
 
   try {
     await ensureFirebaseAuth();
     const syncTs = Math.max(Date.now(), nowMs);
     const userDocRef = doc(db, 'plant_users', updatedAccount.uid);
-    await setDoc(userDocRef, deepSanitizeForFirestore({ ...updatedAccount, sy: syncTs }), {
-      merge: true,
-    });
+    await setDocWithTimeout(
+      userDocRef,
+      deepSanitizeForFirestore({ ...updatedAccount, sy: syncTs }),
+      { merge: true }
+    );
     removePendingPlantUser(updatedAccount.uid);
     saveLocalPlantUsers(
       getLocalPlantUsers().map((u) => (u.uid === updatedAccount.uid ? { ...u, sy: syncTs } : u))
     );
+    notifyCloudSyncBus('plant_users');
   } catch (dbErr) {
     console.warn('Failed updating plant_users access in Firestore; queued in outbox:', dbErr);
   }
@@ -1307,18 +1626,20 @@ export async function deletePlantUserAccount(uid: string) {
     : [...stored, revokedRecord];
   saveLocalPlantUsers(nextLocal);
   addPendingPlantUser(uid);
+  notifyCloudSyncBus('plant_users');
 
   try {
     await ensureFirebaseAuth();
     const syncTs = Math.max(Date.now(), nowMs);
     const docRef = doc(db, 'plant_users', uid);
-    await setDoc(docRef, deepSanitizeForFirestore({ ...revokedRecord, sy: syncTs }), {
+    await setDocWithTimeout(docRef, deepSanitizeForFirestore({ ...revokedRecord, sy: syncTs }), {
       merge: true,
     });
     removePendingPlantUser(uid);
     saveLocalPlantUsers(
       getLocalPlantUsers().map((u) => (u.uid === uid ? { ...u, sy: syncTs } : u))
     );
+    notifyCloudSyncBus('plant_users');
   } catch (e) {
     console.warn('Deferred plant_users revoke sync in outbox:', e);
   }

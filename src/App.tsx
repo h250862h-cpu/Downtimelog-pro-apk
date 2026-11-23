@@ -106,12 +106,15 @@ import {
   getActiveSessionUser,
   getLocalPlantUsers,
   isRestrictedShiftInChargeAccount,
+  isRestrictedWHDispatchAccount,
   logoutUser,
   PRIMARY_ADMIN_EMAIL,
   resolveUserPermissions,
   setActiveSessionUser,
+  subscribeCloudSyncBus,
   subscribePlantUsers,
   testConnection,
+  withTimeout,
 } from './firebase';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { usePWAInstall } from './hooks/usePWAInstall';
@@ -519,11 +522,8 @@ export default function App() {
 
       if (!mounted) return;
       if (session || auth.currentUser) {
-        await testConnection().catch(() => {});
-        if (mounted) {
-          repairAllPendingSyncQueues();
-          setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
-        }
+        // Non-blocking connectivity check so all real-time onSnapshot streams attach immediately
+        testConnection().catch(() => {});
       }
       if (mounted) {
         repairAllPendingSyncQueues();
@@ -669,6 +669,7 @@ export default function App() {
     // 24/7 Always-Live Keep-Alive Heartbeat & Server-First Cross-Device Reconciliation
     let keepAliveInFlight = false;
     let lastKeepAliveAt = 0;
+    let pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
     const runLiveKeepAlive = async () => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) return;
@@ -676,7 +677,7 @@ export default function App() {
       keepAliveInFlight = true;
       lastKeepAliveAt = Date.now();
       try {
-        const res = await runFullCloudSyncNow();
+        const res = await withTimeout(runFullCloudSyncNow(), 14000, 'Sync cycle timed out');
         setEntries(res.data.entries);
         setMachines(res.data.machines);
         setDispatchEntries(res.data.dispatches);
@@ -727,18 +728,40 @@ export default function App() {
       runLiveKeepAlive();
     }, 50);
 
-    const handleVisibilityOrOnline = () => {
-      if (document.visibilityState === 'visible' || navigator.onLine) {
-        if (Date.now() - lastKeepAliveAt > 10000) {
+    // Zero-delay local save / cross-tab bus listener triggers immediate count refresh & fast cloud flush
+    const unsubSyncBus = subscribeCloudSyncBus(() => {
+      setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+      if (pendingFlushTimer) clearTimeout(pendingFlushTimer);
+      pendingFlushTimer = setTimeout(() => {
+        runLiveKeepAlive();
+      }, 350);
+    });
+
+    const handleOnlineNow = () => {
+      runLiveKeepAlive();
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        if (Date.now() - lastKeepAliveAt > 800) {
           runLiveKeepAlive();
         }
       }
     };
 
-    const keepAliveTimer = setInterval(runLiveKeepAlive, 15000);
-    document.addEventListener('visibilitychange', handleVisibilityOrOnline);
-    window.addEventListener('online', handleVisibilityOrOnline);
-    window.addEventListener('focus', handleVisibilityOrOnline);
+    const handlePageHide = () => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+      if (getUnifiedPendingQueueBreakdown().totalPending > 0) {
+        runLiveKeepAlive();
+      }
+    };
+
+    const keepAliveTimer = setInterval(runLiveKeepAlive, 5000);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('online', handleOnlineNow);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('pagehide', handlePageHide);
 
     return () => {
       unsubEntries();
@@ -763,12 +786,15 @@ export default function App() {
       unsubSpecialOrderWh();
       unsubQualityTrials();
       unsubMaintenanceJobCards();
+      unsubSyncBus();
       clearTimeout(initialPullTimer);
+      if (pendingFlushTimer) clearTimeout(pendingFlushTimer);
       clearInterval(pendingTimer);
       clearInterval(keepAliveTimer);
-      document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
-      window.removeEventListener('online', handleVisibilityOrOnline);
-      window.removeEventListener('focus', handleVisibilityOrOnline);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('online', handleOnlineNow);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('pagehide', handlePageHide);
     };
   }, [isUserSignedIn, firebaseReady]);
 
@@ -836,9 +862,15 @@ export default function App() {
     matchedUserRecord?.displayName || user?.displayName
   );
 
+  const isRestrictedWH = isRestrictedWHDispatchAccount(
+    user?.email,
+    matchedUserRecord?.displayName || user?.displayName
+  );
+
   const isAdmin =
     !isSuspendedAccount &&
     !isRestrictedSIC &&
+    !isRestrictedWH &&
     (isPrimaryAdmin ||
       (matchedUserRecord
         ? matchedUserRecord.role === 'Plant Administrator' ||
@@ -882,6 +914,8 @@ export default function App() {
         ? 'Plant Administrator'
         : isRestrictedSIC
         ? 'Shift In Charge'
+        : isRestrictedWH
+        ? 'WH Personnel'
         : matchedUserRecord.role;
       setActiveSessionUser({
         uid: user.uid || matchedUserRecord.uid,
@@ -904,6 +938,7 @@ export default function App() {
     matchedUserRecord,
     isPrimaryAdmin,
     isRestrictedSIC,
+    isRestrictedWH,
     isAdmin,
     isSuspendedAccount,
     effectivePermissions,
@@ -913,6 +948,8 @@ export default function App() {
     ? 'Account Suspended'
     : isRestrictedSIC
     ? 'Shift In Charge'
+    : isRestrictedWH
+    ? 'WH Personnel'
     : matchedUserRecord?.role === 'Production HOD' || user?.role === 'Production HOD'
     ? 'Production HOD (Admin)'
     : isAdmin

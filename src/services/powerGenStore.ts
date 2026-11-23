@@ -9,6 +9,9 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  notifyCloudSyncBus,
+  setDocWithTimeout,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import { DowntimeEntry, GeneratorLog, PowerCutLog } from '../types';
 import { dtl, fmtT, r2, saveFileBlob, toTimestamp } from './downtimeCalc';
@@ -215,16 +218,19 @@ export async function savePowerCutLog(
 
   const merged = mergeById(getLocalPowerCutLogs(), [saved]);
   writeList(POWER_CUT_KEY, merged);
+  addToQueue(POWER_CUT_PENDING_KEY, saved.id);
+  notifyCloudSyncBus('power_gen');
 
   try {
     await ensureFirebaseAuth();
     const syncTs = Date.now();
-    await setDoc(
+    await setDocWithTimeout(
       doc(db, POWER_CUT_COLLECTION, saved.id),
       sanitizeObj({ ...saved, sy: syncTs }),
       { merge: true }
     );
     removeFromQueue(POWER_CUT_PENDING_KEY, saved.id);
+    notifyCloudSyncBus('power_gen');
     return { ok: true, saved: { ...saved, sy: syncTs } as PowerCutLog };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
@@ -293,14 +299,21 @@ export function subscribePowerCutLogs(onUpdate: (logs: PowerCutLog[]) => void) {
   let unsub: () => void = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'power_gen' || topic === 'all')) {
+      onUpdate(getLocalPowerCutLogs());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth();
@@ -340,10 +353,44 @@ export function subscribePowerCutLogs(onUpdate: (logs: PowerCutLog[]) => void) {
     }
   };
   start();
+  pollPowerCutLogs()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingPowerGenData().catch(() => {});
+    pollPowerCutLogs()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    flushPendingPowerGenData().catch(() => {});
+    pollPowerCutLogs()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }
@@ -380,16 +427,19 @@ export async function saveGeneratorLog(
 
   const merged = mergeById(getLocalGeneratorLogs(), [saved]);
   writeList(GENERATOR_LOG_KEY, merged);
+  addToQueue(GENERATOR_LOG_PENDING_KEY, saved.id);
+  notifyCloudSyncBus('power_gen');
 
   try {
     await ensureFirebaseAuth();
     const syncTs = Date.now();
-    await setDoc(
+    await setDocWithTimeout(
       doc(db, GENERATOR_LOG_COLLECTION, saved.id),
       sanitizeObj({ ...saved, sy: syncTs }),
       { merge: true }
     );
     removeFromQueue(GENERATOR_LOG_PENDING_KEY, saved.id);
+    notifyCloudSyncBus('power_gen');
     return { ok: true, saved: { ...saved, sy: syncTs } as GeneratorLog };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
@@ -644,14 +694,21 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
   let unsub: () => void = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'power_gen' || topic === 'all')) {
+      onUpdate(getLocalGeneratorLogs());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth();
@@ -691,10 +748,44 @@ export function subscribeGeneratorLogs(onUpdate: (logs: GeneratorLog[]) => void)
     }
   };
   start();
+  pollGeneratorLogs()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingPowerGenData().catch(() => {});
+    pollGeneratorLogs()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    flushPendingPowerGenData().catch(() => {});
+    pollGeneratorLogs()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }
@@ -737,7 +828,7 @@ export async function flushPendingPowerGenData(): Promise<number> {
           continue;
         }
         try {
-          await setDoc(
+          await setDocWithTimeout(
             doc(db, POWER_CUT_COLLECTION, found.id),
             sanitizeObj({ ...found, sy: Date.now() }),
             { merge: true }
@@ -763,7 +854,7 @@ export async function flushPendingPowerGenData(): Promise<number> {
           continue;
         }
         try {
-          await setDoc(
+          await setDocWithTimeout(
             doc(db, GENERATOR_LOG_COLLECTION, found.id),
             sanitizeObj({ ...found, sy: Date.now() }),
             { merge: true }

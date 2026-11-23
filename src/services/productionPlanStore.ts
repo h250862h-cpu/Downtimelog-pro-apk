@@ -10,6 +10,9 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  notifyCloudSyncBus,
+  setDocWithTimeout,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import {
   DieselFuelRequest,
@@ -285,6 +288,7 @@ export async function saveUploadedBackgroundDispatchesBatch(
   const current = getLocalUploadedBackgroundDispatches();
   const merged = mergeById(current, entries);
   writeList(HIST_UPLOAD_KEY, merged);
+  notifyCloudSyncBus('production_plans');
 
   let cloudSynced = 0;
   try {
@@ -297,7 +301,9 @@ export async function saveUploadedBackgroundDispatchesBatch(
         slice.map(async (entry) => {
           try {
             const payload = sanitizeObj({ ...entry, sy: Date.now() });
-            await setDoc(doc(db, HIST_UPLOAD_COLLECTION, entry.id), payload, { merge: true });
+            await setDocWithTimeout(doc(db, HIST_UPLOAD_COLLECTION, entry.id), payload, {
+              merge: true,
+            });
             removeFromQueue(HIST_UPLOAD_PENDING_KEY, entry.id);
             return true;
           } catch (err: any) {
@@ -314,6 +320,7 @@ export async function saveUploadedBackgroundDispatchesBatch(
   } catch {
     entries.forEach((e) => addToQueue(HIST_UPLOAD_PENDING_KEY, e.id));
   }
+  notifyCloudSyncBus('production_plans');
 
   return { saved: entries.length, cloudSynced };
 }
@@ -334,9 +341,11 @@ export async function flushPendingUploadedBackgroundDispatches(): Promise<number
         continue;
       }
       try {
-        await setDoc(doc(db, HIST_UPLOAD_COLLECTION, found.id), sanitizeObj({ ...found, sy: Date.now() }), {
-          merge: true,
-        });
+        await setDocWithTimeout(
+          doc(db, HIST_UPLOAD_COLLECTION, found.id),
+          sanitizeObj({ ...found, sy: Date.now() }),
+          { merge: true }
+        );
         removeFromQueue(HIST_UPLOAD_PENDING_KEY, found.id);
         flushed++;
       } catch (err: any) {
@@ -389,8 +398,14 @@ export function subscribeUploadedBackgroundDispatches(
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'production_plans' || topic === 'all')) {
+      onUpdate(getLocalUploadedBackgroundDispatches());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth();
@@ -430,16 +445,43 @@ export function subscribeUploadedBackgroundDispatches(
     }
   };
   start();
+  pollUploadedBackgroundDispatches()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingUploadedBackgroundDispatches().catch(() => {});
+    pollUploadedBackgroundDispatches()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
 
   const pollTimer = setInterval(() => {
     if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
-    pollUploadedBackgroundDispatches().then(onUpdate).catch(() => {});
-  }, 15000);
+    pollUploadedBackgroundDispatches()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
     clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }
@@ -507,12 +549,15 @@ export async function saveProductionPlanItem(
   });
   const merged = mergeById(getAllRawLocalProductionPlans(), [updated]);
   writeList(PLAN_STORAGE_KEY, merged);
+  addToQueue(PLAN_PENDING_KEY, updated.id);
+  notifyCloudSyncBus('production_plans');
 
   try {
     await ensureFirebaseAuth();
     const payload = sanitizeObj({ ...updated, sy: Date.now() });
-    await setDoc(doc(db, PLAN_COLLECTION, updated.id), payload, { merge: true });
+    await setDocWithTimeout(doc(db, PLAN_COLLECTION, updated.id), payload, { merge: true });
     removeFromQueue(PLAN_PENDING_KEY, updated.id);
+    notifyCloudSyncBus('production_plans');
     return { ok: true };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
@@ -531,15 +576,19 @@ export async function saveProductionPlanBatch(
   const items = rawItems.map((i) => normalizePlanItem({ ...i, superseded: false }));
   const merged = mergeById(getAllRawLocalProductionPlans(), items);
   writeList(PLAN_STORAGE_KEY, merged);
+  items.forEach((i) => addToQueue(PLAN_PENDING_KEY, i.id));
+  notifyCloudSyncBus('production_plans');
 
   let cloudSynced = 0;
   try {
     await ensureFirebaseAuth();
     for (const item of items) {
       try {
-        await setDoc(doc(db, PLAN_COLLECTION, item.id), sanitizeObj({ ...item, sy: Date.now() }), {
-          merge: true,
-        });
+        await setDocWithTimeout(
+          doc(db, PLAN_COLLECTION, item.id),
+          sanitizeObj({ ...item, sy: Date.now() }),
+          { merge: true }
+        );
         removeFromQueue(PLAN_PENDING_KEY, item.id);
         cloudSynced++;
       } catch (err: any) {
@@ -552,6 +601,7 @@ export async function saveProductionPlanBatch(
   } catch {
     items.forEach((i) => addToQueue(PLAN_PENDING_KEY, i.id));
   }
+  notifyCloudSyncBus('production_plans');
   return { saved: items.length, cloudSynced };
 }
 
@@ -641,15 +691,19 @@ export async function replaceProductionPlanWithSignature(params: {
   const allUpdated = [...supersededOldItems, ...signedNewItems];
   const merged = mergeById(rawExisting, allUpdated);
   writeList(PLAN_STORAGE_KEY, merged);
+  allUpdated.forEach((i) => addToQueue(PLAN_PENDING_KEY, i.id));
+  notifyCloudSyncBus('production_plans');
 
   let cloudSynced = 0;
   try {
     await ensureFirebaseAuth();
     for (const item of allUpdated) {
       try {
-        await setDoc(doc(db, PLAN_COLLECTION, item.id), sanitizeObj({ ...item, sy: Date.now() }), {
-          merge: true,
-        });
+        await setDocWithTimeout(
+          doc(db, PLAN_COLLECTION, item.id),
+          sanitizeObj({ ...item, sy: Date.now() }),
+          { merge: true }
+        );
         removeFromQueue(PLAN_PENDING_KEY, item.id);
         cloudSynced++;
       } catch (err: any) {
@@ -662,6 +716,7 @@ export async function replaceProductionPlanWithSignature(params: {
   } catch {
     allUpdated.forEach((i) => addToQueue(PLAN_PENDING_KEY, i.id));
   }
+  notifyCloudSyncBus('production_plans');
 
   return {
     ok: true,
@@ -706,9 +761,11 @@ export async function flushPendingProductionPlans(): Promise<number> {
         continue;
       }
       try {
-        await setDoc(doc(db, PLAN_COLLECTION, found.id), sanitizeObj({ ...found, sy: Date.now() }), {
-          merge: true,
-        });
+        await setDocWithTimeout(
+          doc(db, PLAN_COLLECTION, found.id),
+          sanitizeObj({ ...found, sy: Date.now() }),
+          { merge: true }
+        );
         removeFromQueue(PLAN_PENDING_KEY, found.id);
         flushed++;
       } catch (err: any) {
@@ -763,8 +820,14 @@ export function subscribeProductionPlans(onUpdate: (items: ProductionPlanItem[])
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'production_plans' || topic === 'all')) {
+      onUpdate(getLocalProductionPlans());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth();
@@ -804,16 +867,44 @@ export function subscribeProductionPlans(onUpdate: (items: ProductionPlanItem[])
     }
   };
   start();
+  pollProductionPlans()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingProductionPlans().catch(() => {});
+    pollProductionPlans()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
 
   const pollTimer = setInterval(() => {
     if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
-    pollProductionPlans().then(onUpdate).catch(() => {});
-  }, 15000);
+    flushPendingProductionPlans().catch(() => {});
+    pollProductionPlans()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
     clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }

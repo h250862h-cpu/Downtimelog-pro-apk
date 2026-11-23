@@ -36,6 +36,7 @@ import {
   getActiveSessionUser,
   getLocalPlantUsers,
   isRestrictedShiftInChargeAccount,
+  isRestrictedWHDispatchAccount,
   logoutUser,
   PRIMARY_ADMIN_EMAIL,
   subscribePlantUsers,
@@ -247,7 +248,6 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
       target.permissions
         ? {
             ...ZERO_PERMISSIONS,
-            ...getDefaultPermissionsForRole(target.role),
             ...target.permissions,
           }
         : { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole(target.role) }
@@ -293,11 +293,15 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
   const handleReactivateOperator = async (target: PlantUserAccount) => {
     if (!userIsAdmin || !currentUserEmail) return;
     try {
-      const restoredPerms = {
-        ...ZERO_PERMISSIONS,
-        ...getDefaultPermissionsForRole(target.role),
-        ...(target.permissions || {}),
-      };
+      const restoredPerms = target.permissions
+        ? {
+            ...ZERO_PERMISSIONS,
+            ...target.permissions,
+          }
+        : {
+            ...ZERO_PERMISSIONS,
+            ...getDefaultPermissionsForRole(target.role),
+          };
       const updated = await adminUpdateUserAccess(currentUserEmail, target, {
         role: target.role,
         department: target.department,
@@ -1405,16 +1409,17 @@ git push -u origin main`}
             {plantUsers.map((u) => {
               const isItemAdmin = u.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase();
               const isLockedSIC = isRestrictedShiftInChargeAccount(u.email, u.displayName);
+              const isLockedWH = isRestrictedWHDispatchAccount(u.email, u.displayName);
               const isSuspended = u.status === 'suspended' || Boolean(u.revoked);
               const resolvedPerms: UserPermissions = isSuspended
                 ? { ...ZERO_PERMISSIONS }
                 : isLockedSIC
                 ? { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole('Shift In Charge') }
-                : {
-                    ...ZERO_PERMISSIONS,
-                    ...getDefaultPermissionsForRole(u.role),
-                    ...(u.permissions || {}),
-                  };
+                : isLockedWH
+                ? { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole('WH Personnel') }
+                : u.permissions
+                ? { ...ZERO_PERMISSIONS, ...u.permissions }
+                : { ...ZERO_PERMISSIONS, ...getDefaultPermissionsForRole(u.role) };
               const totalSections = Object.keys(ZERO_PERMISSIONS).length;
               const allowedCount = Object.values(resolvedPerms).filter(Boolean).length;
               return (
@@ -1443,10 +1448,12 @@ git push -u origin main`}
                               ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
                               : isLockedSIC
                               ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                              : isLockedWH
+                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                               : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
                           }`}
                         >
-                          {isLockedSIC ? 'Shift In Charge' : u.role}
+                          {isLockedSIC ? 'Shift In Charge' : isLockedWH ? 'WH Personnel' : u.role}
                         </span>
                       </div>
                     </div>
@@ -1468,6 +1475,11 @@ git push -u origin main`}
                     {isLockedSIC && (
                       <div className="mt-1.5 rounded bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[9px] font-bold text-amber-300">
                         Locked: Machines &amp; Shift Dispatch Only
+                      </div>
+                    )}
+                    {isLockedWH && (
+                      <div className="mt-1.5 rounded bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[9px] font-bold text-emerald-300">
+                        Locked: WH Confirmation Dispatch Only
                       </div>
                     )}
                   </div>

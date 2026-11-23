@@ -15,8 +15,12 @@ import {
   handleFirestoreError,
   isPermissionDeniedError,
   isRestrictedShiftInChargeAccount,
+  isRestrictedWHDispatchAccount,
+  notifyCloudSyncBus,
   OperationType,
   reconnectFirestoreNetwork,
+  setDocWithTimeout,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import {
   DEFAULT_MACHINES,
@@ -56,7 +60,7 @@ export function isUserAdmin(email?: string | null): boolean {
     return false;
   }
   const norm = effectiveEmail.trim().toLowerCase();
-  if (isRestrictedShiftInChargeAccount(norm)) {
+  if (isRestrictedShiftInChargeAccount(norm) || isRestrictedWHDispatchAccount(norm)) {
     return false;
   }
   const admins = getAdminEmails();
@@ -77,6 +81,7 @@ export function isUserAdmin(email?: string | null): boolean {
         matched &&
         matched.status !== 'suspended' &&
         !isRestrictedShiftInChargeAccount(matched.email, matched.displayName) &&
+        !isRestrictedWHDispatchAccount(matched.email, matched.displayName) &&
         (matched.role === 'Plant Administrator' || matched.role === 'Production HOD')
       ) {
         return true;
@@ -295,7 +300,7 @@ export async function restoreMachine(
 export async function syncMachineryConfigToFirebase() {
   try {
     const configDoc = doc(db, 'app_config', 'machinery');
-    await setDoc(
+    await setDocWithTimeout(
       configDoc,
       {
         customMachines: getStoredCustomMachines(),
@@ -687,7 +692,7 @@ export async function flushPendingSyncQueue(): Promise<number> {
       const docRef = doc(db, 'downtime_entries', entry.id);
       const syncTs = Math.max(Date.now(), entry.upd || 0);
       const payload = sanitizeForFirestore({ ...entry, sy: syncTs });
-      await setDoc(docRef, payload, { merge: true });
+      await setDocWithTimeout(docRef, payload, { merge: true });
       entry.sy = syncTs;
       updatedLocalMetadata = true;
       removeFromPendingSyncQueue(entry.id);
@@ -891,13 +896,21 @@ export function subscribeFirebaseEntries(
     }
   };
 
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'downtime' || topic === 'all')) {
+      onUpdate(getStoredEntries());
+    }
+  });
+
   startLiveSync();
 
   const flushInterval = setInterval(() => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     flushPendingSyncQueue().catch(() => {});
-  }, 5000);
+  }, 2500);
 
   const pollInterval = setInterval(() => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     pollFirebaseEntries(onUpdate)
       .then(() => {
         if (!listenerActive) {
@@ -905,7 +918,7 @@ export function subscribeFirebaseEntries(
         }
       })
       .catch(() => {});
-  }, 12000);
+  }, 6000);
 
   const handleOnline = () => {
     onSyncStatus('syncing', 'Network reconnected. Reconnecting to Firestore server...');
@@ -921,6 +934,7 @@ export function subscribeFirebaseEntries(
   return () => {
     cancelled = true;
     listenerActive = false;
+    unsubBus();
     if (unsubscribe) unsubscribe();
     if (bc) bc.close();
     clearInterval(flushInterval);
@@ -937,6 +951,7 @@ export async function syncEntryToFirebase(
   entry.upd = now;
   entry.sy = 0;
   addToPendingSyncQueue(entry.id);
+  notifyCloudSyncBus('downtime');
 
   try {
     await ensureFirebaseAuth().catch(() => false);
@@ -945,7 +960,7 @@ export async function syncEntryToFirebase(
     const syncTs = Math.max(Date.now(), entry.upd);
     const payload = sanitizeForFirestore({ ...entry, sy: syncTs });
 
-    await setDoc(docRef, payload, { merge: true });
+    await setDocWithTimeout(docRef, payload, { merge: true });
 
     entry.sy = syncTs;
     lastSyncError = null;
@@ -957,6 +972,7 @@ export async function syncEntryToFirebase(
       bc.postMessage({ type: 'ENTRY_UPDATED', entryId: entry.id });
       bc.close();
     } catch {}
+    notifyCloudSyncBus('downtime');
 
     return { ok: true };
   } catch (err: any) {
@@ -982,7 +998,7 @@ export async function syncAllLocalToFirebase(entries: DowntimeEntry[]): Promise<
       const docRef = doc(db, 'downtime_entries', entry.id);
       const syncTs = Math.max(Date.now(), entry.upd || 0);
       const payload = sanitizeForFirestore({ ...entry, sy: syncTs });
-      await setDoc(docRef, payload, { merge: true });
+      await setDocWithTimeout(docRef, payload, { merge: true });
       entry.sy = syncTs;
       removeFromPendingSyncQueue(entry.id);
       count++;
@@ -992,5 +1008,6 @@ export async function syncAllLocalToFirebase(entries: DowntimeEntry[]): Promise<
     }
   }
   saveStoredEntries(entries);
+  notifyCloudSyncBus('downtime');
   return count;
 }

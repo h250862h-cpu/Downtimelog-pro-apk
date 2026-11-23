@@ -13,7 +13,9 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  notifyCloudSyncBus,
   resetFirestorePathAccessCache,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import { MaintenanceJobCard, normalizeMachineName } from '../types';
 
@@ -176,6 +178,7 @@ export async function saveMaintenanceJobCardToFirebase(
   const mergedLocal = mergeCards(readLocalCards(), [updated]);
   saveLocalCards(mergedLocal);
   addPendingId(updated.id);
+  notifyCloudSyncBus('maintenance');
 
   try {
     const syncTs = Date.now();
@@ -192,6 +195,7 @@ export async function saveMaintenanceJobCardToFirebase(
           c.id === updated.id ? ({ ...c, sy: syncTs } as MaintenanceJobCard) : c
         );
         saveLocalCards(latest);
+        notifyCloudSyncBus('maintenance');
         return { ok: true as const };
       },
       (err: any) => {
@@ -303,6 +307,7 @@ export function subscribeMaintenanceJobCards(
   let unsub = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
@@ -311,8 +316,14 @@ export function subscribeMaintenanceJobCards(
       if (!cancelled) {
         attachListener().catch(() => {});
       }
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'maintenance' || topic === 'all')) {
+      onUpdate(readLocalCards());
+    }
+  });
 
   const attachListener = async () => {
     if (cancelled) return;
@@ -364,10 +375,44 @@ export function subscribeMaintenanceJobCards(
   };
 
   attachListener().catch(() => {});
+  pollMaintenanceJobCards()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingMaintenanceJobCards().catch(() => {});
+    pollMaintenanceJobCards()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    attachListener().catch(() => {});
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    flushPendingMaintenanceJobCards().catch(() => {});
+    pollMaintenanceJobCards()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }

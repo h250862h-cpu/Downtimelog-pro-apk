@@ -15,6 +15,9 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  notifyCloudSyncBus,
+  setDocWithTimeout,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import {
   DieselFuelRequest,
@@ -307,14 +310,21 @@ export async function saveDieselTankConfig(
     lastUpdatedAt: new Date().toISOString(),
   };
   saveLocalDieselTank(next);
+  try {
+    localStorage.setItem(TANK_PENDING_KEY, '1');
+  } catch {}
+  notifyCloudSyncBus('diesel');
 
   try {
     await ensureFirebaseAuth();
     const syncTs = Date.now();
-    await setDoc(doc(db, TANK_COLLECTION, 'main_bowser'), sanitizeObj({ ...next, sy: syncTs }), {
-      merge: true,
-    });
+    await setDocWithTimeout(
+      doc(db, TANK_COLLECTION, 'main_bowser'),
+      sanitizeObj({ ...next, sy: syncTs }),
+      { merge: true }
+    );
     localStorage.removeItem(TANK_PENDING_KEY);
+    notifyCloudSyncBus('diesel');
     return { ok: true };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
@@ -364,8 +374,14 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'diesel' || topic === 'all')) {
+      onUpdate(getLocalDieselTank());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth();
@@ -406,15 +422,38 @@ export function subscribeDieselTank(onUpdate: (tank: DieselTankConfig) => void) 
   };
   start();
 
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingDieselData().catch(() => {});
+    pollDieselTank()
+      .then((t) => {
+        if (!cancelled) onUpdate(t);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
   const pollTimer = setInterval(() => {
     if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
-    pollDieselTank().then(onUpdate).catch(() => {});
-  }, 15000);
+    flushPendingDieselData().catch(() => {});
+    pollDieselTank()
+      .then((t) => {
+        if (!cancelled) onUpdate(t);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
     clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }
@@ -437,14 +476,19 @@ export async function saveDieselRequest(
   };
   const merged = mergeById(getLocalDieselRequests(), [updated]);
   writeLocalList(REQ_KEY, merged);
+  addToQueue(REQ_PENDING_KEY, updated.id);
+  notifyCloudSyncBus('diesel');
 
   try {
     await ensureFirebaseAuth();
     const syncTs = Date.now();
-    await setDoc(doc(db, REQ_COLLECTION, updated.id), sanitizeObj({ ...updated, sy: syncTs }), {
-      merge: true,
-    });
+    await setDocWithTimeout(
+      doc(db, REQ_COLLECTION, updated.id),
+      sanitizeObj({ ...updated, sy: syncTs }),
+      { merge: true }
+    );
     removeFromQueue(REQ_PENDING_KEY, updated.id);
+    notifyCloudSyncBus('diesel');
     return { ok: true };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
@@ -485,14 +529,21 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
   let unsub: () => void = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'diesel' || topic === 'all')) {
+      onUpdate(getLocalDieselRequests());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth();
@@ -532,10 +583,43 @@ export function subscribeDieselRequests(onUpdate: (reqs: DieselFuelRequest[]) =>
     }
   };
   start();
+  pollDieselRequests()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingDieselData().catch(() => {});
+    pollDieselRequests()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollDieselRequests()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }
@@ -559,14 +643,18 @@ export async function saveDieselGrn(
   const merged = mergeById(getLocalDieselGrns(), [updated]);
   writeLocalList(GRN_KEY, merged);
   addToQueue(GRN_PENDING_KEY, updated.id);
+  notifyCloudSyncBus('diesel');
 
   try {
     await ensureFirebaseAuth();
     const syncTs = Math.max(Date.now(), updated.upd || 0);
-    await setDoc(doc(db, GRN_COLLECTION, updated.id), sanitizeObj({ ...updated, sy: syncTs }), {
-      merge: true,
-    });
+    await setDocWithTimeout(
+      doc(db, GRN_COLLECTION, updated.id),
+      sanitizeObj({ ...updated, sy: syncTs }),
+      { merge: true }
+    );
     removeFromQueue(GRN_PENDING_KEY, updated.id);
+    notifyCloudSyncBus('diesel');
     return { ok: true };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
@@ -607,14 +695,21 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
   let unsub: () => void = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'diesel' || topic === 'all')) {
+      onUpdate(getLocalDieselGrns());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth();
@@ -654,10 +749,43 @@ export function subscribeDieselGrns(onUpdate: (grns: DieselGrnRecord[]) => void)
     }
   };
   start();
+  pollDieselGrns()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingDieselData().catch(() => {});
+    pollDieselGrns()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollDieselGrns()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }
@@ -706,9 +834,11 @@ export async function flushPendingDieselData(): Promise<number> {
     ) {
       const tank = getLocalDieselTank();
       try {
-        await setDoc(doc(db, TANK_COLLECTION, 'main_bowser'), sanitizeObj({ ...tank, sy: Date.now() }), {
-          merge: true,
-        });
+        await setDocWithTimeout(
+          doc(db, TANK_COLLECTION, 'main_bowser'),
+          sanitizeObj({ ...tank, sy: Date.now() }),
+          { merge: true }
+        );
         localStorage.removeItem(TANK_PENDING_KEY);
         flushed++;
       } catch (err: any) {
@@ -728,9 +858,11 @@ export async function flushPendingDieselData(): Promise<number> {
           continue;
         }
         try {
-          await setDoc(doc(db, REQ_COLLECTION, found.id), sanitizeObj({ ...found, sy: Date.now() }), {
-            merge: true,
-          });
+          await setDocWithTimeout(
+            doc(db, REQ_COLLECTION, found.id),
+            sanitizeObj({ ...found, sy: Date.now() }),
+            { merge: true }
+          );
           removeFromQueue(REQ_PENDING_KEY, found.id);
           flushed++;
         } catch (err: any) {
@@ -752,9 +884,11 @@ export async function flushPendingDieselData(): Promise<number> {
           continue;
         }
         try {
-          await setDoc(doc(db, GRN_COLLECTION, found.id), sanitizeObj({ ...found, sy: Date.now() }), {
-            merge: true,
-          });
+          await setDocWithTimeout(
+            doc(db, GRN_COLLECTION, found.id),
+            sanitizeObj({ ...found, sy: Date.now() }),
+            { merge: true }
+          );
           removeFromQueue(GRN_PENDING_KEY, found.id);
           flushed++;
         } catch (err: any) {

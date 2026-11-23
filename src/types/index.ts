@@ -568,8 +568,6 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
       return {
         ...ZERO_PERMISSIONS,
         dispatchWHConfirm: true,
-        dieselGRN: true,
-        specialOrdersAccess: true,
       };
     case 'Shift In Charge':
       return {

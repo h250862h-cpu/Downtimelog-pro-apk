@@ -14,6 +14,9 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  notifyCloudSyncBus,
+  setDocWithTimeout,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import { normalizeMachineName } from '../types';
 import { AttendancePerson, ParsedAttendanceMessage, QCInspectionRecord } from '../types/attendance';
@@ -350,8 +353,14 @@ export function subscribeAttendanceBatches(
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'attendance' || topic === 'all')) {
+      onUpdate(getLocalAttendanceBatch());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth().catch(() => false);
@@ -404,16 +413,44 @@ export function subscribeAttendanceBatches(
   };
 
   start();
+  pollAttendanceBatches()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingAttendanceBatches().catch(() => {});
+    pollAttendanceBatches()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
 
   const pollTimer = setInterval(() => {
     if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
-    pollAttendanceBatches().then(onUpdate).catch(() => {});
-  }, 15000);
+    flushPendingAttendanceBatches().catch(() => {});
+    pollAttendanceBatches()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
     clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     if (unsub) unsub();
   };
 }
@@ -422,12 +459,15 @@ export async function syncAttendanceBatchToFirebase(item: ParsedAttendanceMessag
   const id = item.id || `ATT-${item.date}-${item.shift}-${Date.now()}`;
   const cleanPayload = sanitizeAttendanceForFirestore({ ...item, id, isHistorical: false });
   const localItem: ParsedAttendanceMessage = { ...item, id, isHistorical: false };
+  enqueuePendingAttendance(localItem);
+  notifyCloudSyncBus('attendance');
 
   try {
     await ensureFirebaseAuth();
     const docRef = doc(db, 'attendance_batches', id);
-    await setDoc(docRef, cleanPayload, { merge: true });
+    await setDocWithTimeout(docRef, cleanPayload, { merge: true });
     removePendingAttendance(id);
+    notifyCloudSyncBus('attendance');
     return true;
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
@@ -614,7 +654,9 @@ export async function flushPendingQCLogs(): Promise<{ success: number; failed: n
   for (const item of pending) {
     try {
       const docRef = doc(db, 'qc_inspections', item.id);
-      await setDoc(docRef, deepSanitizeForFirestore({ ...item, synced: true }), { merge: true });
+      await setDocWithTimeout(docRef, deepSanitizeForFirestore({ ...item, synced: true }), {
+        merge: true,
+      });
       item.synced = true;
       success++;
     } catch (err: any) {
@@ -674,8 +716,14 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) start();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'attendance' || topic === 'all')) {
+      onUpdate(getLocalQCLogs());
+    }
+  });
 
   const start = async () => {
     await ensureFirebaseAuth().catch(() => false);
@@ -737,43 +785,76 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
   };
 
   start();
+  pollQCLogs()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingQCLogs().catch(() => {});
+    pollQCLogs()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    start();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
 
   const pollTimer = setInterval(() => {
     if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
-    pollQCLogs().then(onUpdate).catch(() => {});
-  }, 15000);
+    flushPendingQCLogs().catch(() => {});
+    pollQCLogs()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
 
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
     clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     if (unsub) unsub();
   };
 }
 
 export async function syncQCLogToFirebase(rawItem: QCInspectionRecord): Promise<boolean> {
   const item = normalizeQcInspectionRecord(rawItem);
+  item.synced = false;
+  const preCurrent = getLocalQCLogs();
+  const preIdx = preCurrent.findIndex((l) => l.id === item.id);
+  if (preIdx >= 0) preCurrent[preIdx] = { ...item, synced: false };
+  else preCurrent.unshift({ ...item, synced: false });
+  saveLocalQCLogs(preCurrent);
+  notifyCloudSyncBus('attendance');
+
   const docRef = doc(db, 'qc_inspections', item.id);
   try {
     await ensureFirebaseAuth();
-    await setDoc(docRef, deepSanitizeForFirestore({ ...item, synced: true }), { merge: true });
+    await setDocWithTimeout(docRef, deepSanitizeForFirestore({ ...item, synced: true }), {
+      merge: true,
+    });
     item.synced = true;
     const current = getLocalQCLogs();
     const idx = current.findIndex((l) => l.id === item.id);
     if (idx >= 0) current[idx].synced = true;
     saveLocalQCLogs(current);
+    notifyCloudSyncBus('attendance');
     return true;
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
       markFirestorePathBlockedByRules('qc_inspections');
     }
     console.warn('QC sync offline/deferred, queued locally:', err.message);
-    item.synced = false;
-    const current = getLocalQCLogs();
-    const idx = current.findIndex((l) => l.id === item.id);
-    if (idx >= 0) current[idx].synced = false;
-    else current.unshift(item);
-    saveLocalQCLogs(current);
     return false;
   }
 }

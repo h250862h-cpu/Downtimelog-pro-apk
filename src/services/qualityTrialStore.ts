@@ -14,6 +14,9 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  notifyCloudSyncBus,
+  setDocWithTimeout,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import { QualityTrialReport, normalizeMachineName } from '../types';
 import { saveFileBlob, ymd } from './downtimeCalc';
@@ -168,17 +171,19 @@ export async function saveQualityTrialToFirebase(
   const mergedLocal = mergeTrials(readLocalTrials(), [updated]);
   saveLocalTrials(mergedLocal);
   addPendingId(updated.id);
+  notifyCloudSyncBus('quality_trials');
 
   try {
     await ensureFirebaseAuth();
     const syncTs = Math.max(Date.now(), updated.upd || 0);
     const payload = sanitizeForFirestore({ ...updated, sy: syncTs });
-    await setDoc(doc(db, TRIAL_COLLECTION, updated.id), payload, { merge: true });
+    await setDocWithTimeout(doc(db, TRIAL_COLLECTION, updated.id), payload, { merge: true });
     removePendingId(updated.id);
     const latest = readLocalTrials().map((t) =>
       t.id === updated.id ? ({ ...t, sy: syncTs } as QualityTrialReport) : t
     );
     saveLocalTrials(latest);
+    notifyCloudSyncBus('quality_trials');
     return { ok: true };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
@@ -252,14 +257,21 @@ export function subscribeQualityTrials(
   let unsub = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) attach();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'quality_trials' || topic === 'all')) {
+      onUpdate(readLocalTrials());
+    }
+  });
 
   const attach = async () => {
     await ensureFirebaseAuth();
@@ -306,9 +318,44 @@ export function subscribeQualityTrials(
   };
 
   attach();
+  pollQualityTrials()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingQualityTrials().catch(() => {});
+    pollQualityTrials()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    attach();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    flushPendingQualityTrials().catch(() => {});
+    pollQualityTrials()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
+
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }

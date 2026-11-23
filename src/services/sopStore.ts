@@ -15,6 +15,9 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  notifyCloudSyncBus,
+  setDocWithTimeout,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import {
   DispatchEntry,
@@ -219,6 +222,7 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
     }
     writeLocalList(storageKey, nextLocal);
     addPendingId(pendingKey, updatedItem.id);
+    notifyCloudSyncBus('sop');
 
     try {
       await ensureFirebaseAuth();
@@ -226,13 +230,14 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
         ...updatedItem,
         sy: Math.max(Date.now(), updatedItem.upd || 0),
       });
-      await setDoc(doc(db, collectionName, updatedItem.id), payload, { merge: true });
+      await setDocWithTimeout(doc(db, collectionName, updatedItem.id), payload, { merge: true });
       removePendingId(pendingKey, updatedItem.id);
 
       const latest = getLocal().map((x) =>
         x.id === updatedItem.id ? { ...x, sy: payload.sy } : x
       );
       writeLocalList(storageKey, latest);
+      notifyCloudSyncBus('sop');
       return { ok: true };
     } catch (err: any) {
       if (isPermissionDeniedError(err)) {
@@ -304,8 +309,14 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
         if (!cancelled && !listenerActive) {
           attachListener();
         }
-      }, 15000);
+      }, 3000);
     };
+
+    const unsubBus = subscribeCloudSyncBus((topic) => {
+      if (!cancelled && (topic === 'sop' || topic === 'all')) {
+        onUpdate(getLocal());
+      }
+    });
 
     const attachListener = async () => {
       if (cancelled || listenerActive) return;
@@ -365,21 +376,41 @@ function createCollectionStore<T extends { id: string; upd?: number; sy?: number
       })
       .catch(() => {});
 
+    const handleOnline = () => {
+      if (cancelled) return;
+      flush().catch(() => {});
+      poll()
+        .then((merged) => {
+          if (!cancelled) onUpdate(merged);
+        })
+        .catch(() => {});
+      if (!listenerActive) attachListener();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', handleOnline);
+    }
+
     pollTimer = setInterval(() => {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      flush().catch(() => {});
       poll()
         .then((merged) => {
           if (!cancelled) onUpdate(merged);
           if (!listenerActive) attachListener();
         })
         .catch(() => {});
-    }, 15000);
+    }, 6000);
 
     return () => {
       cancelled = true;
       listenerActive = false;
+      unsubBus();
       unsub();
       if (retryTimer) clearTimeout(retryTimer);
       if (pollTimer) clearInterval(pollTimer);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleOnline);
+      }
     };
   };
 

@@ -16,6 +16,8 @@ import {
   isFirestorePathBlockedByRules,
   isPermissionDeniedError,
   markFirestorePathBlockedByRules,
+  notifyCloudSyncBus,
+  subscribeCloudSyncBus,
 } from '../firebase';
 import {
   DispatchEntry,
@@ -334,6 +336,7 @@ export async function saveSpecialOrderToFirebase(
   const next = mergeById(current, [updated]);
   saveLocalList(ORDERS_STORAGE_KEY, next);
   addPendingId(ORDERS_PENDING_KEY, updated.id);
+  notifyCloudSyncBus('special_orders');
 
   try {
     const syncTs = Date.now();
@@ -348,6 +351,7 @@ export async function saveSpecialOrderToFirebase(
           x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrder) : x
         );
         saveLocalList(ORDERS_STORAGE_KEY, latest);
+        notifyCloudSyncBus('special_orders');
       },
       (err) => {
         if (isPermissionDeniedError(err)) {
@@ -381,6 +385,7 @@ export async function saveSpecialOrderProductionToFirebase(
   const next = mergeById(current, [updated], true, true);
   saveLocalList(PROD_STORAGE_KEY, next);
   addPendingId(PROD_PENDING_KEY, updated.id);
+  notifyCloudSyncBus('special_orders');
 
   try {
     const syncTs = Date.now();
@@ -395,6 +400,7 @@ export async function saveSpecialOrderProductionToFirebase(
           x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrderFactoryProduction) : x
         );
         saveLocalList(PROD_STORAGE_KEY, latest);
+        notifyCloudSyncBus('special_orders');
       },
       (err) => {
         if (isPermissionDeniedError(err)) {
@@ -428,6 +434,7 @@ export async function saveSpecialOrderWhDispatchToFirebase(
   const next = mergeById(current, [updated], true, true);
   saveLocalList(WH_DISPATCH_STORAGE_KEY, next);
   addPendingId(WH_DISPATCH_PENDING_KEY, updated.id);
+  notifyCloudSyncBus('special_orders');
 
   try {
     const syncTs = Date.now();
@@ -442,6 +449,7 @@ export async function saveSpecialOrderWhDispatchToFirebase(
           x.id === updated.id ? ({ ...x, sy: syncTs } as SpecialOrderWhDispatch) : x
         );
         saveLocalList(WH_DISPATCH_STORAGE_KEY, latest);
+        notifyCloudSyncBus('special_orders');
       },
       (err) => {
         if (isPermissionDeniedError(err)) {
@@ -630,14 +638,21 @@ export function subscribeSpecialOrders(onUpdate: (rows: SpecialOrder[]) => void)
   let unsub = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) attach();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'special_orders' || topic === 'all')) {
+      onUpdate(getLocalSpecialOrders());
+    }
+  });
 
   const attach = async () => {
     await ensureFirebaseAuth();
@@ -689,9 +704,43 @@ export function subscribeSpecialOrders(onUpdate: (rows: SpecialOrder[]) => void)
   };
 
   attach();
+  pollSpecialOrders()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingSpecialOrderData().catch(() => {});
+    pollSpecialOrders()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    attach();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollSpecialOrders()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
+
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }
@@ -703,14 +752,21 @@ export function subscribeSpecialOrderProductions(
   let unsub = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) attach();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'special_orders' || topic === 'all')) {
+      onUpdate(getLocalSpecialOrderProductions());
+    }
+  });
 
   const attach = async () => {
     await ensureFirebaseAuth();
@@ -757,9 +813,43 @@ export function subscribeSpecialOrderProductions(
   };
 
   attach();
+  pollSpecialOrderProductions()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingSpecialOrderData().catch(() => {});
+    pollSpecialOrderProductions()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    attach();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollSpecialOrderProductions()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
+
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }
@@ -771,14 +861,21 @@ export function subscribeSpecialOrderWhDispatches(
   let unsub = () => {};
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       if (!cancelled) attach();
-    }, 15000);
+    }, 3000);
   };
+
+  const unsubBus = subscribeCloudSyncBus((topic) => {
+    if (!cancelled && (topic === 'special_orders' || topic === 'all')) {
+      onUpdate(getLocalSpecialOrderWhDispatches());
+    }
+  });
 
   const attach = async () => {
     await ensureFirebaseAuth();
@@ -825,9 +922,43 @@ export function subscribeSpecialOrderWhDispatches(
   };
 
   attach();
+  pollSpecialOrderWhDispatches()
+    .then((merged) => {
+      if (!cancelled) onUpdate(merged);
+    })
+    .catch(() => {});
+
+  const handleOnline = () => {
+    if (cancelled) return;
+    flushPendingSpecialOrderData().catch(() => {});
+    pollSpecialOrderWhDispatches()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+    attach();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
+  pollTimer = setInterval(() => {
+    if (cancelled || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    pollSpecialOrderWhDispatches()
+      .then((merged) => {
+        if (!cancelled) onUpdate(merged);
+      })
+      .catch(() => {});
+  }, 6000);
+
   return () => {
     cancelled = true;
+    unsubBus();
     if (retryTimer) clearTimeout(retryTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     unsub();
   };
 }

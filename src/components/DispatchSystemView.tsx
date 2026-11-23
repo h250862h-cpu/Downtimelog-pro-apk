@@ -278,11 +278,22 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   // =====================================
   // STAGE 2: WH PERSONNEL FORM STATE (PER PENDING CARD)
   // =====================================
+  const defaultWhPersonnel = useMemo(() => {
+    const clean = (currentUserName || '').trim().toLowerCase();
+    const cleanEmailLocal = (currentUserEmail || '').trim().toLowerCase().split('@')[0] || '';
+    const match = WH_PERSONNEL_OPTIONS.find((opt) => {
+      const valLower = opt.value.toLowerCase();
+      return (
+        (clean && (valLower === clean || valLower.includes(clean) || clean.includes(valLower.split(' ')[0]))) ||
+        (cleanEmailLocal && (valLower.includes(cleanEmailLocal) || cleanEmailLocal.includes(valLower.split(' ')[0])))
+      );
+    });
+    return match?.value || WH_PERSONNEL_OPTIONS[0]?.value || currentUserName;
+  }, [currentUserName, currentUserEmail]);
+
   const [whSelectedId, setWhSelectedId] = useState<string | null>(null);
   const [whQtyInput, setWhQtyInput] = useState<string>('');
-  const [whPersonnelName, setWhPersonnelName] = useState<string>(
-    WH_PERSONNEL_OPTIONS[0]?.value || currentUserName
-  );
+  const [whPersonnelName, setWhPersonnelName] = useState<string>(defaultWhPersonnel);
   const [whNotes, setWhNotes] = useState<string>('');
   const [whSignature, setWhSignature] = useState<string>('');
   const [whBanner, setWhBanner] = useState<{ text: string; isError?: boolean } | null>(null);
@@ -293,11 +304,16 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   const [whEditingEntryId, setWhEditingEntryId] = useState<string | null>(null);
   const [whEditQtyInput, setWhEditQtyInput] = useState<string>('');
   const [whEditReasonInput, setWhEditReasonInput] = useState<string>('');
-  const [whEditPersonnelName, setWhEditPersonnelName] = useState<string>(
-    WH_PERSONNEL_OPTIONS[0]?.value || currentUserName
-  );
+  const [whEditPersonnelName, setWhEditPersonnelName] = useState<string>(defaultWhPersonnel);
   const [savingWHEdit, setSavingWHEdit] = useState(false);
   const [whEditSavedReadyPdf, setWhEditSavedReadyPdf] = useState<DispatchEntry | null>(null);
+
+  useEffect(() => {
+    if (defaultWhPersonnel) {
+      setWhPersonnelName(defaultWhPersonnel);
+      setWhEditPersonnelName(defaultWhPersonnel);
+    }
+  }, [defaultWhPersonnel]);
 
   const pendingWHList = useMemo(
     () => dispatchEntries.filter((e) => e.status === 'PENDING_WH'),
@@ -1627,7 +1643,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
       {/* ================================================= */}
       {/* STAGE 2: WH PERSONNEL CONFIRMATION SECTION        */}
       {/* ================================================= */}
-      {activeStage === 'wh' && permissions.dispatchWHConfirm && (
+      {activeStage === 'wh' && (isAdmin || permissions.dispatchWHConfirm) && (
         <div className="space-y-5">
           {whBanner && (
             <div
