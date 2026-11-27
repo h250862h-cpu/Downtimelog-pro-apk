@@ -613,3 +613,85 @@ export function write(
   copy.set(zipped);
   return copy;
 }
+
+let excelWorkerInstance: Worker | null = null;
+let workerJobSeq = 0;
+const pendingWorkerJobs = new Map<
+  number,
+  { resolve: (buf: Uint8Array<ArrayBuffer>) => void; reject: (err: Error) => void }
+>();
+
+function getExcelWorker(): Worker | null {
+  if (typeof window === 'undefined' || typeof Worker === 'undefined') return null;
+  if (excelWorkerInstance) return excelWorkerInstance;
+  try {
+    const w = new Worker(new URL('../workers/excelGeneratorWorker.ts', import.meta.url), {
+      type: 'module',
+    });
+    w.onmessage = (
+      event: MessageEvent<{ id: number; ok: boolean; buffer?: ArrayBuffer; error?: string }>
+    ) => {
+      const { id, ok, buffer, error } = event.data || {};
+      const job = pendingWorkerJobs.get(id);
+      if (!job) return;
+      pendingWorkerJobs.delete(id);
+      if (ok && buffer) {
+        job.resolve(new Uint8Array(buffer));
+      } else {
+        job.reject(new Error(error || 'Excel worker generation failed'));
+      }
+    };
+    w.onerror = () => {
+      pendingWorkerJobs.forEach((job) =>
+        job.reject(new Error('Excel background worker crashed'))
+      );
+      pendingWorkerJobs.clear();
+      excelWorkerInstance = null;
+    };
+    excelWorkerInstance = w;
+    return w;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Generates an .xlsx binary asynchronously in a background Web Worker so the main UI
+ * thread never freezes, falling back to an async microtask/macrotask if Workers are unsupported.
+ */
+export async function writeAsync(
+  wb: WorkBook,
+  options?: { bookType?: 'xlsx'; type?: 'array' | 'uint8array' }
+): Promise<Uint8Array<ArrayBuffer>> {
+  const worker = getExcelWorker();
+  if (worker) {
+    try {
+      return await new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
+        const id = ++workerJobSeq;
+        const timeout = setTimeout(() => {
+          pendingWorkerJobs.delete(id);
+          reject(new Error('Excel worker timeout'));
+        }, 25000);
+        pendingWorkerJobs.set(id, {
+          resolve: (buf) => {
+            clearTimeout(timeout);
+            resolve(buf);
+          },
+          reject: (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          },
+        });
+        worker.postMessage({ id, wb });
+      });
+    } catch {
+      // Fall through to deferred async write if worker errors
+    }
+  }
+  return await new Promise<Uint8Array<ArrayBuffer>>((resolve) => {
+    setTimeout(() => {
+      resolve(write(wb, options));
+    }, 0);
+  });
+}
+

@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import * as XLSX from '../utils/xlsxCompat';
 import {
   AlertCircle,
   ArrowLeft,
@@ -25,6 +24,7 @@ import {
   saveLocalQCLogs,
   syncQCLogToFirebase,
 } from '../services/attendanceStore';
+import { generateQcLogsExcelWorkbook } from '../services/attendanceParser';
 import { normalizeMachineName } from '../types';
 import { QCInspectionRecord } from '../types/attendance';
 import { LgplastLogo } from './LgplastLogo';
@@ -266,8 +266,8 @@ Status: Hold`;
 
   // Posted QC inspection records are permanent and cannot be deleted.
 
-  // Excel Export with Date Filtering (Strictly Admin Only)
-  const handleExportExcel = () => {
+  // Excel Export with Date Filtering (Strictly Admin Only & Generated in Background Worker)
+  const handleExportExcel = async () => {
     if (!isAdmin) {
       showToast('QC Excel reports are restricted strictly to Plant Admin / Production HOD.');
       return;
@@ -283,110 +283,16 @@ Status: Hold`;
       return;
     }
 
-    const wb = XLSX.utils.book_new();
-
-    // 1. Inspections Sheet
-    const headers = [
-      'Date',
-      'Shift',
-      'Machine / Line',
-      'Product',
-      'Samples Tested',
-      'Passed',
-      'Defects',
-      'Defect Reason',
-      'QC Status',
-      'Pass Rate %',
-      'Inspector',
-      'Notes',
-    ];
-    const data: (string | number)[][] = [
-      ['LG PLAST — Affordable / Durable / Complete'],
-      ['FACTORY QUALITY CONTROL (QC) INSPECTION REPORT'],
-      [],
-      headers,
-    ];
-
-    filtered.forEach((l) => {
-      const passRate = l.samplesTested > 0 ? (100 * l.passedCount) / l.samplesTested : 0;
-      data.push([
-        l.date,
-        l.shift,
-        normalizeMachineName(l.machineOrLine),
-        l.product,
-        l.samplesTested,
-        l.passedCount,
-        l.defectsCount,
-        l.defectReason,
-        l.status,
-        `${passRate.toFixed(1)}%`,
-        l.inspector,
-        l.notes || '',
-      ]);
-    });
-
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    ws['!cols'] = [
-      { wch: 13 },
-      { wch: 9 },
-      { wch: 22 },
-      { wch: 28 },
-      { wch: 15 },
-      { wch: 10 },
-      { wch: 10 },
-      { wch: 35 },
-      { wch: 12 },
-      { wch: 14 },
-      { wch: 20 },
-      { wch: 30 },
-    ];
-    XLSX.utils.book_append_sheet(wb, ws, 'QC Inspections');
-
-    // 2. Summary Sheet
-    let totalTested = 0;
-    let totalPassed = 0;
-    let totalDefects = 0;
-    filtered.forEach((l) => {
-      totalTested += l.samplesTested;
-      totalPassed += l.passedCount;
-      totalDefects += l.defectsCount;
-    });
-
-    const overallPassRate = totalTested > 0 ? (100 * totalPassed) / totalTested : 0;
-
-    const sumHeaders = [
-      ['LG PLAST — Affordable / Durable / Complete'],
-      ['Plant Quality Control (QC) Summary Report'],
-      [`Period: ${filterFromDate || 'All'} to ${filterToDate || 'All'}`],
-      [],
-      ['Metric', 'Value'],
-      ['Total Samples Inspected', totalTested],
-      ['Total Passed Units', totalPassed],
-      ['Total Defective Units', totalDefects],
-      ['Overall Quality Pass Rate %', `${overallPassRate.toFixed(1)}%`],
-      ['Total Inspection Lots Checked', filtered.length],
-    ];
-    const wsSummary = XLSX.utils.aoa_to_sheet(sumHeaders);
-    wsSummary['!cols'] = [{ wch: 30 }, { wch: 16 }];
-    XLSX.utils.book_append_sheet(wb, wsSummary, 'QC Summary');
-
-    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([out], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-    const fileName = `LGPLAST_QC_Report_${filterFromDate || 'Batch'}_to_${filterToDate || 'Current'}.xlsx`;
-
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      URL.revokeObjectURL(a.href);
-      a.remove();
-    }, 1500);
-
-    showToast(`Downloaded ${fileName}`);
+    showToast('Generating QC Excel (.xlsx) in background...');
+    const fileName = await generateQcLogsExcelWorkbook(
+      logs,
+      filterFromDate,
+      filterToDate,
+      isAdmin
+    );
+    if (fileName) {
+      showToast(`Downloaded ${fileName}`);
+    }
   };
 
   const filteredLogs = logs

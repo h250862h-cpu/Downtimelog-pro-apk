@@ -207,7 +207,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
   requestedStage,
   onStageHandled,
 }) => {
-  const canExportDispatch = isAdmin || Boolean(permissions.exportDispatchExcel);
+  const canExportDispatch = Boolean(isAdmin);
   const allowedStages = useMemo<DispatchSubStage[]>(() => {
     const list: DispatchSubStage[] = [];
     if (isAdmin || permissions.dispatchShiftEntry) list.push('shift');
@@ -948,14 +948,15 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
     }
   };
 
-  const handleDownloadDispatchExcel = () => {
+  const handleDownloadDispatchExcel = async () => {
     if (!canExportDispatch) {
-      setExcelNotice('Confidentiality Lock: Only Plant Admin / Production HOD or authorized users can download Dispatch Excel reports.');
+      setExcelNotice('Confidentiality Lock: Only Plant Administrators can download Dispatch Excel reports.');
       return;
     }
     const effectiveFrom = fromDate || '2020-01-01';
     const effectiveTo = toDate || '2099-12-31';
-    exportDispatchExcelWorkbook(ledgerEntries, effectiveFrom, effectiveTo, sopProductionLogs, canExportDispatch);
+    setExcelNotice('Generating Confidential Dispatch Excel (.xlsx) in background...');
+    await exportDispatchExcelWorkbook(ledgerEntries, effectiveFrom, effectiveTo, sopProductionLogs, canExportDispatch);
     setExcelNotice(
       `Confidential Dispatch Excel (.xlsx) downloaded (${ledgerEntries.length} filtered records · ${fromDate || 'All Dates'} to ${toDate || 'Latest'}) with Qty (kg) & linked Production Scrap/Wastage.`
     );
@@ -1065,7 +1066,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
             </button>
           )}
 
-          {(permissions.exportDispatchExcel || permissions.dispatchHODConfirm) && (
+          {(canExportDispatch || permissions.dispatchHODConfirm) && (
             <button
               type="button"
               onClick={() => setActiveStage('ledger')}
@@ -1076,7 +1077,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
               }`}
             >
               <FileSpreadsheet className="h-3.5 w-3.5" />
-              <span>Dispatch Ledger &amp; Excel Report</span>
+              <span>{canExportDispatch ? 'Dispatch Ledger & Excel Report' : 'Dispatch Ledger'}</span>
             </button>
           )}
         </div>
@@ -2402,7 +2403,7 @@ export const DispatchSystemView: React.FC<DispatchSystemViewProps> = ({
       {/* ================================================= */}
       {/* STAGE 4: CONFIRMED LEDGER & CONFIDENTIAL EXCEL    */}
       {/* ================================================= */}
-      {activeStage === 'ledger' && (permissions.exportDispatchExcel || permissions.dispatchHODConfirm) && (
+      {activeStage === 'ledger' && (canExportDispatch || permissions.dispatchHODConfirm) && (
         <div className="space-y-4">
           <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-4 sm:p-5 space-y-4">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-3">

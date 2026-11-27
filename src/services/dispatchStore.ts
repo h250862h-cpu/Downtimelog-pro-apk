@@ -537,14 +537,12 @@ export function subscribeDispatchEntries(
  * Sheet 1: Standard Dispatch & Linked Production Scrap/Wastage Ledger
  * Sheet 2: Full 3-Stage Verification Audit (Trolley, Signatures, WH Variance)
  */
-export function exportDispatchExcelWorkbook(
+export function buildDispatchExcelWorkbook(
   entries: DispatchEntry[],
   fromDate: string,
   toDate: string,
-  productionLogs: SopProductionRecord[] = [],
-  isAdmin: boolean = false
-) {
-  if (!isAdmin) return;
+  productionLogs: SopProductionRecord[] = []
+): { wb: XLSX.WorkBook; filename: string } {
   const filtered = entries
     .filter((e) => e.date >= fromDate && e.date <= toDate)
     .sort((a, b) => (b.date + b.shiftSubmittedAt).localeCompare(a.date + a.shiftSubmittedAt));
@@ -679,9 +677,25 @@ export function exportDispatchExcelWorkbook(
   XLSX.utils.sheet_add_json(wsAudit, auditRows, { origin: 'A5' });
   XLSX.utils.book_append_sheet(wb, wsAudit, 'Verification Audit');
 
-  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return {
+    wb,
+    filename: `LGPLAST_confidential_dispatch_report_${fromDate}_to_${toDate}_${ymd(new Date())}.xlsx`,
+  };
+}
+
+export async function exportDispatchExcelWorkbook(
+  entries: DispatchEntry[],
+  fromDate: string,
+  toDate: string,
+  productionLogs: SopProductionRecord[] = [],
+  isAdmin: boolean = false
+): Promise<void> {
+  if (!isAdmin) return;
+  const { wb, filename } = buildDispatchExcelWorkbook(entries, fromDate, toDate, productionLogs);
+  const wbout = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-  saveFileBlob(`LGPLAST_confidential_dispatch_report_${fromDate}_to_${toDate}_${ymd(new Date())}.xlsx`, blob);
+  saveFileBlob(filename, blob);
 }
+

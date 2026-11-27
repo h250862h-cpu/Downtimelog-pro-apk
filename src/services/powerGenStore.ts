@@ -876,13 +876,11 @@ export async function flushPendingPowerGenData(): Promise<number> {
 // ======================================================
 // 3. ADMIN-ONLY EXCEL EXPORTS FOR POWER CUT & GENERATOR
 // ======================================================
-export function exportPowerCutExcel(
+export function buildPowerCutWorkbook(
   logs: PowerCutLog[],
   fromDate: string,
-  toDate: string,
-  isAdmin: boolean
-) {
-  if (!isAdmin) return;
+  toDate: string
+): { wb: XLSX.WorkBook; filename: string } {
   const filtered = logs
     .filter((l) => (!fromDate || l.date >= fromDate) && (!toDate || l.date <= toDate))
     .sort((a, b) => (a.date + a.timeOut).localeCompare(b.date + b.timeOut));
@@ -974,20 +972,32 @@ export function exportPowerCutExcel(
     { wch: 20 },
   ];
   XLSX.utils.book_append_sheet(wb, ws, 'Power Cut Logs');
-  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return {
+    wb,
+    filename: `LGPLAST_Power_Cut_Report_${fromDate || 'All'}_to_${toDate || 'Latest'}.xlsx`,
+  };
+}
+
+export async function exportPowerCutExcel(
+  logs: PowerCutLog[],
+  fromDate: string,
+  toDate: string,
+  isAdmin: boolean
+): Promise<void> {
+  if (!isAdmin) return;
+  const { wb, filename } = buildPowerCutWorkbook(logs, fromDate, toDate);
+  const out = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   saveFileBlob(
-    `LGPLAST_Power_Cut_Report_${fromDate || 'All'}_to_${toDate || 'Latest'}.xlsx`,
+    filename,
     new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   );
 }
 
-export function exportGeneratorExcel(
+export function buildGeneratorWorkbook(
   logs: GeneratorLog[],
   fromDate: string,
-  toDate: string,
-  isAdmin: boolean
-) {
-  if (!isAdmin) return;
+  toDate: string
+): { wb: XLSX.WorkBook; filename: string } {
   const filtered = logs
     .filter((l) => (!fromDate || l.date >= fromDate) && (!toDate || l.date <= toDate))
     .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
@@ -1084,9 +1094,24 @@ export function exportGeneratorExcel(
     { wch: 26 },
   ];
   XLSX.utils.book_append_sheet(wb, ws, 'Generator Logs');
-  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return {
+    wb,
+    filename: `LGPLAST_Generator_Report_${fromDate || 'All'}_to_${toDate || 'Latest'}.xlsx`,
+  };
+}
+
+export async function exportGeneratorExcel(
+  logs: GeneratorLog[],
+  fromDate: string,
+  toDate: string,
+  isAdmin: boolean
+): Promise<void> {
+  if (!isAdmin) return;
+  const { wb, filename } = buildGeneratorWorkbook(logs, fromDate, toDate);
+  const out = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   saveFileBlob(
-    `LGPLAST_Generator_Report_${fromDate || 'All'}_to_${toDate || 'Latest'}.xlsx`,
+    filename,
     new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   );
 }
+

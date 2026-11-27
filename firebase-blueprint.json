@@ -378,6 +378,41 @@
         "upd": { "type": "number" }
       },
       "required": ["trialNo", "date", "product", "machine", "trialCategory", "status"]
+    },
+    "scrap_sales_invoice": {
+      "title": "Recycling Scrap Sales Invoice",
+      "description": "3-category recycling scrap sales invoice (Colour Scrap, White Scrap, Empty Bags) with 50% net charge calculation and 3 signature slots",
+      "type": "object",
+      "properties": {
+        "invoiceNo": { "type": "string", "maxLength": 60 },
+        "date": { "type": "string", "maxLength": 20 },
+        "buyerName": { "type": "string", "maxLength": 150 },
+        "totalScrapQntyKg": { "type": "number" },
+        "totalNetKg": { "type": "number" },
+        "totalCost": { "type": "number" },
+        "status": { "type": "string", "maxLength": 20 },
+        "upd": { "type": "number" }
+      },
+      "required": ["invoiceNo", "date", "buyerName", "totalScrapQntyKg", "totalCost", "status"]
+    },
+    "tqm_capa_record": {
+      "title": "Total Quality Management CAPA Record",
+      "description": "Plant-wide linked NCR/CAPA record tying QC lots, downtime, production scrap, trials, power cuts, and dispatch variances with Ishikawa 6M & HOD closure sign-off",
+      "type": "object",
+      "properties": {
+        "capaNo": { "type": "string", "maxLength": 60 },
+        "date": { "type": "string", "maxLength": 20 },
+        "shift": { "type": "string", "maxLength": 20 },
+        "title": { "type": "string", "maxLength": 250 },
+        "machine": { "type": "string", "maxLength": 100 },
+        "product": { "type": "string", "maxLength": 200 },
+        "ishikawaCategory": { "type": "string", "maxLength": 40 },
+        "severity": { "type": "string", "maxLength": 30 },
+        "status": { "type": "string", "maxLength": 30 },
+        "estimatedCopqUsd": { "type": "number" },
+        "upd": { "type": "number" }
+      },
+      "required": ["capaNo", "date", "title", "machine", "ishikawaCategory", "severity", "status"]
     }
   },
   "firestore": {
@@ -460,6 +495,14 @@
     "/quality_trial_reports/{id}": {
       "schema": "quality_trial_report",
       "description": "ISO/QMS/ASTM/SAZ Quality Trial Reports for additive, scrap ratio, and new material qualification"
+    },
+    "/scrap_sales_invoices/{id}": {
+      "schema": "scrap_sales_invoice",
+      "description": "Recycling scrap sales invoices with 3 signature blocks"
+    },
+    "/tqm_capa_records/{id}": {
+      "schema": "tqm_capa_record",
+      "description": "Plant-wide Total Quality Management linked NCR & CAPA register"
     }
   }
 }

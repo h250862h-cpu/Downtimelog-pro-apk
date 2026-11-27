@@ -86,8 +86,8 @@ export const PeriodReportView: React.FC<PeriodReportViewProps> = ({
     return getSummaryRows(fromDate, toDate, machines, entries);
   }, [fromDate, toDate, machines, entries]);
 
-  // Handle Excel download (Admin Only)
-  const handleDownloadExcel = () => {
+  // Handle Excel download (Admin Only — compiled asynchronously in background)
+  const handleDownloadExcel = async () => {
     if (!isAdmin) {
       setExportNotice('Admin Only: Only Administrators can generate Machines Reports.');
       return;
@@ -96,11 +96,13 @@ export const PeriodReportView: React.FC<PeriodReportViewProps> = ({
       setExportNotice('Please select a valid From and To date range.');
       return;
     }
-    setExportNotice('Generating multi-sheet Excel (.xlsx) workbook...');
-    generateExcelWorkbook(fromDate, toDate, machines, entries, supervisorName, isAdmin);
-    setTimeout(() => {
+    setExportNotice('Compiling multi-sheet Excel (.xlsx) workbook in background...');
+    try {
+      await generateExcelWorkbook(fromDate, toDate, machines, entries, supervisorName, isAdmin);
       setExportNotice('Excel report downloaded to your device.');
-    }, 800);
+    } catch {
+      setExportNotice('Background Excel compilation failed. Please retry.');
+    }
   };
 
   // Handle CSV download (Admin Only)

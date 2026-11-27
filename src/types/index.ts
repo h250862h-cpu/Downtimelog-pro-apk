@@ -494,6 +494,8 @@ export interface UserPermissions {
   specialOrdersAccess?: boolean;
   qualityTrialsAccess?: boolean;
   powerGenAccess?: boolean;
+  scrapSalesAccess?: boolean;
+  tqmAccess?: boolean;
 }
 
 export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
@@ -521,6 +523,8 @@ export const FULL_ADMIN_PERMISSIONS: UserPermissions = {
   specialOrdersAccess: true,
   qualityTrialsAccess: true,
   powerGenAccess: true,
+  scrapSalesAccess: true,
+  tqmAccess: true,
 };
 
 export const ZERO_PERMISSIONS: UserPermissions = {
@@ -548,6 +552,8 @@ export const ZERO_PERMISSIONS: UserPermissions = {
   specialOrdersAccess: false,
   qualityTrialsAccess: false,
   powerGenAccess: false,
+  scrapSalesAccess: false,
+  tqmAccess: false,
 };
 
 export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
@@ -582,6 +588,7 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         specialOrdersAccess: true,
         qualityTrialsAccess: true,
         powerGenAccess: true,
+        tqmAccess: true,
       };
     case 'Recycling Team':
       return {
@@ -617,6 +624,7 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         specialOrdersAccess: true,
         qualityTrialsAccess: true,
         powerGenAccess: true,
+        tqmAccess: true,
       };
     case 'QC Inspector':
       return {
@@ -627,6 +635,7 @@ export function getDefaultPermissionsForRole(role: PlantRole): UserPermissions {
         sopFloorAccess: true,
         sopScrapSend: true,
         qualityTrialsAccess: true,
+        tqmAccess: true,
       };
     case 'Maintenance Technician':
       return {
@@ -1323,3 +1332,153 @@ export interface QualityTrialReport {
   upd: number;
   sy?: number;
 }
+
+// ======================================================
+// RECYCLING SCRAP SALES & INVOICING SYSTEM
+// ======================================================
+
+export type ScrapSalesCategoryKey = 'colour_scrap' | 'white_scrap' | 'empty_bags';
+
+export interface ScrapSalesCategoryConfig {
+  key: ScrapSalesCategoryKey;
+  name: string;
+  costPerKg: number;
+  yieldFactor: number; // 0.5 (50% of entered QNTY/KG becomes TOTAL KG)
+}
+
+export const SCRAP_SALES_CATEGORIES: readonly ScrapSalesCategoryConfig[] = [
+  {
+    key: 'colour_scrap',
+    name: 'COLOUR SCRAP',
+    costPerKg: 0.2,
+    yieldFactor: 0.5,
+  },
+  {
+    key: 'white_scrap',
+    name: 'WHITE SCRAP',
+    costPerKg: 0.1,
+    yieldFactor: 0.5,
+  },
+  {
+    key: 'empty_bags',
+    name: 'EMPTY BAGS',
+    costPerKg: 0.066666667,
+    yieldFactor: 0.5,
+  },
+] as const;
+
+export interface ScrapSalesLineItem {
+  key: ScrapSalesCategoryKey;
+  name: string;
+  costPerKg: number;
+  qntyKg: number;
+  totalKg: number;
+  totalCost: number;
+}
+
+export interface ScrapSalesSignatureSlot {
+  name?: string;
+  signature?: string;
+  signedAt?: string;
+}
+
+export interface ScrapSalesInvoice {
+  id: string;
+  invoiceNo: string;
+  date: string; // YYYY-MM-DD
+  buyerName: string;
+  buyerPhone?: string;
+  vehicleReg?: string;
+  notes?: string;
+  items: ScrapSalesLineItem[];
+  totalScrapQntyKg: number; // Sum of QNTY/KG across the 3 categories
+  totalNetKg: number; // Sum of TOTAL KG (50% chargeable weight)
+  totalCost: number; // Grand Total Invoice Cost ($)
+  preparedByName: string;
+  preparedByEmail: string;
+  signatures: {
+    preparedBy: ScrapSalesSignatureSlot;
+    approvedBy: ScrapSalesSignatureSlot;
+    buyer: ScrapSalesSignatureSlot;
+  };
+  status: 'ISSUED' | 'PAID';
+  createdAt: string;
+  upd: number;
+  sy?: number;
+}
+
+// ======================================================
+// TOTAL QUALITY MANAGEMENT (TQM) — LINKED PLANT SYSTEM
+// ======================================================
+
+export type TqmIshikawaCategory =
+  | 'Machine'
+  | 'Material'
+  | 'Method'
+  | 'Man'
+  | 'Measurement'
+  | 'Environment';
+
+export type TqmCapaSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export type TqmCapaStatus = 'OPEN' | 'IN_PROGRESS' | 'VERIFIED_CLOSED';
+
+export type TqmLinkedModule =
+  | 'QC_INSPECTION'
+  | 'SOP_QC'
+  | 'QUALITY_TRIAL'
+  | 'DOWNTIME'
+  | 'SOP_PRODUCTION'
+  | 'SCRAP_PIPELINE'
+  | 'MIXING'
+  | 'SCRAP_SALES'
+  | 'DISPATCH'
+  | 'SPECIAL_ORDER'
+  | 'POWER_GEN'
+  | 'DIESEL'
+  | 'ATTENDANCE'
+  | 'PLANNING';
+
+export interface TqmLinkedEntityRef {
+  module: TqmLinkedModule;
+  recordId: string;
+  label: string;
+  date?: string;
+}
+
+export interface TqmCapaRecord {
+  id: string;
+  capaNo: string; // e.g. TQM-CAPA-202611-001
+  date: string; // YYYY-MM-DD
+  shift: 'Day' | 'Night';
+  title: string;
+  sourceSignalKey?: string;
+  machine: string;
+  product: string;
+  ishikawaCategory: TqmIshikawaCategory;
+  severity: TqmCapaSeverity;
+  status: TqmCapaStatus;
+  problemStatement: string;
+  rootCause5Why: string;
+  containmentAction: string;
+  correctiveAction: string;
+  preventiveAction: string;
+  estimatedCopqUsd: number;
+  scrapImpactKg: number;
+  downtimeImpactMins: number;
+  linkedRefs: TqmLinkedEntityRef[];
+  ownerName: string;
+  targetDueDate: string;
+  raisedByName: string;
+  raisedByEmail: string;
+  raisedSignature?: string;
+  raisedAt: string;
+  verifiedByHodName?: string;
+  verifiedSignature?: string;
+  verifiedAt?: string;
+  verificationNotes?: string;
+  upd: number;
+  sy?: number;
+}
+
+

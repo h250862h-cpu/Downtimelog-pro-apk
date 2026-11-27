@@ -139,9 +139,10 @@ export const PeriodProductionReportView: React.FC<PeriodProductionReportViewProp
     }
   };
 
-  const handleDownloadExcel = () => {
+  const handleDownloadExcel = async () => {
     if (!isAdmin) return;
-    exportUnifiedProductionReportExcel(report, isAdmin);
+    setExportNotice('Compiling 6-Sheet Period Production Excel (.xlsx) in background...');
+    await exportUnifiedProductionReportExcel(report, isAdmin);
     setExportNotice(
       `Downloaded 6-Sheet Period Production Excel (${report.fromDate} to ${report.toDate}) — No SUMIF, All Entries Included.`
     );

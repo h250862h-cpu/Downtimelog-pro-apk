@@ -1104,7 +1104,11 @@ export const QualityTrialView: React.FC<QualityTrialViewProps> = ({
             {isAdmin && (
               <button
                 type="button"
-                onClick={() => exportQualityTrialsExcel(trials, isAdmin)}
+                onClick={async () => {
+                  showToast('Compiling Quality Trials Excel (.xlsx) in background...');
+                  await exportQualityTrialsExcel(trials, isAdmin);
+                  showToast(`Downloaded Quality Trials Excel (${trials.length} records).`);
+                }}
                 className="flex items-center gap-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 px-4 py-2 text-xs font-bold text-white"
               >
                 <FileSpreadsheet className="h-4 w-4" />

@@ -5,6 +5,8 @@ import {
   CheckCircle2,
   Copy,
   ExternalLink,
+  Eye,
+  EyeOff,
   HardHat,
   KeyRound,
   Lock,
@@ -22,6 +24,7 @@ import {
   loginWithEmail,
   loginWithGoogle,
   PRIMARY_ADMIN_EMAIL,
+  verifyAdminCredentialsOnly,
 } from '../firebase';
 import { isUserAdmin } from '../services/downtimeStore';
 import { PlantRole } from '../types';
@@ -41,6 +44,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
   // Sign In inputs
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   // Admin Verification inputs
   const [adminEmail, setAdminEmail] = useState(PRIMARY_ADMIN_EMAIL);
@@ -120,7 +124,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  // 2. Admin Verification Handler (Blocks non-admins from opening the registration form)
+  // 2. Admin Verification Handler (Blocks non-admins without mutating primary auth session)
   const handleAdminVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
@@ -128,16 +132,15 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
     const normAdmin = adminEmail.trim().toLowerCase();
     if (!isUserAdmin(normAdmin)) {
       setErrorMsg(
-        `Access Denied: ${adminEmail} is not an authorized plant administrator. Only ${PRIMARY_ADMIN_EMAIL} can register new staff.`
+        `Access Denied: ${adminEmail} is not an authorized plant administrator. Only ${PRIMARY_ADMIN_EMAIL} or active Admins can register new staff.`
       );
       return;
     }
 
     setLoading(true);
     try {
-      // Authenticate admin credentials with Firebase
-      await loginWithEmail(adminEmail, adminPassword);
-      setAdminVerifiedEmail(normAdmin);
+      const verified = await verifyAdminCredentialsOnly(adminEmail, adminPassword);
+      setAdminVerifiedEmail(verified.email);
       setLoading(false);
       setMode('admin_provision');
     } catch (err: unknown) {
@@ -249,7 +252,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
               <div className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
                 <Lock className="h-4 w-4 shrink-0 text-[#0F1E36]" />
                 <span>
-                  <strong>Authorized Staff Only:</strong> Sign in with your work credentials to continue.
+                  <strong>Created Accounts Only:</strong> Only accounts provisioned by Plant Administration may sign in to LG PLAST.
                 </span>
               </div>
 
@@ -352,13 +355,21 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
                       required
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none"
+                      className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-9 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
                   </div>
                 </div>
 

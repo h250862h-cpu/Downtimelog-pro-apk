@@ -216,5 +216,19 @@ service cloud.firestore {
       allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
+
+    match /scrap_sales_invoices/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    match /tqm_capa_records/{docId} {
+      allow get: if isSignedIn() && isValidDocId(docId);
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
   }
 }

@@ -19,6 +19,7 @@ import {
   PowerCutLog,
   ProductionPlanItem,
   QualityTrialReport,
+  ScrapSalesInvoice,
   SopMixingReport,
   SopProductionRecord,
   SopQcRecord,
@@ -27,6 +28,7 @@ import {
   SpecialOrder,
   SpecialOrderFactoryProduction,
   SpecialOrderWhDispatch,
+  TqmCapaRecord,
 } from '../types';
 import { ParsedAttendanceMessage, QCInspectionRecord } from '../types/attendance';
 import {
@@ -99,6 +101,18 @@ import {
   pollSpecialOrderWhDispatches,
   repairPendingSpecialOrderQueues,
 } from './specialOrderStore';
+import {
+  flushPendingScrapSalesInvoices,
+  getScrapSalesPendingBreakdown,
+  pollScrapSalesInvoices,
+  repairPendingScrapSalesQueues,
+} from './scrapSalesStore';
+import {
+  flushPendingTqmCapas,
+  getTqmPendingBreakdown,
+  pollTqmCapas,
+  repairPendingTqmQueues,
+} from './tqmStore';
 
 export interface PendingSyncBreakdown {
   downtime: number;
@@ -110,6 +124,8 @@ export interface PendingSyncBreakdown {
   attendanceAndQc: number;
   specialOrders: number;
   qualityTrials: number;
+  scrapSales: number;
+  tqmCapas: number;
   plantUsers: number;
   ruleBlockedPending: number;
   totalPending: number;
@@ -132,6 +148,8 @@ export interface CloudSyncDiagnosticsResult {
     specialOrderProd: number;
     specialOrderWh: number;
     trials: number;
+    scrapSales: number;
+    tqmCapas: number;
     sopProd: number;
     sopQc: number;
     sopScrap: number;
@@ -165,6 +183,8 @@ export interface CloudSyncDiagnosticsResult {
     specialOrderProductions: SpecialOrderFactoryProduction[];
     specialOrderWhDispatches: SpecialOrderWhDispatch[];
     qualityTrials: QualityTrialReport[];
+    scrapSalesInvoices: ScrapSalesInvoice[];
+    tqmCapas: TqmCapaRecord[];
     attendanceBatches: ParsedAttendanceMessage[];
     qcLogs: QCInspectionRecord[];
     plantUsers: PlantUserAccount[];
@@ -186,6 +206,8 @@ export function repairAllPendingSyncQueues(): number {
     repairPendingPlanningQueues() +
     repairPendingSpecialOrderQueues() +
     repairPendingQualityTrialQueues() +
+    repairPendingScrapSalesQueues() +
+    repairPendingTqmQueues() +
     repairPendingPlantUsersQueue();
   return repairedTotal;
 }
@@ -202,6 +224,8 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
   const attQcB = getAttendanceAndQcPendingBreakdown();
   const specialB = getSpecialOrderPendingBreakdown();
   const trialsB = getQualityTrialsPendingBreakdown();
+  const scrapSalesB = getScrapSalesPendingBreakdown();
+  const tqmB = getTqmPendingBreakdown();
   const plantUsersRaw = getPendingPlantUsersCount();
   const plantUsers = isFirestorePathBlockedByRules('plant_users') ? 0 : plantUsersRaw;
 
@@ -215,7 +239,9 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
     planHistB.ruleBlocked +
     attQcB.ruleBlocked +
     specialB.ruleBlocked +
-    trialsB.ruleBlocked;
+    trialsB.ruleBlocked +
+    scrapSalesB.ruleBlocked +
+    tqmB.ruleBlocked;
 
   return {
     downtime,
@@ -227,6 +253,8 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
     attendanceAndQc: attQcB.active,
     specialOrders: specialB.active,
     qualityTrials: trialsB.active,
+    scrapSales: scrapSalesB.active,
+    tqmCapas: tqmB.active,
     plantUsers,
     ruleBlockedPending,
     totalPending:
@@ -239,6 +267,8 @@ export function getUnifiedPendingQueueBreakdown(): PendingSyncBreakdown {
       attQcB.active +
       specialB.active +
       trialsB.active +
+      scrapSalesB.active +
+      tqmB.active +
       plantUsers,
   };
 }
@@ -273,6 +303,8 @@ export async function runFullCloudSyncNow(
     flushPendingPowerGenData().catch(() => 0),
     flushPendingSpecialOrderData().catch(() => 0),
     flushPendingQualityTrials().catch(() => 0),
+    flushPendingScrapSalesInvoices().catch(() => 0),
+    flushPendingTqmCapas().catch(() => 0),
     flushPendingPlantUsers().catch(() => 0),
   ]);
   const flushedTotal = flushCounts.reduce((s, n) => s + (Number(n) || 0), 0);
@@ -297,6 +329,8 @@ export async function runFullCloudSyncNow(
     specialOrderProductions,
     specialOrderWhDispatches,
     qualityTrials,
+    scrapSalesInvoices,
+    tqmCapas,
     attendanceBatches,
     qcLogs,
     plantUsers,
@@ -320,6 +354,8 @@ export async function runFullCloudSyncNow(
     pollSpecialOrderProductions(),
     pollSpecialOrderWhDispatches(),
     pollQualityTrials(),
+    pollScrapSalesInvoices(),
+    pollTqmCapas(),
     pollAttendanceBatches(),
     pollQCLogs(),
     fetchPlantUsersDirectory(),
@@ -343,6 +379,8 @@ export async function runFullCloudSyncNow(
       flushPendingPowerGenData().catch(() => 0),
       flushPendingSpecialOrderData().catch(() => 0),
       flushPendingQualityTrials().catch(() => 0),
+      flushPendingScrapSalesInvoices().catch(() => 0),
+      flushPendingTqmCapas().catch(() => 0),
       flushPendingPlantUsers().catch(() => 0),
     ]);
     extraFlushed = flushPass2.reduce((s, n) => s + (Number(n) || 0), 0);
@@ -371,6 +409,8 @@ export async function runFullCloudSyncNow(
       specialOrderProd: specialOrderProductions.length,
       specialOrderWh: specialOrderWhDispatches.length,
       trials: qualityTrials.length,
+      scrapSales: scrapSalesInvoices.length,
+      tqmCapas: tqmCapas.length,
       sopProd: sopProduction.length,
       sopQc: sopQc.length,
       sopScrap: sopScrap.length,
@@ -404,6 +444,8 @@ export async function runFullCloudSyncNow(
       specialOrderProductions,
       specialOrderWhDispatches,
       qualityTrials,
+      scrapSalesInvoices,
+      tqmCapas,
       attendanceBatches,
       qcLogs,
       plantUsers,

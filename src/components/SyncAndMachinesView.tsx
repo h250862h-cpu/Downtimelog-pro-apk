@@ -9,6 +9,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FileSpreadsheet,
   HardHat,
   Info,
   KeyRound,
@@ -57,6 +58,13 @@ import {
   PendingSyncBreakdown,
   runFullCloudSyncNow,
 } from '../services/cloudSyncService';
+import {
+  BackgroundExcelReportId,
+  BackgroundExcelReportSnapshot,
+  buildAllAdminExcelReportsNow,
+  downloadBackgroundExcelReport,
+  subscribeBackgroundExcelReports,
+} from '../services/backgroundExcelService';
 import {
   applyLiveAppUpdate,
   checkForLiveServerUpdate,
@@ -110,6 +118,13 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
   const [selectedRemoveMachine, setSelectedRemoveMachine] = useState<string>(machines[0] || '');
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [isSyncingNow, setIsSyncingNow] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    danger?: boolean;
+    onConfirm: () => Promise<void> | void;
+  } | null>(null);
   const [cloudDiag, setCloudDiag] = useState<CloudSyncDiagnosticsResult | null>(null);
   const [pendingBreakdown, setPendingBreakdown] = useState<PendingSyncBreakdown>(() =>
     getUnifiedPendingQueueBreakdown()
@@ -157,18 +172,29 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
   const currentUserEmail = getActiveSessionUser()?.email || auth.currentUser?.email;
   const userIsAdmin = typeof isAdminProp === 'boolean' ? isAdminProp : isUserAdmin(currentUserEmail);
 
+  const [bgExcelReports, setBgExcelReports] = useState<BackgroundExcelReportSnapshot[]>([]);
+  const [downloadingExcelId, setDownloadingExcelId] = useState<BackgroundExcelReportId | null>(null);
+  const [regeneratingAllExcel, setRegeneratingAllExcel] = useState(false);
+
   useEffect(() => {
     const unsub = subscribePlantUsers((users) => {
       setPlantUsers(users);
     });
+    const unsubBgExcel = userIsAdmin
+      ? subscribeBackgroundExcelReports((list) => {
+          setBgExcelReports(list);
+        })
+      : () => {};
+    if (!userIsAdmin) setBgExcelReports([]);
     const refreshPending = setInterval(() => {
       setPendingBreakdown(getUnifiedPendingQueueBreakdown());
     }, 3000);
     return () => {
       unsub();
+      unsubBgExcel();
       clearInterval(refreshPending);
     };
-  }, []);
+  }, [userIsAdmin]);
 
   const applyRolePreset = (role: PlantRole) => {
     setNewOpRole(role);
@@ -279,13 +305,19 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
 
   const handleDeleteOperator = async (uid: string, name: string) => {
     if (!userIsAdmin) return;
-    if (window.confirm(`Are you sure you want to suspend and revoke access for ${name}?`)) {
-      await deletePlantUserAccount(uid);
-      setOpMsg({
-        text: `Suspended access for ${name}. Their session will lock automatically on all devices.`,
-        isError: false,
-      });
-    }
+    setPendingConfirm({
+      title: 'Suspend & Revoke User Access',
+      message: `Are you sure you want to suspend and revoke access for ${name}? Their session will lock automatically on all devices.`,
+      confirmLabel: 'Suspend Access',
+      danger: true,
+      onConfirm: async () => {
+        await deletePlantUserAccount(uid);
+        setOpMsg({
+          text: `Suspended access for ${name}. Their session will lock automatically on all devices.`,
+          isError: false,
+        });
+      },
+    });
   };
 
   const handleReactivateOperator = async (target: PlantUserAccount) => {
@@ -363,15 +395,17 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
       return;
     }
 
-    if (
-      window.confirm(
-        `Archive "${selectedRemoveMachine}" from the active machine list?\n\nIts past downtime history will remain safe and it can be restored anytime.`
-      )
-    ) {
-      const res = await removeMachine(selectedRemoveMachine, currentUserEmail);
-      setMachineMessage({ text: res.message, isError: !res.ok });
-      onRefreshData();
-    }
+    setPendingConfirm({
+      title: 'Archive Machine',
+      message: `Archive "${selectedRemoveMachine}" from the active machine list? Its past downtime history will remain safe and it can be restored anytime.`,
+      confirmLabel: 'Archive Machine',
+      danger: false,
+      onConfirm: async () => {
+        const res = await removeMachine(selectedRemoveMachine, currentUserEmail);
+        setMachineMessage({ text: res.message, isError: !res.ok });
+        onRefreshData();
+      },
+    });
   };
 
   const handlePermanentDelete = async () => {
@@ -395,15 +429,17 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
       return;
     }
 
-    if (
-      window.confirm(
-        `⚠️ PERMANENT DELETE WARNING:\n\nAre you sure you want to permanently delete "${selectedRemoveMachine}"?\n\nThis will remove the machine from the system.`
-      )
-    ) {
-      const res = await deleteMachinePermanent(selectedRemoveMachine, currentUserEmail);
-      setMachineMessage({ text: res.message, isError: !res.ok });
-      onRefreshData();
-    }
+    setPendingConfirm({
+      title: 'Permanent Machine Removal',
+      message: `Are you sure you want to permanently remove "${selectedRemoveMachine}" from the active machine configuration?`,
+      confirmLabel: 'Delete Permanently',
+      danger: true,
+      onConfirm: async () => {
+        const res = await deleteMachinePermanent(selectedRemoveMachine, currentUserEmail);
+        setMachineMessage({ text: res.message, isError: !res.ok });
+        onRefreshData();
+      },
+    });
   };
 
   const handleRestoreMachine = async (m: string) => {
@@ -1142,6 +1178,7 @@ git push -u origin main`}
                       ['sopFloorAccess', 'SOP Floor: Production, QC & Dashboard'],
                       ['sopScrapSend', 'SOP Scrap: Operator Send (Alerts Recycling)'],
                       ['sopRecyclingConfirm', 'SOP Recycling: Verify & Process (Alerts Mixers)'],
+                      ['scrapSalesAccess', 'Recycling Scrap Sales & 3-Sig Invoice'],
                       ['sopMixingAccess', 'SOP Mixing: Mix & WH Stock (Alerts HOD)'],
                       ['sopHandoverAccess', 'SOP Shift Handover APK'],
                       ['powerGenAccess', 'Power Cut & Generator Logs'],
@@ -1153,6 +1190,7 @@ git push -u origin main`}
                       ['dieselExportExcel', 'Diesel Bowser: Export Fuel Excel (Admin Only)'],
                       ['specialOrdersAccess', 'Special Orders: Gum Boots & Factory/WH Stock'],
                       ['qualityTrialsAccess', 'Quality Trials: ISO/QMS/ASTM/SAZ Trials & PDF'],
+                      ['tqmAccess', 'Total Quality Management (TQM) & CAPA System'],
                       ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                     ] as [keyof UserPermissions, string][]
                   ).map(([permKey, permLabel]) => (
@@ -1345,6 +1383,7 @@ git push -u origin main`}
                   ['sopFloorAccess', 'SOP Floor: Production, QC & Dashboard'],
                   ['sopScrapSend', 'SOP Scrap: Operator Send (Alerts Recycling)'],
                   ['sopRecyclingConfirm', 'SOP Recycling: Verify & Process (Alerts Mixers)'],
+                  ['scrapSalesAccess', 'Recycling Scrap Sales & 3-Sig Invoice'],
                   ['sopMixingAccess', 'SOP Mixing: Mix & WH Stock (Alerts HOD)'],
                   ['sopHandoverAccess', 'SOP Shift Handover APK'],
                   ['powerGenAccess', 'Power Cut & Generator Logs'],
@@ -1356,6 +1395,7 @@ git push -u origin main`}
                   ['dieselExportExcel', 'Diesel Bowser: Export Fuel Excel (Admin Only)'],
                   ['specialOrdersAccess', 'Special Orders: Gum Boots & Factory/WH Stock'],
                   ['qualityTrialsAccess', 'Quality Trials: ISO/QMS/ASTM/SAZ Trials & PDF'],
+                  ['tqmAccess', 'Total Quality Management (TQM) & CAPA System'],
                   ['manageMachinesAndSync', 'Admin Machines, Sync & Backup'],
                 ] as [keyof UserPermissions, string][]
               ).map(([permKey, permLabel]) => (
@@ -1611,6 +1651,8 @@ git push -u origin main`}
               {pendingBreakdown.dispatch > 0 && <span>Dispatch: {pendingBreakdown.dispatch}</span>}
               {pendingBreakdown.specialOrders > 0 && <span>Special Orders: {pendingBreakdown.specialOrders}</span>}
               {pendingBreakdown.qualityTrials > 0 && <span>Trials: {pendingBreakdown.qualityTrials}</span>}
+              {pendingBreakdown.scrapSales > 0 && <span>Scrap Sales: {pendingBreakdown.scrapSales}</span>}
+              {pendingBreakdown.tqmCapas > 0 && <span>TQM CAPAs: {pendingBreakdown.tqmCapas}</span>}
               {pendingBreakdown.sop > 0 && <span>SOP Logs: {pendingBreakdown.sop}</span>}
               {pendingBreakdown.diesel > 0 && <span>Diesel: {pendingBreakdown.diesel}</span>}
               {pendingBreakdown.powerGen > 0 && <span>Power/Gen: {pendingBreakdown.powerGen}</span>}
@@ -1639,6 +1681,14 @@ git push -u origin main`}
               <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
                 <div className="text-slate-400">Quality Trials</div>
                 <div className="font-bold text-white">{cloudDiag.counts.trials}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">Scrap Sales Inv.</div>
+                <div className="font-bold text-white">{cloudDiag.counts.scrapSales}</div>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
+                <div className="text-slate-400">TQM CAPAs</div>
+                <div className="font-bold text-white">{cloudDiag.counts.tqmCapas}</div>
               </div>
               <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5">
                 <div className="text-slate-400">SOP Floor / QC</div>
@@ -1741,7 +1791,106 @@ git push -u origin main`}
         </div>
       </div>
 
-      {/* 6. JSON Backup & Restore */}
+      {/* 6. Admin-Only Background Excel Reports Vault */}
+      {userIsAdmin && (
+        <div className="rounded-2xl border border-emerald-500/40 bg-slate-900/95 p-4 sm:p-6 shadow-lg space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <FileSpreadsheet className="h-5 w-5 text-emerald-400" />
+                <span>Admin-Only Background Excel Reports Vault (.xlsx)</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                All Excel reports are compiled silently in a background worker exclusively for Admin accounts. Tap any report to download immediately.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                setRegeneratingAllExcel(true);
+                try {
+                  await buildAllAdminExcelReportsNow(true);
+                } finally {
+                  setRegeneratingAllExcel(false);
+                }
+              }}
+              disabled={regeneratingAllExcel}
+              className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-3.5 py-2 text-xs font-black text-white shadow transition shrink-0"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${regeneratingAllExcel ? 'animate-spin' : ''}`} />
+              <span>{regeneratingAllExcel ? 'Compiling in Background...' : 'Regenerate All in Background'}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {bgExcelReports.map((rep) => (
+              <div
+                key={rep.id}
+                className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 flex flex-col justify-between gap-2.5"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      {rep.category}
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-bold border ${
+                        rep.status === 'ready'
+                          ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                          : rep.status === 'generating'
+                          ? 'border-sky-500/40 bg-sky-500/15 text-sky-300'
+                          : rep.status === 'error'
+                          ? 'border-rose-500/40 bg-rose-500/15 text-rose-300'
+                          : 'border-slate-700 bg-slate-900 text-slate-400'
+                      }`}
+                    >
+                      {rep.status === 'ready'
+                        ? 'Ready'
+                        : rep.status === 'generating'
+                        ? 'Generating...'
+                        : rep.status === 'error'
+                        ? 'Error'
+                        : 'Queued'}
+                    </span>
+                  </div>
+                  <div className="text-xs font-bold text-white">{rep.label}</div>
+                  <div className="text-[11px] text-slate-400 tabular-nums">
+                    {rep.rowCount} records
+                    {rep.sizeBytes > 0 ? ` · ${(rep.sizeBytes / 1024).toFixed(1)} KB` : ''}
+                    {rep.generatedAtIso
+                      ? ` · Updated ${new Date(rep.generatedAtIso).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}`
+                      : ''}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setDownloadingExcelId(rep.id);
+                    try {
+                      await downloadBackgroundExcelReport(rep.id, userIsAdmin);
+                    } finally {
+                      setDownloadingExcelId(null);
+                    }
+                  }}
+                  disabled={downloadingExcelId === rep.id || rep.status === 'generating'}
+                  className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-[#0F1E36] hover:bg-[#193054] border border-slate-700 disabled:opacity-50 px-3 py-1.5 text-xs font-bold text-white transition"
+                >
+                  <Download className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>
+                    {downloadingExcelId === rep.id ? 'Preparing .xlsx...' : 'Download Excel (.xlsx)'}
+                  </span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 7. JSON Backup & Restore */}
       <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-6 shadow-md">
         <h3 className="text-base font-bold text-white flex items-center gap-2 mb-2">
           <Download className="h-5 w-5 text-amber-400" />
@@ -1784,6 +1933,39 @@ git push -u origin main`}
           </div>
         )}
       </div>
+
+      {pendingConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl space-y-4">
+            <h4 className="text-base font-bold text-white">{pendingConfirm.title}</h4>
+            <p className="text-xs text-slate-300 leading-relaxed">{pendingConfirm.message}</p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setPendingConfirm(null)}
+                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-750"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const action = pendingConfirm.onConfirm;
+                  setPendingConfirm(null);
+                  await action();
+                }}
+                className={`rounded-xl px-4 py-2 text-xs font-semibold text-white ${
+                  pendingConfirm.danger
+                    ? 'bg-rose-600 hover:bg-rose-500'
+                    : 'bg-amber-600 hover:bg-amber-500'
+                }`}
+              >
+                {pendingConfirm.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

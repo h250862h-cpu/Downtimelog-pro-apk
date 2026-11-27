@@ -363,11 +363,9 @@ export function subscribeQualityTrials(
 /**
  * Admin-Only Excel Export of All Quality Trial Reports (Register + Full Test Results Matrix)
  */
-export function exportQualityTrialsExcel(
-  trials: QualityTrialReport[],
-  isAdmin: boolean
-) {
-  if (!isAdmin) return;
+export function buildQualityTrialsWorkbook(
+  trials: QualityTrialReport[]
+): { wb: XLSX.WorkBook; filename: string } {
   const sorted = [...trials].sort((a, b) =>
     (b.date + b.conductedAt).localeCompare(a.date + a.conductedAt)
   );
@@ -443,9 +441,22 @@ export function exportQualityTrialsExcel(
   );
   XLSX.utils.book_append_sheet(wb, wsTests, 'QC Test Results Matrix');
 
-  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return {
+    wb,
+    filename: `LGPLAST_QMS_Quality_Trials_Register_${ymd(new Date())}.xlsx`,
+  };
+}
+
+export async function exportQualityTrialsExcel(
+  trials: QualityTrialReport[],
+  isAdmin: boolean
+): Promise<void> {
+  if (!isAdmin) return;
+  const { wb, filename } = buildQualityTrialsWorkbook(trials);
+  const wbout = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-  saveFileBlob(`LGPLAST_QMS_Quality_Trials_Register_${ymd(new Date())}.xlsx`, blob);
+  saveFileBlob(filename, blob);
 }
+

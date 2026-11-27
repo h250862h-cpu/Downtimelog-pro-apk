@@ -269,7 +269,7 @@ Joseph Sakunyepa 94`;
   };
 
   // Download Excel Report with Date & Shift Range Filtering (Admin Only)
-  const handleDownloadExcel = () => {
+  const handleDownloadExcel = async () => {
     if (!isAdmin) {
       showToast('Admin Only: Only Administrators can generate Attendance Reports.');
       return;
@@ -278,14 +278,17 @@ Joseph Sakunyepa 94`;
       showToast('No attendance records match the selected date range.');
       return;
     }
-    const fileName = generateAttendanceExcelWorkbook(
+    showToast('Generating Attendance Excel (.xlsx) in background...');
+    const fileName = await generateAttendanceExcelWorkbook(
       batch,
       filterFromDate,
       filterToDate,
       filterShift,
       isAdmin
     );
-    showToast(`Downloaded Excel report (${filteredBatch.length} shifts): ${fileName}`);
+    if (fileName) {
+      showToast(`Downloaded Excel report (${filteredBatch.length} shifts): ${fileName}`);
+    }
   };
 
   // Quick Date Filter Presets

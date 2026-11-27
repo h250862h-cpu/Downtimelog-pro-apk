@@ -1216,16 +1216,13 @@ export async function recordFuelGrnAndTopUpTank(params: {
 // 5. ADMIN-ONLY DIESEL BOWSER USAGE & GRN EXCEL EXPORT
 //    Maintains exact CSV Request Ledger Structure + Positives - Negatives Tank Balance
 // ======================================================
-export function exportDieselExcelWorkbook(
+export function buildDieselExcelWorkbook(
   requests: DieselFuelRequest[],
   grns: DieselGrnRecord[],
   tank: DieselTankConfig,
   fromDate: string,
-  toDate: string,
-  isAdmin: boolean = false
-) {
-  if (!isAdmin) return;
-
+  toDate: string
+): { wb: XLSX.WorkBook; filename: string } {
   const liveTank = recomputeDieselTankFromLedger(tank, requests, grns);
   const wb = XLSX.utils.book_new();
 
@@ -1466,9 +1463,26 @@ export function exportDieselExcelWorkbook(
   const wsGrns = XLSX.utils.json_to_sheet(grnSheetRows);
   XLSX.utils.book_append_sheet(wb, wsGrns, 'Fuel GRN Receipts');
 
-  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return {
+    wb,
+    filename: `LGPLAST_Diesel_Bowser_Report_${fromDate || 'All'}_to_${toDate || 'Latest'}.xlsx`,
+  };
+}
+
+export async function exportDieselExcelWorkbook(
+  requests: DieselFuelRequest[],
+  grns: DieselGrnRecord[],
+  tank: DieselTankConfig,
+  fromDate: string,
+  toDate: string,
+  isAdmin: boolean = false
+): Promise<void> {
+  if (!isAdmin) return;
+  const { wb, filename } = buildDieselExcelWorkbook(requests, grns, tank, fromDate, toDate);
+  const out = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   saveFileBlob(
-    `LGPLAST_Diesel_Bowser_Report_${fromDate || 'All'}_to_${toDate || 'Latest'}.xlsx`,
+    filename,
     new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   );
 }
+

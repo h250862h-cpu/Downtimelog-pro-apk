@@ -183,12 +183,12 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
   >(null);
   const [deletingRecord, setDeletingRecord] = useState(false);
 
+  const [exportingExcel, setExportingExcel] = useState<'factory' | 'wh' | null>(null);
   const canShiftWrite = isAdmin || Boolean(permissions.dispatchShiftEntry);
   const canWhConfirm = isAdmin || Boolean(permissions.dispatchWHConfirm);
   const canHodConfirm = isAdmin || Boolean(permissions.dispatchHODConfirm);
   const canManagePlanning = isAdmin || canHodConfirm || Boolean(permissions.productionPlanningAccess);
-  const canExportReports =
-    isAdmin || Boolean(permissions.exportDispatchExcel || permissions.productionReportAccess);
+  const canExportReports = Boolean(isAdmin);
 
   const allowedSubTabs = useMemo<SpecialOrderSubTab[]>(() => {
     const list: SpecialOrderSubTab[] = [];
@@ -1816,18 +1816,29 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() =>
-                    exportSpecialOrderFactoryStockExcel({
-                      order: activeOrder,
-                      prodEntries,
-                      whDispatches,
-                      isAdmin: canExportReports,
-                    })
-                  }
-                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition"
+                  disabled={exportingExcel !== null}
+                  onClick={async () => {
+                    if (!isAdmin) return;
+                    setExportingExcel('factory');
+                    try {
+                      await exportSpecialOrderFactoryStockExcel({
+                        order: activeOrder,
+                        prodEntries,
+                        whDispatches,
+                        isAdmin: true,
+                      });
+                    } finally {
+                      setExportingExcel(null);
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-4 py-2.5 text-xs font-bold text-white transition"
                 >
                   <FileSpreadsheet className="h-4 w-4" />
-                  <span>Download Stock in Factory Excel (.xlsx)</span>
+                  <span>
+                    {exportingExcel === 'factory'
+                      ? 'Compiling Stock in Factory Excel...'
+                      : 'Download Stock in Factory Excel (.xlsx)'}
+                  </span>
                 </button>
               </div>
 
@@ -1844,17 +1855,28 @@ export const SpecialOrdersView: React.FC<SpecialOrdersViewProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() =>
-                    exportSpecialOrderWhDispatchedExcel({
-                      order: activeOrder,
-                      whDispatches,
-                      isAdmin: canExportReports,
-                    })
-                  }
-                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] px-4 py-2.5 text-xs font-bold text-white transition"
+                  disabled={exportingExcel !== null}
+                  onClick={async () => {
+                    if (!isAdmin) return;
+                    setExportingExcel('wh');
+                    try {
+                      await exportSpecialOrderWhDispatchedExcel({
+                        order: activeOrder,
+                        whDispatches,
+                        isAdmin: true,
+                      });
+                    } finally {
+                      setExportingExcel(null);
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#0F1E36] hover:bg-[#193054] disabled:opacity-50 px-4 py-2.5 text-xs font-bold text-white transition"
                 >
                   <FileSpreadsheet className="h-4 w-4" />
-                  <span>Download Stock Dispatched to WH Excel (.xlsx)</span>
+                  <span>
+                    {exportingExcel === 'wh'
+                      ? 'Compiling Stock Dispatched Excel...'
+                      : 'Download Stock Dispatched to WH Excel (.xlsx)'}
+                  </span>
                 </button>
               </div>
             </div>

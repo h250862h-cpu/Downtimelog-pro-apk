@@ -85,6 +85,9 @@ const ProductionPlanningView = lazy(() =>
 const QualityTrialView = lazy(() =>
   import('./components/QualityTrialView').then((m) => ({ default: m.QualityTrialView }))
 );
+const ScrapSalesView = lazy(() =>
+  import('./components/ScrapSalesView').then((m) => ({ default: m.ScrapSalesView }))
+);
 const SopFloorApkView = lazy(() =>
   import('./components/SopFloorApkView').then((m) => ({ default: m.SopFloorApkView }))
 );
@@ -94,17 +97,24 @@ const SpecialOrdersView = lazy(() =>
 const SyncAndMachinesView = lazy(() =>
   import('./components/SyncAndMachinesView').then((m) => ({ default: m.SyncAndMachinesView }))
 );
+const TqmSystemView = lazy(() =>
+  import('./components/TqmSystemView').then((m) => ({ default: m.TqmSystemView }))
+);
 import {
   auth,
   ensureFirebaseAuth,
   getActiveSessionUser,
   getLocalPlantUsers,
+  hasPlantUsersServerLoaded,
+  isCreatedPlantAccountEmail,
   logoutUser,
   PRIMARY_ADMIN_EMAIL,
   resolveUserPermissions,
   setActiveSessionUser,
   subscribeCloudSyncBus,
   subscribePlantUsers,
+  subscribePlantUsersServerLoaded,
+  SYNC_SERVICE_EMAIL,
   testConnection,
   withTimeout,
 } from './firebase';
@@ -112,7 +122,9 @@ import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import {
   getLocalAttendanceBatch,
+  getLocalQCLogs,
   subscribeAttendanceBatches,
+  subscribeQCLogs,
 } from './services/attendanceStore';
 import {
   getLocalDieselGrns,
@@ -166,6 +178,15 @@ import {
   subscribeQualityTrials,
 } from './services/qualityTrialStore';
 import {
+  getLocalScrapSalesInvoices,
+  subscribeScrapSalesInvoices,
+} from './services/scrapSalesStore';
+import {
+  getLocalTqmCapas,
+  subscribeTqmCapas,
+} from './services/tqmStore';
+import { updateBackgroundExcelDataset } from './services/backgroundExcelService';
+import {
   getLocalSpecialOrderProductions,
   getLocalSpecialOrders,
   getLocalSpecialOrderWhDispatches,
@@ -201,6 +222,7 @@ import {
   PowerCutLog,
   ProductionPlanItem,
   QualityTrialReport,
+  ScrapSalesInvoice,
   SopMixingReport,
   SopProductionRecord,
   SopQcRecord,
@@ -209,9 +231,10 @@ import {
   SpecialOrder,
   SpecialOrderFactoryProduction,
   SpecialOrderWhDispatch,
+  TqmCapaRecord,
   ZERO_PERMISSIONS,
 } from './types';
-import { ParsedAttendanceMessage } from './types/attendance';
+import { ParsedAttendanceMessage, QCInspectionRecord } from './types/attendance';
 
 export type DowntimeTab =
   | 'status'
@@ -226,8 +249,10 @@ export type DowntimeTab =
   | 'sop_production'
   | 'sop_qc'
   | 'quality_trials'
+  | 'tqm'
   | 'sop_scrap'
   | 'sop_recycling'
+  | 'scrap_sales'
   | 'sop_mixing'
   | 'sop_handover'
   | 'attendance'
@@ -269,6 +294,9 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [firebaseReady, setFirebaseReady] = useState(false);
   const [plantUsers, setPlantUsers] = useState<PlantUserAccount[]>(() => getLocalPlantUsers());
+  const [plantUsersServerReady, setPlantUsersServerReady] = useState<boolean>(() =>
+    hasPlantUsersServerLoaded()
+  );
 
   // Active Navigation Tab & Sub-stage Navigation
   const [activeDowntimeTab, setActiveDowntimeTab] = useState<DowntimeTab>('status');
@@ -323,6 +351,13 @@ export default function App() {
   );
   const [attendanceBatch, setAttendanceBatch] = useState<ParsedAttendanceMessage[]>(() =>
     getLocalAttendanceBatch()
+  );
+  const [qcLogs, setQcLogs] = useState<QCInspectionRecord[]>(() => getLocalQCLogs());
+  const [scrapSalesInvoices, setScrapSalesInvoices] = useState<ScrapSalesInvoice[]>(() =>
+    getLocalScrapSalesInvoices()
+  );
+  const [tqmCapas, setTqmCapas] = useState<TqmCapaRecord[]>(() =>
+    getLocalTqmCapas()
   );
   const [snoozedPopupMap, setSnoozedPopupMap] = useState<Record<string, number>>({});
   const [popupClockNow, setPopupClockNow] = useState<number>(() => Date.now());
@@ -518,9 +553,21 @@ export default function App() {
 
     initFirebaseSession();
 
+    const unsubServerLoaded = subscribePlantUsersServerLoaded(() => {
+      if (mounted) setPlantUsersServerReady(true);
+    });
+
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
       const localSession = getActiveSessionUser();
       if (currentUser) {
+        if (
+          !localSession &&
+          (currentUser.email || '').trim().toLowerCase() === SYNC_SERVICE_EMAIL.toLowerCase()
+        ) {
+          setUser(null);
+          setAuthLoading(false);
+          return;
+        }
         const resolvedUser = localSession
           ? {
               uid: currentUser.uid,
@@ -549,6 +596,7 @@ export default function App() {
 
     return () => {
       mounted = false;
+      unsubServerLoaded();
       unsubAuth();
     };
   }, []);
@@ -586,6 +634,9 @@ export default function App() {
 
     const unsubAttendance = subscribeAttendanceBatches((batches) => {
       setAttendanceBatch(batches);
+    });
+    const unsubQcLogs = subscribeQCLogs((rows) => {
+      setQcLogs(rows);
     });
 
     const unsubSopProd = subscribeSopProduction((rows) => {
@@ -636,6 +687,12 @@ export default function App() {
     const unsubQualityTrials = subscribeQualityTrials((rows) => {
       setQualityTrials(rows);
     });
+    const unsubScrapSales = subscribeScrapSalesInvoices((rows) => {
+      setScrapSalesInvoices(rows);
+    });
+    const unsubTqmCapas = subscribeTqmCapas((rows) => {
+      setTqmCapas(rows);
+    });
 
     const pendingTimer = setInterval(() => {
       setPendingSyncCount(getUnifiedPendingQueueBreakdown().totalPending);
@@ -676,7 +733,10 @@ export default function App() {
         setSpecialOrderProductions(res.data.specialOrderProductions);
         setSpecialOrderWhDispatches(res.data.specialOrderWhDispatches);
         setQualityTrials(res.data.qualityTrials);
+        setScrapSalesInvoices(res.data.scrapSalesInvoices);
+        setTqmCapas(res.data.tqmCapas);
         setAttendanceBatch(res.data.attendanceBatches);
+        setQcLogs(res.data.qcLogs);
         setPlantUsers(res.data.plantUsers);
         setPendingSyncCount(res.pendingAfter.totalPending);
         if (res.ok) {
@@ -742,6 +802,7 @@ export default function App() {
       unsubUsers();
       unsubDispatch();
       unsubAttendance();
+      unsubQcLogs();
       unsubSopProd();
       unsubSopQc();
       unsubSopScrap();
@@ -758,6 +819,8 @@ export default function App() {
       unsubSpecialOrderProd();
       unsubSpecialOrderWh();
       unsubQualityTrials();
+      unsubScrapSales();
+      unsubTqmCapas();
       unsubSyncBus();
       clearTimeout(initialPullTimer);
       clearInterval(pendingTimer);
@@ -824,17 +887,84 @@ export default function App() {
   const isPrimaryAdmin =
     (user?.email || '').trim().toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase();
 
+  const isRegisteredAccount = Boolean(
+    user?.email && isCreatedPlantAccountEmail(user.email, plantUsers)
+  );
+
   const isSuspendedAccount = Boolean(
-    matchedUserRecord && !isPrimaryAdmin && matchedUserRecord.status === 'suspended'
+    matchedUserRecord && !isPrimaryAdmin && (matchedUserRecord.status === 'suspended' || matchedUserRecord.revoked)
   );
 
   const isAdmin =
     !isSuspendedAccount &&
+    isRegisteredAccount &&
     (isPrimaryAdmin ||
       (matchedUserRecord
         ? matchedUserRecord.role === 'Plant Administrator' ||
           matchedUserRecord.role === 'Production HOD'
         : isUserAdmin(user?.email) || user?.role === 'Production HOD'));
+
+  // Background Excel Compilation Engine (Admin Only — runs asynchronously in Web Worker)
+  useEffect(() => {
+    if (!user || !isAdmin || isSuspendedAccount || !isRegisteredAccount) {
+      updateBackgroundExcelDataset(false, null);
+      return;
+    }
+    updateBackgroundExcelDataset(true, {
+      machines,
+      downtimeEntries: entries,
+      dispatches: allDispatchesWithBackground,
+      dieselRequests,
+      dieselGrns,
+      dieselTank,
+      powerCutLogs,
+      generatorLogs,
+      scrapSalesInvoices,
+      attendanceBatch,
+      qcLogs,
+      qualityTrials,
+      sopProductionLogs,
+      sopQcChecks,
+      sopScrapPipeline,
+      sopMixingReports,
+      sopHandovers,
+      monthlyPlans,
+      specialOrders,
+      specialOrderProductions,
+      specialOrderWhDispatches,
+      tqmCapas,
+      supervisorName: user.displayName || currentReporter || 'Plant Admin',
+    });
+  }, [
+    user?.email,
+    user?.displayName,
+    currentReporter,
+    isAdmin,
+    isSuspendedAccount,
+    isRegisteredAccount,
+    machines,
+    entries,
+    allDispatchesWithBackground,
+    dieselRequests,
+    dieselGrns,
+    dieselTank,
+    powerCutLogs,
+    generatorLogs,
+    scrapSalesInvoices,
+    attendanceBatch,
+    qcLogs,
+    qualityTrials,
+    sopProductionLogs,
+    sopQcChecks,
+    sopScrapPipeline,
+    sopMixingReports,
+    sopHandovers,
+    monthlyPlans,
+    specialOrders,
+    specialOrderProductions,
+    specialOrderWhDispatches,
+    tqmCapas,
+  ]);
 
   const effectivePermissions = useMemo(() => {
     if (isSuspendedAccount) {
@@ -948,16 +1078,14 @@ export default function App() {
     (isAdmin ||
       Boolean(effectivePermissions.dispatchShiftEntry) ||
       Boolean(effectivePermissions.dispatchWHConfirm) ||
-      Boolean(effectivePermissions.dispatchHODConfirm) ||
-      Boolean(effectivePermissions.exportDispatchExcel));
+      Boolean(effectivePermissions.dispatchHODConfirm));
 
   const hasDieselAccess =
     !isSuspendedAccount &&
     (isAdmin ||
       Boolean(effectivePermissions.dieselFuelRequest) ||
       Boolean(effectivePermissions.dieselHODApprove) ||
-      Boolean(effectivePermissions.dieselGRN) ||
-      Boolean(effectivePermissions.dieselExportExcel));
+      Boolean(effectivePermissions.dieselGRN));
 
   const dieselBadgeCount = useMemo(() => {
     if (isSuspendedAccount) return 0;
@@ -1143,6 +1271,13 @@ export default function App() {
   const hasQualityTrialAccess =
     !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.qualityTrialsAccess));
 
+  const hasScrapSalesAccess =
+    !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.scrapSalesAccess));
+
+  const hasTqmAccess =
+    !isSuspendedAccount &&
+    (isAdmin || Boolean(effectivePermissions.tqmAccess) || Boolean(effectivePermissions.qualityTrialsAccess));
+
   // Compute allowed sidebar navigation tabs strictly from effectivePermissions
   const allowedTabs = useMemo<DowntimeTab[]>(() => {
     if (isSuspendedAccount) return [];
@@ -1163,11 +1298,15 @@ export default function App() {
       tabs.push('sop_overview', 'sop_production', 'sop_qc');
     }
     if (hasQualityTrialAccess) tabs.push('quality_trials');
+    if (hasTqmAccess) tabs.push('tqm');
     if (isAdmin || effectivePermissions.sopScrapSend) {
       tabs.push('sop_scrap');
     }
     if (isAdmin || effectivePermissions.sopRecyclingConfirm) {
       tabs.push('sop_recycling');
+    }
+    if (hasScrapSalesAccess) {
+      tabs.push('scrap_sales');
     }
     if (isAdmin || effectivePermissions.sopMixingAccess) {
       tabs.push('sop_mixing');
@@ -1176,8 +1315,8 @@ export default function App() {
       tabs.push('sop_handover');
     }
     if (isAdmin || effectivePermissions.attendanceLogger) tabs.push('attendance');
-    if (isAdmin || effectivePermissions.productionReportAccess) tabs.push('prod_report');
-    if (isAdmin || effectivePermissions.exportDowntimeExcel) tabs.push('rep');
+    if (isAdmin) tabs.push('prod_report');
+    if (isAdmin) tabs.push('rep');
     if (isAdmin || effectivePermissions.manageMachinesAndSync) tabs.push('data');
     return tabs;
   }, [
@@ -1186,6 +1325,8 @@ export default function App() {
     hasDispatchAccess,
     hasSpecialOrderAccess,
     hasQualityTrialAccess,
+    hasTqmAccess,
+    hasScrapSalesAccess,
     hasDieselAccess,
     isAdmin,
   ]);
@@ -1305,7 +1446,10 @@ export default function App() {
       setSpecialOrderProductions(res.data.specialOrderProductions);
       setSpecialOrderWhDispatches(res.data.specialOrderWhDispatches);
       setQualityTrials(res.data.qualityTrials);
+      setScrapSalesInvoices(res.data.scrapSalesInvoices);
+      setTqmCapas(res.data.tqmCapas);
       setAttendanceBatch(res.data.attendanceBatches);
+      setQcLogs(res.data.qcLogs);
       setPlantUsers(res.data.plantUsers);
       setPendingSyncCount(res.pendingAfter.totalPending);
       setLastLiveHeartbeat(
@@ -1367,7 +1511,50 @@ export default function App() {
     );
   }
 
-  // 2B. LIVE CROSS-DEVICE REVOCATION / SUSPENSION LOCKOUT
+  // 2B. CREATED-ACCOUNTS-ONLY ENFORCEMENT
+  if (!isPrimaryAdmin && user.email && !isRegisteredAccount) {
+    if (isOnline && !plantUsersServerReady) {
+      return (
+        <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center text-slate-700 gap-3 font-sans">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#0F1E36] text-white shadow-sm">
+            <ShieldCheck className="h-6 w-6" />
+          </div>
+          <div className="text-xs font-semibold tracking-wider text-slate-600 uppercase">
+            Verifying Plant User Account Directory...
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center p-4 text-slate-800 font-sans">
+        <div className="w-full max-w-md rounded-2xl border border-rose-200 bg-white p-7 text-center space-y-4 shadow-lg">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 border border-rose-200 text-rose-600">
+            <Lock className="h-7 w-7" />
+          </div>
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-bold text-slate-900">Account Not Created in System</h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Only accounts created by the Plant Administrator can sign in. <span className="font-mono font-semibold text-slate-800">{user.email}</span> is not registered in the active plant user directory.
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Ask <span className="font-mono font-semibold text-[#0F1E36]">{PRIMARY_ADMIN_EMAIL}</span> to create your account first.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#0F1E36] hover:bg-[#193054] px-4 py-2.5 text-xs font-bold text-white transition"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>Sign Out</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 2C. LIVE CROSS-DEVICE REVOCATION / SUSPENSION LOCKOUT
   if (isSuspendedAccount) {
     return (
       <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center p-4 text-slate-800 font-sans">
@@ -1486,6 +1673,14 @@ export default function App() {
       icon: <FlaskConical className="h-4 w-4" />,
     },
     {
+      id: 'tqm',
+      group: '2. Daily SOP Floor APKs',
+      label: 'TQM Command Center',
+      subtitle: 'COPQ · 360° Link · CAPA',
+      icon: <ShieldCheck className="h-4 w-4" />,
+      badge: tqmCapas.filter((c) => c.status !== 'VERIFIED_CLOSED').length,
+    },
+    {
       id: 'sop_scrap',
       group: '2. Daily SOP Floor APKs',
       label: 'Scrap Send APK',
@@ -1499,6 +1694,13 @@ export default function App() {
       subtitle: 'Process → Mixer Alert',
       icon: <Recycle className="h-4 w-4" />,
       badge: sopRecyclingBadgeCount,
+    },
+    {
+      id: 'scrap_sales',
+      group: '2. Daily SOP Floor APKs',
+      label: 'Scrap Sales & Invoice',
+      subtitle: 'Colour · White · Empty Bags PDF',
+      icon: <FileSpreadsheet className="h-4 w-4" />,
     },
     {
       id: 'sop_mixing',
@@ -1541,7 +1743,7 @@ export default function App() {
       id: 'prod_report',
       group: '3. Reports, Attendance & Admin',
       label: 'Production Report',
-      subtitle: 'All Entries · 6-Sheet Excel',
+      subtitle: 'Admin · Background 6-Sheet Excel',
       icon: <BarChart3 className="h-4 w-4" />,
       adminTag: true,
     },
@@ -1549,8 +1751,9 @@ export default function App() {
       id: 'rep',
       group: '3. Reports, Attendance & Admin',
       label: 'Downtime Excel',
-      subtitle: 'Confidential Report',
+      subtitle: 'Admin Only Excel Report',
       icon: <FileSpreadsheet className="h-4 w-4" />,
+      adminTag: true,
     },
     {
       id: 'data',
@@ -2104,7 +2307,7 @@ export default function App() {
                     <DailyHoursView
                       machines={machines}
                       entries={entries}
-                      isAdmin={isAdmin || Boolean(effectivePermissions.exportDowntimeExcel)}
+                      isAdmin={isAdmin}
                     />
                   )}
 
@@ -2200,6 +2403,37 @@ export default function App() {
                   />
                 )}
 
+                {activeDowntimeTab === 'tqm' && hasTqmAccess && (
+                  <TqmSystemView
+                    machines={machines}
+                    downtimeEntries={entries}
+                    dispatches={allDispatchesWithBackground}
+                    monthlyPlans={monthlyPlans}
+                    specialOrders={specialOrders}
+                    specialOrderProductions={specialOrderProductions}
+                    specialOrderWhDispatches={specialOrderWhDispatches}
+                    qualityTrials={qualityTrials}
+                    sopProductionLogs={sopProductionLogs}
+                    sopQcChecks={sopQcChecks}
+                    sopScrapPipeline={sopScrapPipeline}
+                    sopMixingReports={sopMixingReports}
+                    sopHandovers={sopHandovers}
+                    scrapSalesInvoices={scrapSalesInvoices}
+                    dieselRequests={dieselRequests}
+                    dieselGrns={dieselGrns}
+                    dieselTank={dieselTank}
+                    powerCutLogs={powerCutLogs}
+                    generatorLogs={generatorLogs}
+                    attendanceBatch={attendanceBatch}
+                    qcLogs={qcLogs}
+                    tqmCapas={tqmCapas}
+                    permissions={effectivePermissions}
+                    isAdmin={isAdmin}
+                    currentUserName={user.displayName || currentReporter}
+                    currentUserEmail={user.email || ''}
+                  />
+                )}
+
                 {SOP_TAB_TO_SUBTAB[activeDowntimeTab] &&
                   allowedTabs.includes(activeDowntimeTab) && (
                     <SopFloorApkView
@@ -2219,6 +2453,15 @@ export default function App() {
                     />
                   )}
 
+                {activeDowntimeTab === 'scrap_sales' && hasScrapSalesAccess && (
+                  <ScrapSalesView
+                    invoices={scrapSalesInvoices}
+                    isAdmin={isAdmin}
+                    currentUserName={user.displayName || currentReporter}
+                    currentUserEmail={user.email || ''}
+                  />
+                )}
+
                 {activeDowntimeTab === 'attendance' &&
                   (effectivePermissions.attendanceLogger || isAdmin) && (
                     <AttendanceLoggerApp
@@ -2229,32 +2472,30 @@ export default function App() {
                     />
                   )}
 
-                {activeDowntimeTab === 'prod_report' &&
-                  (isAdmin || effectivePermissions.productionReportAccess) && (
-                    <PeriodProductionReportView
-                      machines={machines}
-                      downtimeEntries={entries}
-                      allDispatches={allDispatchesWithBackground}
-                      sopProductionLogs={sopProductionLogs}
-                      sopQcChecks={sopQcChecks}
-                      dieselRequests={dieselRequests}
-                      dieselGrns={dieselGrns}
-                      dieselTank={dieselTank}
-                      generatorLogs={generatorLogs}
-                      powerCutLogs={powerCutLogs}
-                      currentUserName={user.displayName || currentReporter}
-                      isAdmin={isAdmin || Boolean(effectivePermissions.productionReportAccess)}
-                    />
-                  )}
+                {activeDowntimeTab === 'prod_report' && isAdmin && (
+                  <PeriodProductionReportView
+                    machines={machines}
+                    downtimeEntries={entries}
+                    allDispatches={allDispatchesWithBackground}
+                    sopProductionLogs={sopProductionLogs}
+                    sopQcChecks={sopQcChecks}
+                    dieselRequests={dieselRequests}
+                    dieselGrns={dieselGrns}
+                    dieselTank={dieselTank}
+                    generatorLogs={generatorLogs}
+                    powerCutLogs={powerCutLogs}
+                    currentUserName={user.displayName || currentReporter}
+                    isAdmin={isAdmin}
+                  />
+                )}
 
-                {activeDowntimeTab === 'rep' &&
-                  (isAdmin || effectivePermissions.exportDowntimeExcel) && (
-                    <PeriodReportView
-                      machines={machines}
-                      entries={entries}
-                      isAdmin={isAdmin || Boolean(effectivePermissions.exportDowntimeExcel)}
-                    />
-                  )}
+                {activeDowntimeTab === 'rep' && isAdmin && (
+                  <PeriodReportView
+                    machines={machines}
+                    entries={entries}
+                    isAdmin={isAdmin}
+                  />
+                )}
 
                 {activeDowntimeTab === 'data' &&
                   (isAdmin || effectivePermissions.manageMachinesAndSync) && (

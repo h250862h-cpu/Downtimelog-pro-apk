@@ -549,7 +549,11 @@ export const PowerCutAndGeneratorView: React.FC<PowerCutAndGeneratorViewProps> =
               subTab === 'power_cuts' ? (
                 <button
                   type="button"
-                  onClick={() => exportPowerCutExcel(powerCutLogs, fromDate, toDate, isAdmin)}
+                  onClick={async () => {
+                    showNotice('Compiling Power Cut Excel (.xlsx) in background...');
+                    await exportPowerCutExcel(powerCutLogs, fromDate, toDate, isAdmin);
+                    showNotice(`Downloaded Power Cut Excel (${filteredPowerCuts.length} logs).`);
+                  }}
                   disabled={filteredPowerCuts.length === 0}
                   className="flex items-center gap-1.5 rounded-lg bg-[#0F1E36] hover:bg-[#1A2F52] px-3.5 py-2 text-xs font-semibold text-white shadow-xs transition disabled:opacity-50"
                 >
@@ -559,7 +563,11 @@ export const PowerCutAndGeneratorView: React.FC<PowerCutAndGeneratorViewProps> =
               ) : (
                 <button
                   type="button"
-                  onClick={() => exportGeneratorExcel(generatorLogs, fromDate, toDate, isAdmin)}
+                  onClick={async () => {
+                    showNotice('Compiling Generator Excel (.xlsx) in background...');
+                    await exportGeneratorExcel(generatorLogs, fromDate, toDate, isAdmin);
+                    showNotice(`Downloaded Generator Excel (${filteredGeneratorLogs.length} logs).`);
+                  }}
                   disabled={filteredGeneratorLogs.length === 0}
                   className="flex items-center gap-1.5 rounded-lg bg-[#0F1E36] hover:bg-[#1A2F52] px-3.5 py-2 text-xs font-semibold text-white shadow-xs transition disabled:opacity-50"
                 >

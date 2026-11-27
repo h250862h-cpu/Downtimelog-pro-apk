@@ -1516,12 +1516,12 @@ export async function hodConfirmSpecialOrderWhDispatch(params: {
 // REPORT 1: ADMIN-ONLY STOCK IN FACTORY EXCEL
 // ======================================================
 
-export function exportSpecialOrderFactoryStockExcel(params: {
+export async function exportSpecialOrderFactoryStockExcel(params: {
   order: SpecialOrder;
   prodEntries: SpecialOrderFactoryProduction[];
   whDispatches: SpecialOrderWhDispatch[];
   isAdmin: boolean;
-}) {
+}): Promise<void> {
   if (!params.isAdmin) return;
   const { order, prodEntries, whDispatches } = params;
   const stockSummary = computeOrderFactoryStock(order, prodEntries, whDispatches);
@@ -1621,7 +1621,7 @@ export function exportSpecialOrderFactoryStockExcel(params: {
   );
   XLSX.utils.book_append_sheet(wb, wsLog, 'Daily Factory Production');
 
-  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const wbout = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
@@ -1632,11 +1632,11 @@ export function exportSpecialOrderFactoryStockExcel(params: {
 // REPORT 2: ADMIN-ONLY STOCK DISPATCHED TO WH EXCEL
 // ======================================================
 
-export function exportSpecialOrderWhDispatchedExcel(params: {
+export async function exportSpecialOrderWhDispatchedExcel(params: {
   order: SpecialOrder;
   whDispatches: SpecialOrderWhDispatch[];
   isAdmin: boolean;
-}) {
+}): Promise<void> {
   if (!params.isAdmin) return;
   const { order, whDispatches } = params;
   const deletedSet = readDeletedIdSet();
@@ -1722,12 +1722,13 @@ export function exportSpecialOrderWhDispatchedExcel(params: {
   );
   XLSX.utils.book_append_sheet(wb, wsSizes, 'Per-Size WH Breakdown');
 
-  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const wbout = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
   saveFileBlob(`LGPLAST_special_order_WH_DISPATCH_${order.orderNo}_${ymd(new Date())}.xlsx`, blob);
 }
+
 
 // ======================================================
 // OFFICIAL PORTRAIT PDF SLIP FOR SPECIAL ORDER WH DISPATCH

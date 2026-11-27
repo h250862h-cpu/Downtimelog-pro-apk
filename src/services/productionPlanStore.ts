@@ -1472,11 +1472,9 @@ export function buildUnifiedProductionReport(params: {
   };
 }
 
-export function exportUnifiedProductionReportExcel(
-  report: UnifiedProductionReportData,
-  isAdmin = false
-) {
-  if (!isAdmin) return;
+export function buildUnifiedProductionReportWorkbook(
+  report: UnifiedProductionReportData
+): { wb: XLSX.WorkBook; filename: string } {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: All Dispatch & Production Entries in Period (No SUMIF)
@@ -2014,10 +2012,23 @@ export function exportUnifiedProductionReportExcel(
   ];
   XLSX.utils.book_append_sheet(wb, wsPower, 'Power Cut Logs');
 
-  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return {
+    wb,
+    filename: `LGPLAST_Production_Report_${report.fromDate}_to_${report.toDate}.xlsx`,
+  };
+}
+
+export async function exportUnifiedProductionReportExcel(
+  report: UnifiedProductionReportData,
+  isAdmin = false
+): Promise<void> {
+  if (!isAdmin) return;
+  const { wb, filename } = buildUnifiedProductionReportWorkbook(report);
+  const out = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   saveFileBlob(
-    `LGPLAST_Production_Report_${report.fromDate}_to_${report.toDate}.xlsx`,
+    filename,
     new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   );
 }
+
 

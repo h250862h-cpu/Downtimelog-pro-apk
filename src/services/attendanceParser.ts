@@ -1,5 +1,6 @@
 import * as XLSX from '../utils/xlsxCompat';
-import { AttendancePerson, ParsedAttendanceMessage } from '../types/attendance';
+import { normalizeMachineName } from '../types';
+import { AttendancePerson, ParsedAttendanceMessage, QCInspectionRecord } from '../types/attendance';
 
 export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 export const pad = (n: number) => String(n).padStart(2, '0');
@@ -671,14 +672,12 @@ export function batchTotals(batch: ParsedAttendanceMessage[]) {
  * 4. Casuals (Casual workers)
  * 5. By Person (Attendance % per individual worker)
  */
-export function generateAttendanceExcelWorkbook(
+export function buildAttendanceExcelWorkbook(
   batch: ParsedAttendanceMessage[],
   filterFromDate?: string,
   filterToDate?: string,
-  shiftFilter: 'All' | 'Day' | 'Night' = 'All',
-  isAdmin: boolean = false
-) {
-  if (!isAdmin) return '';
+  shiftFilter: 'All' | 'Day' | 'Night' = 'All'
+): { wb: XLSX.WorkBook; filename: string } {
   // Apply date range and shift filter, sorted chronologically
   const filteredBatch = batch
     .filter((b) => {
@@ -948,20 +947,38 @@ export function generateAttendanceExcelWorkbook(
   wsPerson['!cols'] = [{ wch: 28 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, wsPerson, 'By Person');
 
-  // Save Workbook
-  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const ds = filteredBatch.map((b) => b.date).sort();
+  const filename = `LGPLAST_Attendance_Report_${ds[0] || 'Batch'}${
+    ds[ds.length - 1] && ds[ds.length - 1] !== ds[0] ? '_to_' + ds[ds.length - 1] : ''
+  }.xlsx`;
+
+  return { wb, filename };
+}
+
+export async function generateAttendanceExcelWorkbook(
+  batch: ParsedAttendanceMessage[],
+  filterFromDate?: string,
+  filterToDate?: string,
+  shiftFilter: 'All' | 'Day' | 'Night' = 'All',
+  isAdmin: boolean = false
+): Promise<string> {
+  if (!isAdmin) return '';
+  const { wb, filename } = buildAttendanceExcelWorkbook(
+    batch,
+    filterFromDate,
+    filterToDate,
+    shiftFilter
+  );
+
+  // Save Workbook asynchronously via background Web Worker
+  const out = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([out], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
 
-  const ds = filteredBatch.map((b) => b.date).sort();
-  const fileName = `LGPLAST_Attendance_Report_${ds[0] || 'Batch'}${
-    ds[ds.length - 1] && ds[ds.length - 1] !== ds[0] ? '_to_' + ds[ds.length - 1] : ''
-  }.xlsx`;
-
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = fileName;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => {
@@ -969,5 +986,132 @@ export function generateAttendanceExcelWorkbook(
     a.remove();
   }, 1500);
 
-  return fileName;
+  return filename;
 }
+
+export function buildQcLogsExcelWorkbook(
+  logs: QCInspectionRecord[],
+  filterFromDate?: string,
+  filterToDate?: string
+): { wb: XLSX.WorkBook; filename: string; rowCount: number } {
+  const filtered = logs.filter((l) => {
+    if (filterFromDate && l.date < filterFromDate) return false;
+    if (filterToDate && l.date > filterToDate) return false;
+    return true;
+  });
+
+  const wb = XLSX.utils.book_new();
+
+  const headers = [
+    'Date',
+    'Shift',
+    'Machine / Line',
+    'Product',
+    'Samples Tested',
+    'Passed',
+    'Defects',
+    'Defect Reason',
+    'QC Status',
+    'Pass Rate %',
+    'Inspector',
+    'Notes',
+  ];
+  const data: (string | number)[][] = [
+    ['LG PLAST — Affordable / Durable / Complete'],
+    ['FACTORY QUALITY CONTROL (QC) INSPECTION REPORT'],
+    [],
+    headers,
+  ];
+
+  filtered.forEach((l) => {
+    const passRate = l.samplesTested > 0 ? (100 * l.passedCount) / l.samplesTested : 0;
+    data.push([
+      l.date,
+      l.shift,
+      normalizeMachineName(l.machineOrLine),
+      l.product,
+      l.samplesTested,
+      l.passedCount,
+      l.defectsCount,
+      l.defectReason,
+      l.status,
+      `${passRate.toFixed(1)}%`,
+      l.inspector,
+      l.notes || '',
+    ]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [
+    { wch: 13 },
+    { wch: 9 },
+    { wch: 22 },
+    { wch: 28 },
+    { wch: 15 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 35 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 20 },
+    { wch: 30 },
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'QC Inspections');
+
+  let totalTested = 0;
+  let totalPassed = 0;
+  let totalDefects = 0;
+  filtered.forEach((l) => {
+    totalTested += l.samplesTested;
+    totalPassed += l.passedCount;
+    totalDefects += l.defectsCount;
+  });
+
+  const overallPassRate = totalTested > 0 ? (100 * totalPassed) / totalTested : 0;
+  const sumHeaders = [
+    ['LG PLAST — Affordable / Durable / Complete'],
+    ['Plant Quality Control (QC) Summary Report'],
+    [`Period: ${filterFromDate || 'All'} to ${filterToDate || 'All'}`],
+    [],
+    ['Metric', 'Value'],
+    ['Total Samples Inspected', totalTested],
+    ['Total Passed Units', totalPassed],
+    ['Total Defective Units', totalDefects],
+    ['Overall Quality Pass Rate %', `${overallPassRate.toFixed(1)}%`],
+    ['Total Inspection Lots Checked', filtered.length],
+  ];
+  const wsSummary = XLSX.utils.aoa_to_sheet(sumHeaders);
+  wsSummary['!cols'] = [{ wch: 30 }, { wch: 16 }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'QC Summary');
+
+  const filename = `LGPLAST_QC_Report_${filterFromDate || 'Batch'}_to_${filterToDate || 'Current'}.xlsx`;
+  return { wb, filename, rowCount: filtered.length };
+}
+
+export async function generateQcLogsExcelWorkbook(
+  logs: QCInspectionRecord[],
+  filterFromDate?: string,
+  filterToDate?: string,
+  isAdmin: boolean = false
+): Promise<string> {
+  if (!isAdmin) return '';
+  const { wb, filename } = buildQcLogsExcelWorkbook(logs, filterFromDate, filterToDate);
+  const out = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([out], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(a.href);
+    a.remove();
+  }, 1500);
+
+  return filename;
+}
+
+

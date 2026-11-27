@@ -36,6 +36,7 @@ export const DigitalSignaturePad: React.FC<DigitalSignaturePadProps> = ({
   const [inkColor, setInkColor] = useState('#0f172a');
   const [strokeWidth, setStrokeWidth] = useState(2.5);
   const [agreedToCompliance, setAgreedToCompliance] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [history, setHistory] = useState<ImageData[]>([]);
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export const DigitalSignaturePad: React.FC<DigitalSignaturePadProps> = ({
       setBadgeId(initialBadge);
       setAgreedToCompliance(false);
       setHasSignature(false);
+      setValidationError(null);
       setHistory([]);
 
       // Setup canvas on next tick
@@ -174,17 +176,18 @@ export const DigitalSignaturePad: React.FC<DigitalSignaturePadProps> = ({
 
   const handleConfirm = () => {
     if (!signerName.trim()) {
-      alert('Please enter your full name as the certifying official.');
+      setValidationError('Please enter your full name as the certifying official.');
       return;
     }
     if (!hasSignature) {
-      alert('Please draw your digital signature on the pad.');
+      setValidationError('Please draw your digital signature inside the box above.');
       return;
     }
     if (!agreedToCompliance) {
-      alert('Please verify and check the digital certification declaration.');
+      setValidationError('Please verify and check the digital certification declaration.');
       return;
     }
+    setValidationError(null);
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -373,7 +376,10 @@ export const DigitalSignaturePad: React.FC<DigitalSignaturePadProps> = ({
               <input
                 type="checkbox"
                 checked={agreedToCompliance}
-                onChange={(e) => setAgreedToCompliance(e.target.checked)}
+                onChange={(e) => {
+                  setAgreedToCompliance(e.target.checked);
+                  if (validationError) setValidationError(null);
+                }}
                 className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-800 text-emerald-500 focus:ring-emerald-500"
               />
               <span className="text-xs text-slate-300 leading-relaxed">
@@ -381,6 +387,12 @@ export const DigitalSignaturePad: React.FC<DigitalSignaturePadProps> = ({
               </span>
             </label>
           </div>
+
+          {validationError && (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-500/15 px-3.5 py-2 text-xs font-medium text-rose-200">
+              {validationError}
+            </div>
+          )}
         </div>
 
         {/* Footer Actions */}

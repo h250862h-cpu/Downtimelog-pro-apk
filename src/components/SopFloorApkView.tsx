@@ -1128,15 +1128,29 @@ export const SopFloorApkView: React.FC<SopFloorApkViewProps> = ({
     { id: 'handover', label: 'Shift Handover', icon: <Layers className="h-3.5 w-3.5" /> },
   ];
 
-  const renderAdminExcelBtn = (onClick: () => void, label: string) =>
+  const [exportingExcelLabel, setExportingExcelLabel] = useState<string | null>(null);
+
+  const renderAdminExcelBtn = (onClick: () => unknown | Promise<unknown>, label: string) =>
     isAdmin ? (
       <button
         type="button"
-        onClick={onClick}
-        className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3.5 py-2 text-xs font-black text-white shadow transition"
+        disabled={exportingExcelLabel !== null}
+        onClick={async () => {
+          setExportingExcelLabel(label);
+          showMsg(`Compiling "${label}" (.xlsx) in background...`);
+          try {
+            await onClick();
+            showMsg(`Downloaded "${label}" (.xlsx) cleanly.`);
+          } catch {
+            showMsg(`Failed compiling "${label}" (.xlsx).`, true);
+          } finally {
+            setExportingExcelLabel(null);
+          }
+        }}
+        className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-3.5 py-2 text-xs font-black text-white shadow transition"
       >
         <Download className="h-3.5 w-3.5" />
-        <span>{label}</span>
+        <span>{exportingExcelLabel === label ? 'Compiling in Background...' : label}</span>
       </button>
     ) : (
       <span className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-[11px] font-bold text-slate-400">

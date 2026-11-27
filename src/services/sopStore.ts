@@ -1108,15 +1108,18 @@ export function parseQcWhatsAppText(
 // ======================================================
 // ADMIN-ONLY EXCEL EXPORTS FOR ALL SOP APKs
 // ======================================================
-function writeSheetFile(wb: XLSX.WorkBook, filename: string) {
-  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+async function writeSheetFile(wb: XLSX.WorkBook, filename: string): Promise<void> {
+  const wbout = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
   saveFileBlob(filename, blob);
 }
 
-export function exportSopProductionExcel(rows: SopProductionRecord[], isAdmin: boolean = false) {
+export async function exportSopProductionExcel(
+  rows: SopProductionRecord[],
+  isAdmin: boolean = false
+): Promise<void> {
   if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((r) => ({
@@ -1145,10 +1148,13 @@ export function exportSopProductionExcel(rows: SopProductionRecord[], isAdmin: b
     data.length ? data : [{ Notice: 'No production logs recorded yet.' }]
   );
   XLSX.utils.book_append_sheet(wb, ws, 'Production Log');
-  writeSheetFile(wb, `LGPLAST_SOP_Production_${ymd(new Date())}.xlsx`);
+  await writeSheetFile(wb, `LGPLAST_SOP_Production_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopQcExcel(rows: SopQcRecord[], isAdmin: boolean = false) {
+export async function exportSopQcExcel(
+  rows: SopQcRecord[],
+  isAdmin: boolean = false
+): Promise<void> {
   if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((q) => ({
@@ -1176,10 +1182,13 @@ export function exportSopQcExcel(rows: SopQcRecord[], isAdmin: boolean = false) 
   }));
   const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ Notice: 'No QC checks recorded yet.' }]);
   XLSX.utils.book_append_sheet(wb, ws, 'QC Check Report');
-  writeSheetFile(wb, `LGPLAST_SOP_QC_${ymd(new Date())}.xlsx`);
+  await writeSheetFile(wb, `LGPLAST_SOP_QC_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopScrapExcel(rows: SopScrapRecord[], isAdmin: boolean = false) {
+export async function exportSopScrapExcel(
+  rows: SopScrapRecord[],
+  isAdmin: boolean = false
+): Promise<void> {
   if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((s) => ({
@@ -1210,10 +1219,13 @@ export function exportSopScrapExcel(rows: SopScrapRecord[], isAdmin: boolean = f
     data.length ? data : [{ Notice: 'No scrap pipeline records logged yet.' }]
   );
   XLSX.utils.book_append_sheet(wb, ws, 'Scrap & Recycling Pipeline');
-  writeSheetFile(wb, `LGPLAST_SOP_Scrap_Recycling_${ymd(new Date())}.xlsx`);
+  await writeSheetFile(wb, `LGPLAST_SOP_Scrap_Recycling_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopMixingExcel(rows: SopMixingReport[], isAdmin: boolean = false) {
+export async function exportSopMixingExcel(
+  rows: SopMixingReport[],
+  isAdmin: boolean = false
+): Promise<void> {
   if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((m) => ({
@@ -1247,10 +1259,13 @@ export function exportSopMixingExcel(rows: SopMixingReport[], isAdmin: boolean =
     data.length ? data : [{ Notice: 'No mixing reports logged yet.' }]
   );
   XLSX.utils.book_append_sheet(wb, ws, 'Mixing & Stock Balance');
-  writeSheetFile(wb, `LGPLAST_SOP_Mixing_Report_${ymd(new Date())}.xlsx`);
+  await writeSheetFile(wb, `LGPLAST_SOP_Mixing_Report_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopHandoverExcel(rows: SopShiftHandoverRecord[], isAdmin: boolean = false) {
+export async function exportSopHandoverExcel(
+  rows: SopShiftHandoverRecord[],
+  isAdmin: boolean = false
+): Promise<void> {
   if (!isAdmin) return;
   const wb = XLSX.utils.book_new();
   const data = rows.map((h) => ({
@@ -1271,20 +1286,16 @@ export function exportSopHandoverExcel(rows: SopShiftHandoverRecord[], isAdmin: 
     data.length ? data : [{ Notice: 'No shift handovers recorded yet.' }]
   );
   XLSX.utils.book_append_sheet(wb, ws, 'Shift Handover');
-  writeSheetFile(wb, `LGPLAST_SOP_Shift_Handover_${ymd(new Date())}.xlsx`);
+  await writeSheetFile(wb, `LGPLAST_SOP_Shift_Handover_${ymd(new Date())}.xlsx`);
 }
 
-export function exportSopMasterWorkbook(
-  args: {
-    production: SopProductionRecord[];
-    qcChecks: SopQcRecord[];
-    scrapPipeline: SopScrapRecord[];
-    mixingReports: SopMixingReport[];
-    handovers: SopShiftHandoverRecord[];
-  },
-  isAdmin: boolean = false
-) {
-  if (!isAdmin) return;
+export function buildSopMasterWorkbook(args: {
+  production: SopProductionRecord[];
+  qcChecks: SopQcRecord[];
+  scrapPipeline: SopScrapRecord[];
+  mixingReports: SopMixingReport[];
+  handovers: SopShiftHandoverRecord[];
+}): { wb: XLSX.WorkBook; filename: string } {
   const wb = XLSX.utils.book_new();
 
   const totalProdKg = args.production.reduce((a, b) => a + (Number(b.prodKg) || 0), 0);
@@ -1411,5 +1422,24 @@ export function exportSopMasterWorkbook(
     'Shift Handover'
   );
 
-  writeSheetFile(wb, `LGPLAST_SOP_MASTER_${ymd(new Date())}.xlsx`);
+  return {
+    wb,
+    filename: `LGPLAST_SOP_MASTER_${ymd(new Date())}.xlsx`,
+  };
 }
+
+export async function exportSopMasterWorkbook(
+  args: {
+    production: SopProductionRecord[];
+    qcChecks: SopQcRecord[];
+    scrapPipeline: SopScrapRecord[];
+    mixingReports: SopMixingReport[];
+    handovers: SopShiftHandoverRecord[];
+  },
+  isAdmin: boolean = false
+): Promise<void> {
+  if (!isAdmin) return;
+  const { wb, filename } = buildSopMasterWorkbook(args);
+  await writeSheetFile(wb, filename);
+}
+

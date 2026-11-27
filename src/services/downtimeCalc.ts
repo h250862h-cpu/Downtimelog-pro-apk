@@ -281,15 +281,13 @@ export function saveFileBlob(name: string, blob: Blob) {
  * Sheet 2: "Daily" - Breakdown per day and per machine
  * Sheet 3: "Entries" - Granular stoppage records with signatures & job cards
  */
-export function generateExcelWorkbook(
+export function buildDowntimeExcelWorkbook(
   from: string,
   to: string,
   machines: string[],
   entries: DowntimeEntry[],
-  supervisorName?: string,
-  isAdmin: boolean = false
-) {
-  if (!isAdmin) return;
+  supervisorName?: string
+): { wb: XLSX.WorkBook; filename: string } {
   const data = getSummaryRows(from, to, machines, entries);
   const wb = XLSX.utils.book_new();
 
@@ -404,11 +402,27 @@ export function generateExcelWorkbook(
   ];
   XLSX.utils.book_append_sheet(wb, wsEntries, 'Entries');
 
-  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return {
+    wb,
+    filename: `LGPLAST_Downtime_Report_${from}_to_${to}.xlsx`,
+  };
+}
+
+export async function generateExcelWorkbook(
+  from: string,
+  to: string,
+  machines: string[],
+  entries: DowntimeEntry[],
+  supervisorName?: string,
+  isAdmin: boolean = false
+): Promise<void> {
+  if (!isAdmin) return;
+  const { wb, filename } = buildDowntimeExcelWorkbook(from, to, machines, entries, supervisorName);
+  const out = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([out], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-  saveFileBlob(`LGPLAST_Downtime_Report_${from}_to_${to}.xlsx`, blob);
+  saveFileBlob(filename, blob);
 }
 
 export function generateCSVReport(
