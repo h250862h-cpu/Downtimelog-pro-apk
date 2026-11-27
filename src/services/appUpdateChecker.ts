@@ -5,6 +5,7 @@ export const CURRENT_APP_BUILT_AT: string =
   typeof __APP_BUILT_AT__ !== 'undefined' ? __APP_BUILT_AT__ : '';
 
 const APPLIED_BUILD_KEY = 'lgplast_applied_build_v1';
+const APPLIED_BUILD_ATTEMPTS_KEY = 'lgplast_applied_build_attempts_v1';
 const SW_RELOADED_KEY = 'lgplast_sw_reloaded_build_v1';
 
 export const OFFICIAL_APK_URL = 'https://downtimelog-pro-apk.onrender.com';
@@ -33,12 +34,34 @@ async function clearRuntimeCaches(): Promise<void> {
   } catch {}
 }
 
-export async function applyLiveAppUpdate(targetBuildId?: string): Promise<void> {
-  if (typeof window === 'undefined') return;
-  const markId = targetBuildId || `manual_${Date.now()}`;
+function getBuildReloadAttempts(buildId: string): number {
   try {
-    sessionStorage.setItem(APPLIED_BUILD_KEY, markId);
+    const raw = sessionStorage.getItem(APPLIED_BUILD_ATTEMPTS_KEY);
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw) as { buildId?: string; count?: number };
+    return parsed?.buildId === buildId ? Number(parsed.count || 0) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function incrementBuildReloadAttempts(buildId: string): void {
+  try {
+    const next = getBuildReloadAttempts(buildId) + 1;
+    sessionStorage.setItem(APPLIED_BUILD_ATTEMPTS_KEY, JSON.stringify({ buildId, count: next }));
+    sessionStorage.setItem(APPLIED_BUILD_KEY, buildId);
   } catch {}
+}
+
+let updateReloadInProgress = false;
+
+export async function applyLiveAppUpdate(targetBuildId?: string): Promise<void> {
+  if (typeof window === 'undefined' || updateReloadInProgress) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  updateReloadInProgress = true;
+
+  const markId = targetBuildId || `manual_${Date.now()}`;
+  incrementBuildReloadAttempts(markId);
 
   await clearRuntimeCaches();
 
@@ -51,7 +74,8 @@ export async function applyLiveAppUpdate(targetBuildId?: string): Promise<void> 
             if (reg.waiting) {
               reg.waiting.postMessage({ type: 'SKIP_WAITING' });
             }
-            await reg.update();
+            // Unregister stale SW so reload fetches fresh index.html and assets directly from server
+            await reg.unregister();
           } catch {}
         })
       );
@@ -107,11 +131,8 @@ export async function checkForLiveServerUpdate(options?: {
   }
 
   if (options?.autoReloadIfDifferent) {
-    let alreadyApplied = false;
-    try {
-      alreadyApplied = sessionStorage.getItem(APPLIED_BUILD_KEY) === server.buildId;
-    } catch {}
-    if (!alreadyApplied) {
+    const attempts = getBuildReloadAttempts(server.buildId);
+    if (attempts < 2) {
       await applyLiveAppUpdate(server.buildId);
     }
   }
@@ -167,7 +188,7 @@ export function initProductionServiceWorkerAndUpdates(
 
   let refreshingFromSw = false;
   const handleControllerChange = () => {
-    if (refreshingFromSw) return;
+    if (refreshingFromSw || updateReloadInProgress) return;
     let alreadyReloaded = false;
     try {
       alreadyReloaded = sessionStorage.getItem(SW_RELOADED_KEY) === CURRENT_APP_BUILD_ID;
@@ -216,19 +237,19 @@ export function initProductionServiceWorkerAndUpdates(
     );
   }
 
-  // Immediate startup version check (auto-reloads once if older cached shell booted)
+  // Immediate startup version check (auto-reloads if older cached shell booted)
   const bootTimer = setTimeout(() => {
     checkForLiveServerUpdate({ autoReloadIfDifferent: true }).then((res) => {
       if (res.updateAvailable && res.serverBuildId && onUpdateDetected) {
         onUpdateDetected(res.serverBuildId);
       }
     });
-  }, 1500);
+  }, 400);
 
   let lastCheckAt = 0;
   const runMidSessionCheck = () => {
     const now = Date.now();
-    if (now - lastCheckAt < 45000) return;
+    if (now - lastCheckAt < 15000) return;
     lastCheckAt = now;
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
@@ -249,7 +270,7 @@ export function initProductionServiceWorkerAndUpdates(
     }
   };
 
-  const pollTimer = setInterval(runMidSessionCheck, 60000);
+  const pollTimer = setInterval(runMidSessionCheck, 30000);
   window.addEventListener('focus', runMidSessionCheck);
   window.addEventListener('online', runMidSessionCheck);
   document.addEventListener('visibilitychange', handleVis);

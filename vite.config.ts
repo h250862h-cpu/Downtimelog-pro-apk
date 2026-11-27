@@ -68,7 +68,6 @@ export default defineConfig(() => {
         workbox: {
           importScripts: ['/push-sw.js'],
           globPatterns: [
-            'index.html',
             'icon.svg',
             'apple-touch-icon.png',
             'push-sw.js',
@@ -80,6 +79,22 @@ export default defineConfig(() => {
             'assets/aistudio/*.html',
             'assets/aistudio/*.csv',
             'assets/aistudio/*.zip',
+          ],
+          navigateFallback: null,
+          ignoreURLParametersMatching: [/^v$/, /^t$/],
+          runtimeCaching: [
+            {
+              urlPattern: ({ request }) => request.mode === 'navigate',
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'lgplast-html-nav-v1',
+                networkTimeoutSeconds: 3,
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 7 * 24 * 60 * 60,
+                },
+              },
+            },
           ],
           dontCacheBustURLsMatching: /^assets\/[^/]+-[A-Za-z0-9_-]{8,}\./,
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,

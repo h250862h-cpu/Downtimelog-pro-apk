@@ -1431,9 +1431,10 @@ git push -u origin main`}
           </form>
         )}
 
-        {/* Registered Users Roster */}
-        <div className="mt-4">
-          <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2.5">
+        {/* Registered Users Roster (Admin Exclusive) */}
+        {userIsAdmin && (
+          <div className="mt-4">
+            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2.5">
             Registered Plant Personnel (
             {plantUsers.filter((u) => u.status !== 'suspended' && !u.revoked).length} active
             {plantUsers.some((u) => u.status === 'suspended' || u.revoked)
@@ -1541,6 +1542,7 @@ git push -u origin main`}
             })}
           </div>
         </div>
+        )}
       </div>
 
       {/* 5. Online Firebase Sync Status & Cross-Device Diagnostics */}
@@ -1890,49 +1892,51 @@ git push -u origin main`}
         </div>
       )}
 
-      {/* 7. JSON Backup & Restore */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-6 shadow-md">
-        <h3 className="text-base font-bold text-white flex items-center gap-2 mb-2">
-          <Download className="h-5 w-5 text-amber-400" />
-          <span>Offline Backup & Restore (JSON)</span>
-        </h3>
-        <p className="text-xs text-slate-400 mb-4">
-          Save an offline backup of all downtime incident logs and custom machine names, or restore past backups:
-        </p>
+      {/* 7. JSON Backup & Restore (Admin Only) */}
+      {userIsAdmin && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-6 shadow-md">
+          <h3 className="text-base font-bold text-white flex items-center gap-2 mb-2">
+            <Download className="h-5 w-5 text-amber-400" />
+            <span>Offline Backup &amp; Restore (JSON)</span>
+          </h3>
+          <p className="text-xs text-slate-400 mb-4">
+            Save an offline backup of all downtime incident logs and custom machine names, or restore past backups:
+          </p>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={handleSaveBackup}
-            className="flex items-center gap-2 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-100 px-4 py-2 text-xs font-bold transition"
-          >
-            <Download className="h-4 w-4 text-amber-400" />
-            <span>Save backup file (.json)</span>
-          </button>
-
-          <div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept=".json,application/json"
-              onChange={handleRestoreFile}
-              className="hidden"
-            />
+          <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 px-4 py-2 text-xs font-bold transition"
+              onClick={handleSaveBackup}
+              className="flex items-center gap-2 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-100 px-4 py-2 text-xs font-bold transition"
             >
-              <Upload className="h-4 w-4" />
-              <span>Restore from backup file</span>
+              <Download className="h-4 w-4 text-amber-400" />
+              <span>Save backup file (.json)</span>
             </button>
-          </div>
-        </div>
 
-        {backupMessage && (
-          <div className="mt-3 text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl">
-            {backupMessage}
+            <div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept=".json,application/json"
+                onChange={handleRestoreFile}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 px-4 py-2 text-xs font-bold transition"
+              >
+                <Upload className="h-4 w-4" />
+                <span>Restore from backup file</span>
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+
+          {backupMessage && (
+            <div className="mt-3 text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl">
+              {backupMessage}
+            </div>
+          )}
+        </div>
+      )}
 
       {pendingConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">

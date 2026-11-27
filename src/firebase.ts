@@ -1229,7 +1229,7 @@ export function subscribePlantUsers(
         })
         .catch(() => {});
     }
-  }, 60000);
+  }, 20000);
 
   return () => {
     cancelled = true;

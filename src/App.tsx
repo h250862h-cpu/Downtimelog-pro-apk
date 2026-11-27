@@ -103,6 +103,7 @@ const TqmSystemView = lazy(() =>
 import {
   auth,
   ensureFirebaseAuth,
+  fetchPlantUsersDirectory,
   getActiveSessionUser,
   getLocalPlantUsers,
   hasPlantUsersServerLoaded,
@@ -199,7 +200,11 @@ import {
   repairAllPendingSyncQueues,
   runFullCloudSyncNow,
 } from './services/cloudSyncService';
-import { applyLiveAppUpdate, getCanonicalSharedAppUrl } from './services/appUpdateChecker';
+import {
+  applyLiveAppUpdate,
+  checkForLiveServerUpdate,
+  getCanonicalSharedAppUrl,
+} from './services/appUpdateChecker';
 import {
   ensurePushServiceWorkerRegistration,
   evaluateAndDispatchPushNotifications,
@@ -297,6 +302,7 @@ export default function App() {
   const [plantUsersServerReady, setPlantUsersServerReady] = useState<boolean>(() =>
     hasPlantUsersServerLoaded()
   );
+  const [authDirectoryWaitTimedOut, setAuthDirectoryWaitTimedOut] = useState<boolean>(false);
 
   // Active Navigation Tab & Sub-stage Navigation
   const [activeDowntimeTab, setActiveDowntimeTab] = useState<DowntimeTab>('status');
@@ -540,6 +546,16 @@ export default function App() {
 
       if (!mounted) return;
       if (session || auth.currentUser) {
+        // Fetch live user clearance directory immediately while attaching real-time WatchStreams
+        if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+          withTimeout(fetchPlantUsersDirectory(), 3500, 'Directory check timed out')
+            .then((users) => {
+              if (mounted && Array.isArray(users)) {
+                setPlantUsers(users);
+              }
+            })
+            .catch(() => {});
+        }
         // Non-blocking connectivity check so all real-time onSnapshot streams attach immediately
         testConnection().catch(() => {});
       }
@@ -754,6 +770,13 @@ export default function App() {
             regs.forEach((r) => r.update().catch(() => {}));
           }).catch(() => {});
         }
+        checkForLiveServerUpdate({ autoReloadIfDifferent: true })
+          .then((upd) => {
+            if (upd.updateAvailable && upd.serverBuildId) {
+              setAvailableUpdateBuildId(upd.serverBuildId);
+            }
+          })
+          .catch(() => {});
       } catch {} finally {
         keepAliveInFlight = false;
       }
@@ -895,14 +918,26 @@ export default function App() {
     matchedUserRecord && !isPrimaryAdmin && (matchedUserRecord.status === 'suspended' || matchedUserRecord.revoked)
   );
 
+  // Safety timeout so flaky mobile connections don't wait indefinitely on initial clearance check
+  useEffect(() => {
+    if (!isUserSignedIn || isPrimaryAdmin || plantUsersServerReady || !isOnline) {
+      return;
+    }
+    const t = setTimeout(() => {
+      setAuthDirectoryWaitTimedOut(true);
+    }, 3500);
+    return () => clearTimeout(t);
+  }, [isUserSignedIn, isPrimaryAdmin, plantUsersServerReady, isOnline]);
+
   const isAdmin =
     !isSuspendedAccount &&
     isRegisteredAccount &&
     (isPrimaryAdmin ||
-      (matchedUserRecord
-        ? matchedUserRecord.role === 'Plant Administrator' ||
-          matchedUserRecord.role === 'Production HOD'
-        : isUserAdmin(user?.email) || user?.role === 'Production HOD'));
+      Boolean(
+        matchedUserRecord &&
+          (matchedUserRecord.role === 'Plant Administrator' ||
+            matchedUserRecord.role === 'Production HOD')
+      ));
 
   // Background Excel Compilation Engine (Admin Only — runs asynchronously in Web Worker)
   useEffect(() => {
@@ -1067,11 +1102,12 @@ export default function App() {
     return count;
   }, [sopScrapPipeline, sopMixingReports, effectivePermissions, isAdmin, isSuspendedAccount]);
 
+  const activeUserRole = matchedUserRecord?.role || user?.role;
   const isShiftInChargeWeightCheckUser =
     !isSuspendedAccount &&
-    (matchedUserRecord?.role === 'Shift In Charge' ||
-      user?.role === 'Shift In Charge' ||
-      (effectivePermissions.dispatchShiftEntry && effectivePermissions.logDowntime));
+    (activeUserRole === 'Shift In Charge' ||
+      (Boolean(effectivePermissions.dispatchShiftEntry) &&
+        Boolean(effectivePermissions.logDowntime)));
 
   const hasDispatchAccess =
     !isSuspendedAccount &&
@@ -1275,8 +1311,7 @@ export default function App() {
     !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.scrapSalesAccess));
 
   const hasTqmAccess =
-    !isSuspendedAccount &&
-    (isAdmin || Boolean(effectivePermissions.tqmAccess) || Boolean(effectivePermissions.qualityTrialsAccess));
+    !isSuspendedAccount && (isAdmin || Boolean(effectivePermissions.tqmAccess));
 
   // Compute allowed sidebar navigation tabs strictly from effectivePermissions
   const allowedTabs = useMemo<DowntimeTab[]>(() => {
@@ -1511,20 +1546,21 @@ export default function App() {
     );
   }
 
-  // 2B. CREATED-ACCOUNTS-ONLY ENFORCEMENT
-  if (!isPrimaryAdmin && user.email && !isRegisteredAccount) {
-    if (isOnline && !plantUsersServerReady) {
-      return (
-        <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center text-slate-700 gap-3 font-sans">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#0F1E36] text-white shadow-sm">
-            <ShieldCheck className="h-6 w-6" />
-          </div>
-          <div className="text-xs font-semibold tracking-wider text-slate-600 uppercase">
-            Verifying Plant User Account Directory...
-          </div>
+  // 2B. SERVER ACCESS CLEARANCE VERIFICATION & CREATED-ACCOUNTS-ONLY ENFORCEMENT
+  if (!isPrimaryAdmin && isOnline && !plantUsersServerReady && !authDirectoryWaitTimedOut) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center text-slate-700 gap-3 font-sans">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#0F1E36] text-white shadow-sm">
+          <ShieldCheck className="h-6 w-6" />
         </div>
-      );
-    }
+        <div className="text-xs font-semibold tracking-wider text-slate-600 uppercase">
+          Verifying Live Access Clearance...
+        </div>
+      </div>
+    );
+  }
+
+  if (!isPrimaryAdmin && user.email && !isRegisteredAccount) {
 
     return (
       <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center items-center p-4 text-slate-800 font-sans">
@@ -2536,17 +2572,22 @@ export default function App() {
           />
         )}
 
-        <SopPopupAlert
-          scrapRecords={sopScrapPipeline}
-          mixingReports={sopMixingReports}
-          permissions={effectivePermissions}
-          isAdmin={isAdmin}
-          dismissedKeys={dismissedPopupKeys}
-          onDismissKey={snoozePopupKey}
-          onNavigateToSopTab={(subTab) => {
-            setActiveDowntimeTab(SUBTAB_TO_SOP_TAB[subTab]);
-          }}
-        />
+        {!isSuspendedAccount &&
+          (isAdmin ||
+            Boolean(effectivePermissions.sopRecyclingConfirm) ||
+            Boolean(effectivePermissions.sopMixingAccess)) && (
+            <SopPopupAlert
+              scrapRecords={sopScrapPipeline}
+              mixingReports={sopMixingReports}
+              permissions={effectivePermissions}
+              isAdmin={isAdmin}
+              dismissedKeys={dismissedPopupKeys}
+              onDismissKey={snoozePopupKey}
+              onNavigateToSopTab={(subTab) => {
+                setActiveDowntimeTab(SUBTAB_TO_SOP_TAB[subTab]);
+              }}
+            />
+          )}
 
         {hasDieselAccess && (
           <DieselPopupAlert
@@ -2578,17 +2619,19 @@ export default function App() {
           />
         )}
 
-        <ShiftWeightOutputPopupAlert
-          machines={machines}
-          entries={entries}
-          isEligibleUser={isShiftInChargeWeightCheckUser}
-          manualOpenSlot={manualWeightCheckSlot}
-          onCloseManual={() => setManualWeightCheckSlot(null)}
-          onSaveEntry={handleSaveEntry}
-          onOpenMachinesBoard={() => setActiveDowntimeTab('status')}
-          currentUserName={user.displayName || currentReporter}
-          currentUserEmail={user.email || ''}
-        />
+        {isShiftInChargeWeightCheckUser && (
+          <ShiftWeightOutputPopupAlert
+            machines={machines}
+            entries={entries}
+            isEligibleUser={isShiftInChargeWeightCheckUser}
+            manualOpenSlot={manualWeightCheckSlot}
+            onCloseManual={() => setManualWeightCheckSlot(null)}
+            onSaveEntry={handleSaveEntry}
+            onOpenMachinesBoard={() => setActiveDowntimeTab('status')}
+            currentUserName={user.displayName || currentReporter}
+            currentUserEmail={user.email || ''}
+          />
+        )}
       </div>
 
       {/* Modals */}
