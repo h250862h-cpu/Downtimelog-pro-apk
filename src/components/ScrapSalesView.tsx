@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertCircle,
   CheckCircle2,
   Download,
   FileSpreadsheet,
@@ -11,7 +12,9 @@ import {
   RefreshCw,
   Scale,
   Search,
+  ShieldCheck,
   UserCheck,
+  X,
 } from 'lucide-react';
 import {
   SCRAP_SALES_CATEGORIES,
@@ -25,6 +28,9 @@ import {
   calculateScrapSalesInvoiceValues,
   exportScrapSalesExcelWorkbook,
   generateNextScrapInvoiceNo,
+  getScrapSalesSignatureCount,
+  hasAllScrapSalesSignatures,
+  isScrapSaleConfirmedForExcel,
   saveScrapSalesInvoiceToFirebase,
 } from '../services/scrapSalesStore';
 import { DigitalSignaturePad } from './DigitalSignaturePad';
@@ -42,6 +48,10 @@ const EMPTY_SLOT = (): ScrapSalesSignatureSlot => ({
   signature: undefined,
   signedAt: '',
 });
+
+function hasSig(sig?: string): boolean {
+  return typeof sig === 'string' && sig.trim().length > 10;
+}
 
 export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
   invoices,
@@ -65,7 +75,7 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
     empty_bags: '',
   });
 
-  // Optional 3 signatures captured electronically (PDF always keeps 3 signature lines)
+  // 3-Signature capture on creation (or sign & confirm on saved invoice later)
   const [showSigPads, setShowSigPads] = useState<boolean>(false);
   const [sig1Name, setSig1Name] = useState<string>(currentUserName || '');
   const [sig1Data, setSig1Data] = useState<string>('');
@@ -78,9 +88,22 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
   const [sig3At, setSig3At] = useState<string>('');
   const [activeSigSlot, setActiveSigSlot] = useState<1 | 2 | 3 | null>(null);
 
+  // Saved Invoice "Sign & Confirm Payment" modal state
+  const [confirmModalInv, setConfirmModalInv] = useState<ScrapSalesInvoice | null>(null);
+  const [modalSig1Name, setModalSig1Name] = useState<string>('');
+  const [modalSig1Data, setModalSig1Data] = useState<string>('');
+  const [modalSig1At, setModalSig1At] = useState<string>('');
+  const [modalSig2Name, setModalSig2Name] = useState<string>('');
+  const [modalSig2Data, setModalSig2Data] = useState<string>('');
+  const [modalSig2At, setModalSig2At] = useState<string>('');
+  const [modalSig3Name, setModalSig3Name] = useState<string>('');
+  const [modalSig3Data, setModalSig3Data] = useState<string>('');
+  const [modalSig3At, setModalSig3At] = useState<string>('');
+  const [modalSigSlot, setModalSigSlot] = useState<1 | 2 | 3 | null>(null);
+  const [savingConfirmModal, setSavingConfirmModal] = useState<boolean>(false);
+
   const [saving, setSaving] = useState<boolean>(false);
   const [exportingExcel, setExportingExcel] = useState<boolean>(false);
-  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [banner, setBanner] = useState<{
     text: string;
     isError?: boolean;
@@ -103,6 +126,20 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
     [quantities]
   );
 
+  const formSigCount = useMemo(
+    () =>
+      [sig1Data, sig2Data, sig3Data].filter((s) => hasSig(s)).length,
+    [sig1Data, sig2Data, sig3Data]
+  );
+  const allFormSignaturesCaptured = formSigCount === 3;
+
+  const modalSigCount = useMemo(
+    () =>
+      [modalSig1Data, modalSig2Data, modalSig3Data].filter((s) => hasSig(s)).length,
+    [modalSig1Data, modalSig2Data, modalSig3Data]
+  );
+  const allModalSignaturesCaptured = modalSigCount === 3;
+
   const filteredInvoices = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return [...invoices]
@@ -118,9 +155,47 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
       .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   }, [invoices, searchQuery]);
 
+  const confirmedAllInvoices = useMemo(
+    () => invoices.filter(isScrapSaleConfirmedForExcel),
+    [invoices]
+  );
+  const heldAllInvoices = useMemo(
+    () => invoices.filter((inv) => !isScrapSaleConfirmedForExcel(inv)),
+    [invoices]
+  );
+  const confirmedFilteredInvoices = useMemo(
+    () => filteredInvoices.filter(isScrapSaleConfirmedForExcel),
+    [filteredInvoices]
+  );
+
+  const confirmedRevenueUsd = useMemo(
+    () => confirmedAllInvoices.reduce((acc, inv) => acc + (Number(inv.totalCost) || 0), 0),
+    [confirmedAllInvoices]
+  );
+  const totalBilledRevenueUsd = useMemo(
+    () => invoices.reduce((acc, inv) => acc + (Number(inv.totalCost) || 0), 0),
+    [invoices]
+  );
+
   const handleQtyChange = (key: ScrapSalesCategoryKey, val: string) => {
     if (val === '' || /^\d*\.?\d*$/.test(val)) {
       setQuantities((prev) => ({ ...prev, [key]: val }));
+    }
+  };
+
+  const clearFormSigSlot = (slot: 1 | 2 | 3) => {
+    if (slot === 1) {
+      setSig1Data('');
+      setSig1At('');
+    } else if (slot === 2) {
+      setSig2Data('');
+      setSig2At('');
+    } else {
+      setSig3Data('');
+      setSig3At('');
+    }
+    if (status === 'PAID') {
+      setStatus('ISSUED');
     }
   };
 
@@ -151,10 +226,21 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
       return;
     }
 
+    if (status === 'PAID' && !allFormSignaturesCaptured) {
+      setBanner({
+        text: 'Payment confirmation (PAID) requires all 3 digital signatures (Prepared By, Approved By, and Buyer) before this record can enter Excel. Capture all 3 signatures or save as ISSUED first.',
+        isError: true,
+      });
+      setShowSigPads(true);
+      return;
+    }
+
     setSaving(true);
     try {
       const nowIso = new Date().toISOString();
       const nowMs = Date.now();
+      const finalStatus: 'ISSUED' | 'PAID' =
+        status === 'PAID' && allFormSignaturesCaptured ? 'PAID' : 'ISSUED';
 
       const invoice: ScrapSalesInvoice = {
         id: `scrap_${nowMs}_${Math.random().toString(36).slice(2, 7)}`,
@@ -190,7 +276,12 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
             signedAt: sig3Data ? sig3At || nowIso : '',
           },
         },
-        status,
+        status: finalStatus,
+        paidConfirmedAt: finalStatus === 'PAID' ? nowIso : undefined,
+        paidConfirmedBy:
+          finalStatus === 'PAID'
+            ? currentUserName || currentUserEmail || 'Authorized Officer'
+            : undefined,
         createdAt: nowIso,
         upd: nowMs,
       };
@@ -199,10 +290,11 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
       await generateScrapSalesInvoicePdf(invoice);
       resetForm();
 
+      const enteredExcel = isScrapSaleConfirmedForExcel(invoice);
       setBanner({
         text: res.ok
-          ? `Saved & synced ${invoice.invoiceNo} (Total Qnty: ${invoice.totalScrapQntyKg.toFixed(2)} kg · Total Cost: $${invoice.totalCost.toFixed(2)}) and generated 3-signature LG PLAST PDF Invoice.`
-          : `Saved ${invoice.invoiceNo} offline & generated 3-signature PDF Invoice. Cloud sync queued automatically.`,
+          ? `${invoice.invoiceNo} saved (${enteredExcel ? 'PAID + 3/3 Signed — Entered into Excel' : 'Saved as ISSUED — Held from Excel until Payment & 3 Signatures confirmed'}) and PDF generated.`
+          : `Saved ${invoice.invoiceNo} offline (${enteredExcel ? 'PAID + 3/3 Signed' : 'ISSUED — Held from Excel'}) & generated PDF. Cloud sync queued.`,
       });
     } catch (err) {
       setBanner({
@@ -217,27 +309,84 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
     }
   };
 
-  const handleTogglePaid = async (inv: ScrapSalesInvoice) => {
-    setUpdatingId(inv.id);
+  const openSignAndConfirmModal = (inv: ScrapSalesInvoice) => {
+    setConfirmModalInv(inv);
+    setModalSig1Name(inv.signatures?.preparedBy?.name || inv.preparedByName || currentUserName || '');
+    setModalSig1Data(inv.signatures?.preparedBy?.signature || '');
+    setModalSig1At(inv.signatures?.preparedBy?.signedAt || '');
+
+    setModalSig2Name(inv.signatures?.approvedBy?.name || '');
+    setModalSig2Data(inv.signatures?.approvedBy?.signature || '');
+    setModalSig2At(inv.signatures?.approvedBy?.signedAt || '');
+
+    setModalSig3Name(inv.signatures?.buyer?.name || inv.buyerName || '');
+    setModalSig3Data(inv.signatures?.buyer?.signature || '');
+    setModalSig3At(inv.signatures?.buyer?.signedAt || '');
+  };
+
+  const handleSaveModalUpdates = async (targetStatus: 'ISSUED' | 'PAID') => {
+    if (!confirmModalInv) return;
+
+    if (targetStatus === 'PAID' && !allModalSignaturesCaptured) {
+      setBanner({
+        text: 'All 3 digital signatures (Prepared By, Approved By, and Buyer) are required before confirming payment into Excel.',
+        isError: true,
+      });
+      return;
+    }
+
+    setSavingConfirmModal(true);
     try {
+      const nowIso = new Date().toISOString();
       const updated: ScrapSalesInvoice = {
-        ...inv,
-        status: inv.status === 'PAID' ? 'ISSUED' : 'PAID',
+        ...confirmModalInv,
+        signatures: {
+          preparedBy: {
+            ...EMPTY_SLOT(),
+            name: modalSig1Name.trim() || confirmModalInv.preparedByName || 'Plant Operator',
+            signature: modalSig1Data || undefined,
+            signedAt: modalSig1Data ? modalSig1At || nowIso : '',
+          },
+          approvedBy: {
+            ...EMPTY_SLOT(),
+            name: modalSig2Name.trim(),
+            signature: modalSig2Data || undefined,
+            signedAt: modalSig2Data ? modalSig2At || nowIso : '',
+          },
+          buyer: {
+            ...EMPTY_SLOT(),
+            name: modalSig3Name.trim() || confirmModalInv.buyerName || '',
+            signature: modalSig3Data || undefined,
+            signedAt: modalSig3Data ? modalSig3At || nowIso : '',
+          },
+        },
+        status: targetStatus === 'PAID' && allModalSignaturesCaptured ? 'PAID' : 'ISSUED',
+        paidConfirmedAt:
+          targetStatus === 'PAID' && allModalSignaturesCaptured
+            ? confirmModalInv.paidConfirmedAt || nowIso
+            : undefined,
+        paidConfirmedBy:
+          targetStatus === 'PAID' && allModalSignaturesCaptured
+            ? currentUserName || currentUserEmail || 'Authorized Officer'
+            : undefined,
         upd: Date.now(),
       };
+
       const res = await saveScrapSalesInvoiceToFirebase(updated);
+      setConfirmModalInv(null);
+      const enteredExcel = isScrapSaleConfirmedForExcel(updated);
       setBanner({
-        text: res.ok
-          ? `${inv.invoiceNo} updated to ${updated.status}.`
-          : `${inv.invoiceNo} updated locally to ${updated.status} (queued for cloud sync).`,
+        text: enteredExcel
+          ? `${updated.invoiceNo} confirmed PAID with 3/3 signatures — now unlocked in Admin Excel & TQM reports${res.ok ? '' : ' (queued offline)'}.`
+          : `${updated.invoiceNo} signatures updated (${getScrapSalesSignatureCount(updated)}/3 signed, Status: ${updated.status}) — remains held from Excel until PAID with 3/3 signatures.`,
       });
     } catch (err) {
       setBanner({
-        text: err instanceof Error ? err.message : 'Failed to update invoice payment status.',
+        text: err instanceof Error ? err.message : 'Failed to update signatures & payment status.',
         isError: true,
       });
     } finally {
-      setUpdatingId(null);
+      setSavingConfirmModal(false);
     }
   };
 
@@ -249,9 +398,9 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
       });
       return;
     }
-    if (invoices.length === 0) {
+    if (confirmedFilteredInvoices.length === 0) {
       setBanner({
-        text: 'No scrap sales invoices saved yet to export.',
+        text: 'No scrap sales records eligible for Excel yet. Only invoices with BOTH confirmed payment (PAID) and all 3 signatures enter Excel.',
         isError: true,
       });
       return;
@@ -259,13 +408,13 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
     setExportingExcel(true);
     try {
       const fileName = await exportScrapSalesExcelWorkbook(
-        filteredInvoices,
-        date || 'All',
+        confirmedFilteredInvoices,
+        date || 'Confirmed',
         isAdmin
       );
       if (fileName) {
         setBanner({
-          text: `Background Excel (.xlsx) generated & downloaded: ${fileName}`,
+          text: `Background Excel (.xlsx) generated for ${confirmedFilteredInvoices.length} confirmed Paid + 3-Signed invoice(s): ${fileName}`,
         });
       }
     } finally {
@@ -288,7 +437,7 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
                 Recycling Scrap Sales &amp; Invoice System
               </h2>
               <p className="text-xs text-slate-400">
-                Enter QNTY/KG for Colour Scrap, White Scrap, and Empty Bags — unit rate, 50% net KG, Total Scrap Qnty &amp; Total Cost calculate automatically.
+                Enter QNTY/KG for Colour Scrap, White Scrap, and Empty Bags. Records only enter Excel after Payment Confirmation (PAID) &amp; all 3 Signatures.
               </p>
             </div>
           </div>
@@ -301,8 +450,9 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
               <button
                 type="button"
                 onClick={handleExportExcel}
-                disabled={exportingExcel || filteredInvoices.length === 0}
+                disabled={exportingExcel || confirmedFilteredInvoices.length === 0}
                 className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-3.5 py-2 text-xs font-black text-white shadow transition"
+                title="Exports ONLY invoices confirmed PAID with all 3 digital signatures"
               >
                 {exportingExcel ? (
                   <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -312,7 +462,7 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
                 <span>
                   {exportingExcel
                     ? 'Generating in Background...'
-                    : `Download Background Excel (${filteredInvoices.length})`}
+                    : `Download Confirmed Excel (${confirmedFilteredInvoices.length})`}
                 </span>
               </button>
             ) : (
@@ -328,46 +478,43 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 tabular-nums">
           <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3.5">
             <div className="text-[11px] font-bold uppercase text-slate-400">
-              Saved Invoices
+              Excel-Confirmed vs Pending Invoices
             </div>
             <div className="text-2xl font-black text-white mt-0.5">
-              {invoices.length}
+              {confirmedAllInvoices.length}{' '}
+              <span className="text-xs font-semibold text-emerald-300">in Excel</span>
             </div>
-            <div className="text-[11px] text-slate-400">
-              {invoices.filter((i) => i.status === 'PAID').length} paid ·{' '}
-              {invoices.filter((i) => i.status === 'ISSUED').length} issued
+            <div className="text-[11px] text-amber-300/90">
+              {heldAllInvoices.length} held pending payment &amp; 3/3 signatures
             </div>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3.5">
             <div className="text-[11px] font-bold uppercase text-slate-400">
-              Cumulative Scrap Sold (Gross)
+              Confirmed Scrap Sold (Net Billable 50%)
             </div>
             <div className="text-2xl font-black text-sky-300 mt-0.5">
-              {invoices
-                .reduce((acc, inv) => acc + inv.totalScrapQntyKg, 0)
+              {confirmedAllInvoices
+                .reduce((acc, inv) => acc + inv.totalNetKg, 0)
                 .toFixed(2)}{' '}
               <span className="text-xs font-semibold text-slate-400">kg</span>
             </div>
             <div className="text-[11px] text-slate-400">
-              Net Billable (50%):{' '}
+              All Invoices Gross:{' '}
               {invoices
-                .reduce((acc, inv) => acc + inv.totalNetKg, 0)
+                .reduce((acc, inv) => acc + inv.totalScrapQntyKg, 0)
                 .toFixed(2)}{' '}
               kg
             </div>
           </div>
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-3.5">
             <div className="text-[11px] font-bold uppercase text-emerald-300">
-              Total Billed Revenue
+              Confirmed Paid + Signed Revenue (In Excel)
             </div>
             <div className="text-2xl font-black text-emerald-300 mt-0.5">
-              $
-              {invoices
-                .reduce((acc, inv) => acc + inv.totalCost, 0)
-                .toFixed(2)}
+              ${confirmedRevenueUsd.toFixed(2)}
             </div>
             <div className="text-[11px] text-emerald-400/80">
-              Across Colour, White &amp; Empty Bags
+              Total Issued (incl. unconfirmed): ${totalBilledRevenueUsd.toFixed(2)}
             </div>
           </div>
         </div>
@@ -381,7 +528,11 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
               : 'border-emerald-500/40 bg-emerald-950/50 text-emerald-200'
           }`}
         >
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
+          {banner.isError ? (
+            <AlertCircle className="h-4 w-4 shrink-0" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+          )}
           <span>{banner.text}</span>
         </div>
       )}
@@ -398,9 +549,18 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
               <span>Create Recycling Scrap Sales Invoice ({nextInvoiceNo})</span>
             </h3>
             <p className="text-xs text-slate-400">
-              Input weights in QNTY/KG only. Cost per KG and 50% Total KG formulas are locked to company billing rules.
+              Input weights in QNTY/KG only. Records enter Excel only after PAID confirmation and all 3 signatures.
             </p>
           </div>
+          <span
+            className={`rounded-full border px-3 py-1 text-[11px] font-bold ${
+              allFormSignaturesCaptured
+                ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                : 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+            }`}
+          >
+            Signatures: {formSigCount}/3 Signed
+          </span>
         </div>
 
         {/* Invoice Metadata Fields */}
@@ -442,118 +602,81 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
           </div>
           <div>
             <label className="block text-[11px] font-bold uppercase text-slate-400 mb-1">
-              Payment Status
+              Payment Confirmation
             </label>
             <select
               value={status}
-              onChange={(e) =>
-                setStatus(e.target.value === 'PAID' ? 'PAID' : 'ISSUED')
-              }
+              onChange={(e) => {
+                const next = e.target.value === 'PAID' ? 'PAID' : 'ISSUED';
+                if (next === 'PAID' && !allFormSignaturesCaptured) {
+                  setShowSigPads(true);
+                  setBanner({
+                    text: 'Capture all 3 digital signatures below before marking payment as PAID for Excel.',
+                    isError: true,
+                  });
+                  return;
+                }
+                setStatus(next);
+              }}
               className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-bold text-white focus:border-emerald-500 focus:outline-none"
             >
-              <option value="ISSUED">ISSUED (Credit / Pending)</option>
-              <option value="PAID">PAID (Settled)</option>
+              <option value="ISSUED">ISSUED (Held until Paid + 3 Signed)</option>
+              <option value="PAID" disabled={!allFormSignaturesCaptured}>
+                {allFormSignaturesCaptured
+                  ? 'PAID (Confirmed + 3/3 Signed -> Enter Excel)'
+                  : 'PAID (Locked — Needs 3/3 Signatures First)'}
+              </option>
             </select>
           </div>
         </div>
 
-        {/* Auto-Calculating Invoice Structure Matching FORMART OF INVOICE */}
-        <div className="overflow-x-auto rounded-xl border border-slate-700 bg-white text-slate-900 shadow-inner">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="bg-[#0F1E36] text-white uppercase tracking-wider text-[11px]">
-                <th className="py-3 px-4 font-black">NAME (SCRAP CATEGORY)</th>
-                <th className="py-3 px-4 text-right font-black">COST PER KG</th>
-                <th className="py-3 px-4 text-right font-black w-44">
-                  QNTY / KG (ENTER HERE)
-                </th>
-                <th className="py-3 px-4 text-right font-black">
-                  TOTAL KG (50%)
-                </th>
-                <th className="py-3 px-4 text-right font-black">
-                  TOTAL COST ($)
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 tabular-nums">
-              {calculation.items.map((item, idx) => {
-                const cfg = SCRAP_SALES_CATEGORIES[idx];
-                const rateDisplay =
-                  Math.abs(cfg.costPerKg - 0.066666667) < 0.0001
-                    ? '0.066666667'
-                    : cfg.costPerKg.toFixed(2);
-                return (
-                  <tr
-                    key={item.key}
-                    className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}
-                  >
-                    <td className="py-3 px-4 font-black text-[#0F1E36]">
-                      {item.name}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-700">
-                      ${rateDisplay}
-                    </td>
-                    <td className="py-2.5 px-4 text-right">
-                      <div className="inline-flex items-center gap-1.5 justify-end">
-                        <Scale className="h-3.5 w-3.5 text-emerald-700" />
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          inputMode="decimal"
-                          value={quantities[item.key]}
-                          onChange={(e) =>
-                            handleQtyChange(item.key, e.target.value)
-                          }
-                          placeholder="0.00"
-                          className="w-32 rounded-lg border-2 border-emerald-500/70 bg-emerald-50/40 px-2.5 py-1.5 text-right text-xs font-black text-slate-900 focus:border-emerald-600 focus:bg-white focus:outline-none"
-                        />
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-right font-bold text-slate-800">
-                      {item.totalKg.toFixed(2)} kg
-                    </td>
-                    <td className="py-3 px-4 text-right font-black text-[#0F1E36]">
-                      ${item.totalCost.toFixed(2)}
-                    </td>
-                  </tr>
-                );
-              })}
+        {/* Diesel-Request-Style Card Inputs (No Tables) */}
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {SCRAP_SALES_CATEGORIES.map((cfg) => (
+              <div
+                key={cfg.key}
+                className="rounded-xl border border-slate-700 bg-slate-950/90 p-3.5 space-y-2"
+              >
+                <label className="block text-xs font-black uppercase tracking-wide text-emerald-300">
+                  {cfg.name} (QNTY / KG)
+                </label>
+                <div className="relative">
+                  <Scale className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-400" />
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    inputMode="decimal"
+                    value={quantities[cfg.key]}
+                    onChange={(e) => handleQtyChange(cfg.key, e.target.value)}
+                    placeholder="Enter Qnty (kg)"
+                    className="w-full rounded-xl border border-emerald-500/40 bg-slate-900 pl-9 pr-3 py-2 text-sm font-black text-white tabular-nums focus:border-emerald-400 focus:outline-none"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
 
-              {/* TOTAL SCRAP QNTY & TOTAL COST ROW */}
-              <tr className="bg-slate-100 border-t-2 border-slate-300 font-black text-[#0F1E36]">
-                <td className="py-3 px-4" colSpan={2}>
-                  TOTAL SCRAP QNTY &amp; TOTAL COST
-                </td>
-                <td className="py-3 px-4 text-right">
-                  {calculation.totalScrapQntyKg.toFixed(2)} kg
-                </td>
-                <td className="py-3 px-4 text-right">
-                  {calculation.totalNetKg.toFixed(2)} kg
-                </td>
-                <td className="py-3 px-4 text-right text-emerald-800">
-                  ${calculation.totalCost.toFixed(2)}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* Highlighted Grand TOTAL COST Footer */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#0F1E36] text-white px-4 py-3">
-            <div className="text-xs font-semibold text-slate-200">
-              TOTAL SCRAP QNTY:{' '}
-              <b className="text-white">
-                {calculation.totalScrapQntyKg.toFixed(2)} kg
-              </b>{' '}
-              (50% Net Billable:{' '}
-              <b className="text-emerald-300">
+          {/* Clean Summary Strip (No Tables — ONLY Total KG, Total Cost & Invoice Amount Due) */}
+          <div className="rounded-xl border border-emerald-500/35 bg-slate-950 p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 tabular-nums">
+            <div className="rounded-lg border border-slate-800 bg-slate-900/80 px-3.5 py-2.5 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase text-slate-400">TOTAL KG</span>
+              <span className="text-base font-black text-white">
                 {calculation.totalNetKg.toFixed(2)} kg
-              </b>
-              )
+              </span>
             </div>
-            <div className="text-sm sm:text-base font-black tracking-wide">
-              TOTAL COST:{' '}
-              <span className="text-emerald-300">
+            <div className="rounded-lg border border-slate-800 bg-slate-900/80 px-3.5 py-2.5 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase text-slate-400">TOTAL COST</span>
+              <span className="text-base font-black text-sky-300">
+                ${calculation.totalCost.toFixed(2)}
+              </span>
+            </div>
+            <div className="rounded-lg border border-emerald-500/50 bg-[#0F1E36] px-3.5 py-2.5 flex items-center justify-between">
+              <span className="text-xs font-black uppercase text-emerald-300">
+                INVOICE AMOUNT DUE
+              </span>
+              <span className="text-lg font-black text-emerald-300">
                 ${calculation.totalCost.toFixed(2)}
               </span>
             </div>
@@ -588,13 +711,13 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
           </div>
         </div>
 
-        {/* Optional Electronic 3-Signature Pads (PDF always keeps 3 signature lines) */}
+        {/* 3-Signature Pads (Required alongside PAID confirmation for Excel entry) */}
         <div className="rounded-xl border border-slate-800 bg-slate-950/75 p-3.5 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
               <PenTool className="h-4 w-4 text-emerald-400" />
               <span>
-                PDF Invoice 3-Signature Format (1. Prepared By · 2. Approved By · 3. Buyer Received By)
+                3-Signature Authorization (Required with Payment Confirmation to enter Excel)
               </span>
             </div>
             <button
@@ -603,8 +726,8 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
               className="rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 px-3 py-1.5 text-[11px] font-bold text-emerald-300 transition"
             >
               {showSigPads
-                ? 'Hide Digital Signature Capture (Keep 3 Blank Lines on PDF)'
-                : 'Sign Digitally Before Generating PDF (Optional)'}
+                ? 'Collapse Signature Pads'
+                : `Open 3 Digital Signature Pads (${formSigCount}/3 Signed)`}
             </button>
           </div>
 
@@ -625,7 +748,7 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
                     <img src={sig1Data} alt="Prepared signature" className="h-10 object-contain" />
                     <button
                       type="button"
-                      onClick={() => { setSig1Data(''); setSig1At(''); }}
+                      onClick={() => clearFormSigSlot(1)}
                       className="text-[10px] font-bold text-rose-600 hover:underline"
                     >
                       Clear
@@ -658,7 +781,7 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
                     <img src={sig2Data} alt="Approved signature" className="h-10 object-contain" />
                     <button
                       type="button"
-                      onClick={() => { setSig2Data(''); setSig2At(''); }}
+                      onClick={() => clearFormSigSlot(2)}
                       className="text-[10px] font-bold text-rose-600 hover:underline"
                     >
                       Clear
@@ -691,7 +814,7 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
                     <img src={sig3Data} alt="Buyer signature" className="h-10 object-contain" />
                     <button
                       type="button"
-                      onClick={() => { setSig3Data(''); setSig3At(''); }}
+                      onClick={() => clearFormSigSlot(3)}
                       className="text-[10px] font-bold text-rose-600 hover:underline"
                     >
                       Clear
@@ -712,26 +835,39 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
         </div>
 
         {/* Submit Actions */}
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={resetForm}
-            className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-4 py-2.5 text-xs font-bold text-slate-200 transition"
-          >
-            Clear Entries
-          </button>
-          <button
-            type="submit"
-            disabled={saving || calculation.totalScrapQntyKg <= 0}
-            className="flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-2.5 text-xs font-black text-white shadow-lg transition"
-          >
-            <FileText className="h-4 w-4" />
-            <span>
-              {saving
-                ? 'Saving & Generating Invoice...'
-                : 'Save Invoice & Generate 3-Signature PDF'}
-            </span>
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-[11px] text-slate-400">
+            {allFormSignaturesCaptured && status === 'PAID' ? (
+              <span className="text-emerald-300 font-bold">
+                Ready: 3/3 signed &amp; PAID — will enter Excel upon saving.
+              </span>
+            ) : (
+              <span>
+                Will save as <b className="text-slate-200">{status}</b> — you can complete any remaining signatures &amp; confirm payment in the register below.
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={resetForm}
+              className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-4 py-2.5 text-xs font-bold text-slate-200 transition"
+            >
+              Clear Entries
+            </button>
+            <button
+              type="submit"
+              disabled={saving || calculation.totalScrapQntyKg <= 0}
+              className="flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-2.5 text-xs font-black text-white shadow-lg transition"
+            >
+              <FileText className="h-4 w-4" />
+              <span>
+                {saving
+                  ? 'Saving & Generating Invoice...'
+                  : 'Save Invoice & Generate 3-Signature PDF'}
+              </span>
+            </button>
+          </div>
         </div>
       </form>
 
@@ -744,7 +880,7 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
               <span>Recycling Scrap Sales Invoice Register</span>
             </h3>
             <p className="text-xs text-slate-400">
-              All saved scrap invoices synchronize live across plant devices. Re-print any 3-signature PDF invoice anytime.
+              Complete all 3 digital signatures and Confirm Payment (PAID) on any invoice to unlock it into Excel reports &amp; TQM revenue.
             </p>
           </div>
           <div className="relative">
@@ -759,127 +895,338 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-800">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-800 bg-slate-950 text-slate-400 font-semibold whitespace-nowrap">
-                <th className="py-2.5 px-3">Invoice No.</th>
-                <th className="py-2.5 px-3">Date</th>
-                <th className="py-2.5 px-3">Buyer / Vehicle</th>
-                <th className="py-2.5 px-3 text-right">Colour (kg)</th>
-                <th className="py-2.5 px-3 text-right">White (kg)</th>
-                <th className="py-2.5 px-3 text-right">Empty Bags (kg)</th>
-                <th className="py-2.5 px-3 text-right">Total Qnty (kg)</th>
-                <th className="py-2.5 px-3 text-right">Net 50% (kg)</th>
-                <th className="py-2.5 px-3 text-right">Total Cost</th>
-                <th className="py-2.5 px-3 text-center">Status</th>
-                <th className="py-2.5 px-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/70 tabular-nums">
-              {filteredInvoices.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={11}
-                    className="py-8 text-center text-slate-500 text-xs"
-                  >
-                    No recycling scrap sales invoices recorded yet.
-                  </td>
-                </tr>
-              ) : (
-                filteredInvoices.map((inv) => {
-                  const colour =
-                    inv.items.find((i) => i.key === 'colour_scrap')?.qntyKg || 0;
-                  const white =
-                    inv.items.find((i) => i.key === 'white_scrap')?.qntyKg || 0;
-                  const bags =
-                    inv.items.find((i) => i.key === 'empty_bags')?.qntyKg || 0;
-                  return (
-                    <tr
-                      key={inv.id}
-                      className="hover:bg-slate-800/40 whitespace-nowrap transition"
-                    >
-                      <td className="py-2.5 px-3 font-mono font-bold text-emerald-300">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 tabular-nums">
+          {filteredInvoices.length === 0 ? (
+            <div className="md:col-span-2 rounded-xl border border-slate-800 bg-slate-950/60 py-8 text-center text-slate-500 text-xs">
+              No recycling scrap sales invoices recorded yet.
+            </div>
+          ) : (
+            filteredInvoices.map((inv) => {
+              const sigCount = getScrapSalesSignatureCount(inv);
+              const allSigned = hasAllScrapSalesSignatures(inv);
+              const inExcel = isScrapSaleConfirmedForExcel(inv);
+
+              return (
+                <div
+                  key={inv.id}
+                  className={`rounded-xl border bg-slate-950/85 p-3.5 space-y-2.5 transition ${
+                    inExcel
+                      ? 'border-emerald-500/40 hover:border-emerald-400/60'
+                      : 'border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2">
+                    <div>
+                      <span className="font-mono text-xs font-black text-emerald-300">
                         {inv.invoiceNo}
-                      </td>
-                      <td className="py-2.5 px-3 font-mono text-slate-300">
+                      </span>
+                      <span className="ml-2 text-[11px] font-mono text-slate-400">
                         {inv.date}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="font-bold text-white">
-                          {inv.buyerName}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold border ${
+                          allSigned
+                            ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                            : 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                        }`}
+                      >
+                        {sigCount}/3 Signed
+                      </span>
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold border ${
+                          inExcel
+                            ? 'border-emerald-500/50 bg-emerald-500/20 text-emerald-300'
+                            : 'border-rose-500/40 bg-rose-500/15 text-rose-300'
+                        }`}
+                      >
+                        {inExcel ? 'PAID · IN EXCEL' : `${inv.status} · HELD FROM EXCEL`}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <div>
+                      <div className="font-bold text-white">{inv.buyerName}</div>
+                      {inv.vehicleReg && (
+                        <div className="text-[10px] text-slate-400">
+                          Vehicle: {inv.vehicleReg}
                         </div>
-                        {inv.vehicleReg && (
-                          <div className="text-[10px] text-slate-400">
-                            {inv.vehicleReg}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-right text-slate-300">
-                        {colour.toFixed(2)}
-                      </td>
-                      <td className="py-2.5 px-3 text-right text-slate-300">
-                        {white.toFixed(2)}
-                      </td>
-                      <td className="py-2.5 px-3 text-right text-slate-300">
-                        {bags.toFixed(2)}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-bold text-white">
-                        {inv.totalScrapQntyKg.toFixed(2)}
-                      </td>
-                      <td className="py-2.5 px-3 text-right text-sky-300">
-                        {inv.totalNetKg.toFixed(2)}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-black text-emerald-300">
-                        ${inv.totalCost.toFixed(2)}
-                      </td>
-                      <td className="py-2.5 px-3 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleTogglePaid(inv)}
-                          disabled={updatingId === inv.id}
-                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold border transition ${
-                            inv.status === 'PAID'
-                              ? 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                              : 'border-amber-500/40 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
-                          }`}
-                          title="Click to toggle ISSUED / PAID status"
-                        >
-                          {inv.status}
-                        </button>
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => generateScrapSalesInvoicePdf(inv)}
-                          className="inline-flex items-center gap-1 rounded-lg bg-[#0F1E36] hover:bg-[#1b345c] border border-slate-700 px-2.5 py-1 text-[11px] font-bold text-white transition"
-                        >
-                          <Download className="h-3 w-3" />
-                          <span>PDF Invoice</span>
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11px] text-slate-400">
+                        TOTAL KG:{' '}
+                        <strong className="text-white">
+                          {inv.totalNetKg.toFixed(2)} kg
+                        </strong>
+                      </div>
+                      <div className="text-xs font-black text-emerald-300">
+                        INVOICE AMOUNT DUE: ${inv.totalCost.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/60">
+                    <span className="text-[10px] text-slate-400">
+                      TOTAL COST: ${inv.totalCost.toFixed(2)}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openSignAndConfirmModal(inv)}
+                        className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition ${
+                          inExcel
+                            ? 'border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300'
+                            : 'border-emerald-500/50 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300'
+                        }`}
+                      >
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                        <span>{inExcel ? 'Signatures / Status' : 'Sign & Confirm Payment'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => generateScrapSalesInvoicePdf(inv)}
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#0F1E36] hover:bg-[#1b345c] border border-slate-700 px-3 py-1.5 text-[11px] font-bold text-white transition"
+                      >
+                        <Download className="h-3 w-3" />
+                        <span>PDF Invoice</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
 
+      {/* Saved Invoice: Sign & Confirm Payment Modal */}
+      {confirmModalInv && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="w-full max-w-3xl rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden my-6">
+            <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4 bg-slate-950">
+              <div>
+                <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                  <span>
+                    Sign &amp; Confirm Payment — {confirmModalInv.invoiceNo}
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  All 3 signatures + Payment Confirmation (PAID) are required before this record enters Excel reports.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmModalInv(null)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Diesel-style clean summary */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-3.5 grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs tabular-nums">
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Buyer</div>
+                  <div className="font-bold text-white truncate">{confirmModalInv.buyerName}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">TOTAL KG</div>
+                  <div className="font-black text-white">{confirmModalInv.totalNetKg.toFixed(2)} kg</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">TOTAL COST</div>
+                  <div className="font-black text-sky-300">${confirmModalInv.totalCost.toFixed(2)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-emerald-300">INVOICE AMOUNT DUE</div>
+                  <div className="font-black text-emerald-300">${confirmModalInv.totalCost.toFixed(2)}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* Slot 1 */}
+                <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                  <label className="block text-[11px] font-bold text-slate-200">
+                    1. Prepared / Issued By
+                  </label>
+                  <input
+                    type="text"
+                    value={modalSig1Name}
+                    onChange={(e) => setModalSig1Name(e.target.value)}
+                    placeholder="Officer Name"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-white"
+                  />
+                  {hasSig(modalSig1Data) ? (
+                    <div className="rounded-lg border border-emerald-500/40 bg-white p-2 flex items-center justify-between gap-2">
+                      <img src={modalSig1Data} alt="Prepared signature" className="h-12 object-contain" />
+                      <button
+                        type="button"
+                        onClick={() => { setModalSig1Data(''); setModalSig1At(''); }}
+                        className="text-[10px] font-bold text-rose-600 hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setModalSigSlot(1)}
+                      className="w-full rounded-lg border border-dashed border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20 py-2.5 text-xs font-bold text-emerald-300 transition"
+                    >
+                      + Capture Signature 1
+                    </button>
+                  )}
+                </div>
+
+                {/* Slot 2 */}
+                <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                  <label className="block text-[11px] font-bold text-slate-200">
+                    2. Approved By (HOD / Admin)
+                  </label>
+                  <input
+                    type="text"
+                    value={modalSig2Name}
+                    onChange={(e) => setModalSig2Name(e.target.value)}
+                    placeholder="Approver Name"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-white"
+                  />
+                  {hasSig(modalSig2Data) ? (
+                    <div className="rounded-lg border border-emerald-500/40 bg-white p-2 flex items-center justify-between gap-2">
+                      <img src={modalSig2Data} alt="Approved signature" className="h-12 object-contain" />
+                      <button
+                        type="button"
+                        onClick={() => { setModalSig2Data(''); setModalSig2At(''); }}
+                        className="text-[10px] font-bold text-rose-600 hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setModalSigSlot(2)}
+                      className="w-full rounded-lg border border-dashed border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20 py-2.5 text-xs font-bold text-emerald-300 transition"
+                    >
+                      + Capture Signature 2
+                    </button>
+                  )}
+                </div>
+
+                {/* Slot 3 */}
+                <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                  <label className="block text-[11px] font-bold text-slate-200">
+                    3. Received By (Buyer)
+                  </label>
+                  <input
+                    type="text"
+                    value={modalSig3Name}
+                    onChange={(e) => setModalSig3Name(e.target.value)}
+                    placeholder="Buyer / Collector Name"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-white"
+                  />
+                  {hasSig(modalSig3Data) ? (
+                    <div className="rounded-lg border border-emerald-500/40 bg-white p-2 flex items-center justify-between gap-2">
+                      <img src={modalSig3Data} alt="Buyer signature" className="h-12 object-contain" />
+                      <button
+                        type="button"
+                        onClick={() => { setModalSig3Data(''); setModalSig3At(''); }}
+                        className="text-[10px] font-bold text-rose-600 hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setModalSigSlot(3)}
+                      className="w-full rounded-lg border border-dashed border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20 py-2.5 text-xs font-bold text-emerald-300 transition"
+                    >
+                      + Capture Signature 3
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-950 px-3.5 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-slate-300">
+                  Signature Gate: <span className={allModalSignaturesCaptured ? 'text-emerald-300' : 'text-amber-300'}>{modalSigCount}/3 Signed</span>
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  {allModalSignaturesCaptured
+                    ? 'All 3 signatures complete — click Confirm Payment (PAID) to enter this invoice into Excel.'
+                    : 'Capture all 3 signatures to enable Payment Confirmation (PAID -> Enter Excel).'}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setConfirmModalInv(null)}
+                  className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-4 py-2 text-xs font-bold text-slate-200 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingConfirmModal}
+                  onClick={() => handleSaveModalUpdates('ISSUED')}
+                  className="rounded-xl border border-amber-500/40 bg-amber-500/15 hover:bg-amber-500/25 px-4 py-2 text-xs font-bold text-amber-200 transition disabled:opacity-50"
+                >
+                  {confirmModalInv.status === 'PAID' ? 'Save & Hold as ISSUED' : 'Save Signatures (Keep ISSUED)'}
+                </button>
+                <button
+                  type="button"
+                  disabled={savingConfirmModal || !allModalSignaturesCaptured}
+                  onClick={() => handleSaveModalUpdates('PAID')}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 px-4 py-2 text-xs font-black text-white shadow transition"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span>
+                    {savingConfirmModal
+                      ? 'Confirming...'
+                      : 'Confirm Payment (PAID) & Unlock for Excel'}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Signature Capture Pad (Form or Saved Invoice Modal) */}
       <DigitalSignaturePad
-        isOpen={activeSigSlot !== null}
-        onClose={() => setActiveSigSlot(null)}
-        initialRole={activeSigSlot === 2 ? 'supervisor' : 'technician'}
+        isOpen={activeSigSlot !== null || modalSigSlot !== null}
+        onClose={() => {
+          setActiveSigSlot(null);
+          setModalSigSlot(null);
+        }}
+        initialRole={(activeSigSlot ?? modalSigSlot) === 2 ? 'supervisor' : 'technician'}
         initialName={
-          activeSigSlot === 1
+          modalSigSlot !== null
+            ? modalSigSlot === 1
+              ? modalSig1Name
+              : modalSigSlot === 2
+              ? modalSig2Name
+              : modalSig3Name || confirmModalInv?.buyerName || ''
+            : activeSigSlot === 1
             ? sig1Name
             : activeSigSlot === 2
             ? sig2Name
             : sig3Name || buyerName
         }
         logTitle={
-          activeSigSlot === 1
+          modalSigSlot !== null && confirmModalInv
+            ? modalSigSlot === 1
+              ? `Scrap Sales Invoice ${confirmModalInv.invoiceNo} — 1. Prepared / Issued By`
+              : modalSigSlot === 2
+              ? `Scrap Sales Invoice ${confirmModalInv.invoiceNo} — 2. Approved By`
+              : `Scrap Sales Invoice ${confirmModalInv.invoiceNo} — 3. Received By (Buyer)`
+            : activeSigSlot === 1
             ? `Scrap Sales Invoice ${nextInvoiceNo} — 1. Prepared / Issued By`
             : activeSigSlot === 2
             ? `Scrap Sales Invoice ${nextInvoiceNo} — 2. Approved By`
@@ -888,6 +1235,24 @@ export const ScrapSalesView: React.FC<ScrapSalesViewProps> = ({
         equipmentId="Recycling Scrap Sales"
         onSaveSignature={(data) => {
           const ts = new Date().toISOString();
+          if (modalSigSlot !== null) {
+            if (modalSigSlot === 1) {
+              setModalSig1Name(data.name);
+              setModalSig1Data(data.signature);
+              setModalSig1At(ts);
+            } else if (modalSigSlot === 2) {
+              setModalSig2Name(data.name);
+              setModalSig2Data(data.signature);
+              setModalSig2At(ts);
+            } else if (modalSigSlot === 3) {
+              setModalSig3Name(data.name);
+              setModalSig3Data(data.signature);
+              setModalSig3At(ts);
+            }
+            setModalSigSlot(null);
+            return;
+          }
+
           if (activeSigSlot === 1) {
             setSig1Name(data.name);
             setSig1Data(data.signature);

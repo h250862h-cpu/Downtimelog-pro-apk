@@ -8,7 +8,7 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react';
-import { loginWithEmail, loginWithGoogle } from '../firebase';
+import { loginWithEmail, loginWithGoogle, sendUserPasswordReset } from '../firebase';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -24,6 +24,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [infoMsg, setInfoMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
@@ -31,6 +32,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    setInfoMsg('');
     setLoading(true);
 
     try {
@@ -46,21 +48,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           'Email/Password provider is not enabled in Firebase Console yet. Please enable it under Firebase Console -> Authentication -> Sign-in method.'
         );
       } else if (msg.includes('auth/user-not-found') || msg.includes('auth/invalid-credential')) {
-        setErrorMsg('Invalid email or password. Ask Plant Administration if your account needs setup or a password reset.');
+        setErrorMsg('Invalid email/ID or password. You can use Google Sign-In below or tap Forgot / Reset Password.');
       } else {
         setErrorMsg(msg);
       }
     }
   };
 
-  const handleGoogleSignIn = async () => {
+  const handlePasswordReset = async () => {
     setErrorMsg('');
+    setInfoMsg('');
+    if (!email.trim()) {
+      setErrorMsg('Enter your email or login ID first to send a password reset link.');
+      return;
+    }
     setLoading(true);
     try {
-      await loginWithGoogle();
+      const sentTo = await sendUserPasswordReset(email);
+      setInfoMsg(`Password reset email sent to ${sentTo}.`);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
       setLoading(false);
-      onSuccess();
-      onClose();
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setErrorMsg('');
+    setInfoMsg('');
+    setLoading(true);
+    try {
+      const res = await loginWithGoogle();
+      setLoading(false);
+      if (res) {
+        onSuccess();
+        onClose();
+      }
     } catch (err: unknown) {
       setLoading(false);
       const msg = err instanceof Error ? err.message : String(err);
@@ -108,7 +131,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
         </div>
 
-        {/* Error Notification */}
+        {/* Info / Error Notifications */}
+        {infoMsg && (
+          <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300">
+            {infoMsg}
+          </div>
+        )}
         {errorMsg && (
           <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
             <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
@@ -119,12 +147,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* Form */}
         <form onSubmit={handleSubmit} className="mt-4 space-y-3">
           <div>
-            <label className="text-[11px] text-slate-400 block mb-1">Email Address</label>
+            <label className="text-[11px] text-slate-400 block mb-1">Work Email or Login ID</label>
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
               <input
-                type="email"
-                placeholder="staff@plant.com"
+                type="text"
+                placeholder="h250862h@hit.ac.zw or hod"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full rounded-xl border border-slate-700 bg-slate-850 pl-8 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-amber-500 outline-none"
@@ -134,7 +162,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
 
           <div>
-            <label className="text-[11px] text-slate-400 block mb-1">Password</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[11px] text-slate-400 block">Password</label>
+              <button
+                type="button"
+                onClick={handlePasswordReset}
+                disabled={loading}
+                className="text-[11px] font-semibold text-amber-400 hover:underline disabled:opacity-50"
+              >
+                Forgot / Reset Password?
+              </button>
+            </div>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
               <input
@@ -158,7 +196,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             ) : (
               <>
                 <LogIn className="h-4 w-4" />
-                <span>Sign In with Email</span>
+                <span>Sign In with Email / ID</span>
               </>
             )}
           </button>

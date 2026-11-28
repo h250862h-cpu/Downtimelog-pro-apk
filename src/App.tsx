@@ -102,6 +102,7 @@ const TqmSystemView = lazy(() =>
 );
 import {
   auth,
+  completeGoogleRedirectSignIn,
   ensureFirebaseAuth,
   fetchPlantUsersDirectory,
   getActiveSessionUser,
@@ -115,7 +116,6 @@ import {
   subscribeCloudSyncBus,
   subscribePlantUsers,
   subscribePlantUsersServerLoaded,
-  SYNC_SERVICE_EMAIL,
   testConnection,
   withTimeout,
 } from './firebase';
@@ -533,21 +533,29 @@ export default function App() {
     let mounted = true;
 
     const initFirebaseSession = async () => {
+      await completeGoogleRedirectSignIn().catch(() => null);
       const session = getActiveSessionUser();
-      if (session) {
+      const authed = await ensureFirebaseAuth().catch(() => false);
+      const isCurrentlyOnline =
+        typeof navigator === 'undefined' || navigator.onLine !== false;
+
+      if (session && (authed || !isCurrentlyOnline)) {
         setUser(session);
+        setPlantUsers(getLocalPlantUsers());
+        setPlantUsersServerReady(hasPlantUsersServerLoaded());
         const namePart = session.displayName || session.email.split('@')[0].toUpperCase();
         setCurrentReporter(namePart);
         setCurrentReporterName(namePart);
-        await ensureFirebaseAuth().catch(() => false);
-      } else {
-        await auth.authStateReady().catch(() => {});
+      } else if (session && isCurrentlyOnline && !authed) {
+        // Reject stale or forged localStorage session without an active Firebase Auth user
+        setActiveSessionUser(null);
+        setUser(null);
       }
 
       if (!mounted) return;
-      if (session || auth.currentUser) {
+      if (auth.currentUser) {
         // Fetch live user clearance directory immediately while attaching real-time WatchStreams
-        if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+        if (isCurrentlyOnline) {
           withTimeout(fetchPlantUsersDirectory(), 3500, 'Directory check timed out')
             .then((users) => {
               if (mounted && Array.isArray(users)) {
@@ -575,15 +583,9 @@ export default function App() {
 
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
       const localSession = getActiveSessionUser();
+      const isCurrentlyOnline =
+        typeof navigator === 'undefined' || navigator.onLine !== false;
       if (currentUser) {
-        if (
-          !localSession &&
-          (currentUser.email || '').trim().toLowerCase() === SYNC_SERVICE_EMAIL.toLowerCase()
-        ) {
-          setUser(null);
-          setAuthLoading(false);
-          return;
-        }
         const resolvedUser = localSession
           ? {
               uid: currentUser.uid,
@@ -598,7 +600,7 @@ export default function App() {
           resolvedUser.displayName || resolvedUser.email?.split('@')[0].toUpperCase() || 'OPERATOR';
         setCurrentReporter(namePart);
         setCurrentReporterName(namePart);
-      } else if (localSession) {
+      } else if (localSession && !isCurrentlyOnline) {
         setUser(localSession);
         const namePart = localSession.displayName || localSession.email.split('@')[0].toUpperCase();
         setCurrentReporter(namePart);
@@ -1534,6 +1536,8 @@ export default function App() {
       <LoginGate
         onLoginSuccess={() => {
           const session = getActiveSessionUser();
+          setPlantUsers(getLocalPlantUsers());
+          setPlantUsersServerReady(hasPlantUsersServerLoaded());
           if (session) {
             setUser(session);
             const namePart = session.displayName || session.email.split('@')[0].toUpperCase();
@@ -2648,7 +2652,18 @@ export default function App() {
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
-        onSuccess={() => setIsAuthModalOpen(false)}
+        onSuccess={() => {
+          const session = getActiveSessionUser();
+          setPlantUsers(getLocalPlantUsers());
+          setPlantUsersServerReady(hasPlantUsersServerLoaded());
+          if (session) {
+            setUser(session);
+            const namePart = session.displayName || session.email.split('@')[0].toUpperCase();
+            setCurrentReporter(namePart);
+            setCurrentReporterName(namePart);
+          }
+          setIsAuthModalOpen(false);
+        }}
       />
 
       <SignedCertificateModal

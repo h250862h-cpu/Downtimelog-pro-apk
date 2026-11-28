@@ -70,6 +70,7 @@ export default defineConfig(() => {
           globPatterns: [
             'icon.svg',
             'apple-touch-icon.png',
+            'pwa-*.png',
             'push-sw.js',
             'assets/*.{js,css,png,jpg,jpeg,webp,svg,woff,woff2}',
             'assets/aistudio/image_65f70fd7.png',

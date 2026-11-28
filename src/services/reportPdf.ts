@@ -47,9 +47,13 @@ export function ensureLgplastLogoLoaded(): Promise<string | null> {
       } catch (err) {
         console.warn('LG PLAST PDF logo canvas conversion failed:', err);
       }
+      logoLoadPromise = null;
       resolve(null);
     };
-    img.onerror = () => resolve(null);
+    img.onerror = () => {
+      logoLoadPromise = null;
+      resolve(null);
+    };
     img.src = LGPLAST_LOGO_PATH;
   });
 

@@ -7,11 +7,13 @@ import {
 import * as XLSX from '../utils/xlsxCompat';
 import {
   canAccessFirestorePath,
+  clearFirestorePathBlockedByRules,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
   getCollectionDocsServerFirst,
   isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
   notifyCloudSyncBus,
   setDocWithTimeout,
   subscribeCloudSyncBus,
@@ -326,6 +328,7 @@ export async function saveDispatchEntryToFirebase(
     });
     const docRef = doc(db, DISPATCH_COLLECTION, updatedEntry.id);
     await setDocWithTimeout(docRef, payload, { merge: true }, 12000);
+    clearFirestorePathBlockedByRules(DISPATCH_COLLECTION);
 
     removePendingDispatchId(updatedEntry.id);
     lastDispatchSyncError = null;
@@ -340,7 +343,11 @@ export async function saveDispatchEntryToFirebase(
     return { ok: true };
   } catch (err: any) {
     const code = String(err?.code || '').toLowerCase();
-    const msg = isPermissionDeniedError(err)
+    const denied = isPermissionDeniedError(err);
+    if (denied) {
+      markFirestorePathBlockedByRules(DISPATCH_COLLECTION);
+    }
+    const msg = denied
       ? 'Cloud permission denied on dispatch_entries — verify Firestore Rules are published.'
       : err?.message || 'Failed syncing dispatch entry to cloud';
     if (code.includes('invalid-argument')) {
@@ -466,11 +473,15 @@ export function subscribeDispatchEntries(
           onSyncError?.(null);
           onUpdate(merged.filter((e) => !e.deleted));
           if (!snapshot.metadata.fromCache) {
+            clearFirestorePathBlockedByRules(DISPATCH_COLLECTION);
             flushPendingDispatches().catch(() => {});
           }
         },
         (err) => {
           console.warn('Dispatch Firestore listener warning:', err.message);
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules(DISPATCH_COLLECTION);
+          }
           lastDispatchSyncError = err.message;
           onSyncError?.(err.message);
           unsub = () => {};

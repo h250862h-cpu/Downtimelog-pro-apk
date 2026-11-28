@@ -40,6 +40,7 @@ import {
 } from '../types';
 import { ParsedAttendanceMessage, QCInspectionRecord } from '../types/attendance';
 import { getSummaryRows, saveFileBlob, ymd } from './downtimeCalc';
+import { isScrapSaleConfirmedForExcel } from './scrapSalesStore';
 
 const TQM_CAPA_STORAGE_KEY = 'lgplast_tqm_capa_v1';
 const TQM_CAPA_PENDING_KEY = 'lgplast_tqm_capa_pending_v1';
@@ -519,7 +520,9 @@ export function buildUnifiedTqmAnalytics(input: TqmAnalyticsInput): TqmUnifiedSn
     (d) => !d.deleted && !d.isHistoricalBackground && inDateRange(d.date, fromDate, toDate)
   );
   const trials = input.qualityTrials.filter((t) => inDateRange(t.date, fromDate, toDate));
-  const scrapSales = input.scrapSalesInvoices.filter((s) => inDateRange(s.date, fromDate, toDate));
+  const scrapSales = input.scrapSalesInvoices.filter(
+    (s) => isScrapSaleConfirmedForExcel(s) && inDateRange(s.date, fromDate, toDate)
+  );
   const powerCuts = input.powerCutLogs.filter((p) => inDateRange(p.date, fromDate, toDate));
   const genLogs = input.generatorLogs.filter((g) => inDateRange(g.date, fromDate, toDate));
   const dieselReqs = input.dieselRequests.filter(
@@ -1411,8 +1414,8 @@ export function buildTqmMasterExcelWorkbook(
     ['Production Output (kg)', analytics.totalSopProdKg, 'SOP Job Cards'],
     ['Scrap + Wastage Generated (kg)', round2(analytics.totalSopScrapKg + analytics.totalWastageKg), 'SOP Job Cards'],
     ['Overall Scrap Rate (%)', `${analytics.overallScrapRatePct}%`, 'SOP Production'],
-    ['Scrap Sold Gross / Net (kg)', `${analytics.scrapSoldGrossKg} / ${analytics.scrapSoldNetKg}`, 'Scrap Sales Invoices'],
-    ['Scrap Sales Revenue ($ USD)', analytics.scrapSalesRevenueUsd, 'Scrap Sales Invoices'],
+    ['Scrap Sold Gross / Net (kg)', `${analytics.scrapSoldGrossKg} / ${analytics.scrapSoldNetKg}`, 'Scrap Sales (Paid + 3-Signed Only)'],
+    ['Scrap Sales Revenue ($ USD)', analytics.scrapSalesRevenueUsd, 'Scrap Sales (Paid + 3-Signed Only)'],
     [],
     ['COST OF POOR QUALITY (COPQ) ESTIMATE', 'Amount ($ USD)', 'Basis'],
     ['Gross Scrap & Sweeping Material Loss', analytics.copqScrapLossUsd, 'Scrap + Wastage + Sweeping @ $1.25/kg'],

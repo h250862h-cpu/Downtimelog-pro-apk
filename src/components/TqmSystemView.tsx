@@ -882,7 +882,7 @@ export const TqmSystemView: React.FC<TqmSystemViewProps> = ({
                         Offset: Internal Regrind + Sold Scrap Revenue
                       </td>
                       <td className="py-2 pr-3 text-slate-600">
-                        {analytics.usableRegrindProducedKg} kg regrind + ${analytics.scrapSalesRevenueUsd.toFixed(2)} invoices
+                        {analytics.usableRegrindProducedKg} kg regrind + ${analytics.scrapSalesRevenueUsd.toFixed(2)} confirmed paid &amp; 3-signed invoices
                       </td>
                       <td className="py-2 text-right font-semibold text-emerald-700">
                         -${(analytics.usableRegrindProducedKg * 0.65 + analytics.scrapSalesRevenueUsd).toFixed(2)}
@@ -1406,7 +1406,7 @@ export const TqmSystemView: React.FC<TqmSystemViewProps> = ({
                   </span>
                 </div>
                 <div className="py-2 flex justify-between">
-                  <span className="text-slate-600">Recycling Scrap Sales (Gross / Net Charged)</span>
+                  <span className="text-slate-600">Recycling Scrap Sales (Paid + 3-Signed)</span>
                   <span className="font-semibold text-[#0F1E36]">
                     {analytics.scrapSoldGrossKg.toLocaleString()} / {analytics.scrapSoldNetKg.toLocaleString()} kg · ${analytics.scrapSalesRevenueUsd.toFixed(2)}
                   </span>

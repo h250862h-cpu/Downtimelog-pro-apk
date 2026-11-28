@@ -1402,6 +1402,8 @@ export interface ScrapSalesInvoice {
     buyer: ScrapSalesSignatureSlot;
   };
   status: 'ISSUED' | 'PAID';
+  paidConfirmedAt?: string;
+  paidConfirmedBy?: string;
   createdAt: string;
   upd: number;
   sy?: number;

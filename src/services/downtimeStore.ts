@@ -6,6 +6,8 @@ import {
 } from 'firebase/firestore';
 import {
   auth,
+  canAccessFirestorePath,
+  clearFirestorePathBlockedByRules,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
@@ -14,6 +16,7 @@ import {
   getDocServerFirst,
   handleFirestoreError,
   isPermissionDeniedError,
+  markFirestorePathBlockedByRules,
   notifyCloudSyncBus,
   OperationType,
   reconnectFirestoreNetwork,
@@ -32,7 +35,6 @@ const LOG_KEY = 'dtlog';
 const MACH_KEY = 'dtmach';
 const GONE_KEY = 'dtgone';
 const USER_KEY = 'dtuser';
-const ADMINS_KEY = 'dtadmins';
 
 // Primary Default Admin email from user prompt / system identity
 export const DEFAULT_ADMIN_EMAILS = [
@@ -40,26 +42,16 @@ export const DEFAULT_ADMIN_EMAILS = [
 ];
 
 export function getAdminEmails(): string[] {
-  try {
-    const raw = localStorage.getItem(ADMINS_KEY);
-    if (raw) {
-      const list: string[] = JSON.parse(raw);
-      return Array.from(new Set([...DEFAULT_ADMIN_EMAILS, ...list.map((e) => e.toLowerCase())]));
-    }
-  } catch (e) {
-    console.warn('Failed reading admin list:', e);
-  }
   return DEFAULT_ADMIN_EMAILS;
 }
 
 export function isUserAdmin(email?: string | null): boolean {
-  const effectiveEmail = email || getActiveSessionUser()?.email || auth.currentUser?.email;
+  const effectiveEmail = email || auth.currentUser?.email || getActiveSessionUser()?.email;
   if (!effectiveEmail) {
     return false;
   }
   const norm = effectiveEmail.trim().toLowerCase();
-  const admins = getAdminEmails();
-  if (admins.some((a) => a.toLowerCase() === norm)) {
+  if (DEFAULT_ADMIN_EMAILS.some((a) => a.toLowerCase() === norm)) {
     return true;
   }
   try {
@@ -70,11 +62,13 @@ export function isUserAdmin(email?: string | null): boolean {
         displayName?: string;
         role?: string;
         status?: string;
+        revoked?: boolean;
       }>;
       const matched = users.find((u) => u.email?.trim().toLowerCase() === norm);
       if (
         matched &&
         matched.status !== 'suspended' &&
+        !matched.revoked &&
         (matched.role === 'Plant Administrator' || matched.role === 'Production HOD')
       ) {
         return true;
@@ -84,14 +78,8 @@ export function isUserAdmin(email?: string | null): boolean {
   return false;
 }
 
-export function grantAdminPrivilege(email: string) {
-  try {
-    const current = getAdminEmails();
-    const updated = Array.from(new Set([...current, email.trim().toLowerCase()]));
-    localStorage.setItem(ADMINS_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.warn('Failed saving admin:', e);
-  }
+export function grantAdminPrivilege(_email: string) {
+  // Admin privileges are controlled exclusively by Firebase Auth / Firestore plant_users roles.
 }
 
 // Helpers for localStorage machines
@@ -651,6 +639,7 @@ function markEntrySyncedLocally(entryId: string, syncTimestamp: number) {
 export async function flushPendingSyncQueue(): Promise<number> {
   await ensureFirebaseAuth().catch(() => false);
   repairPendingSyncQueue();
+  if (!(await canAccessFirestorePath('downtime_entries', false))) return 0;
 
   const queue = getPendingSyncQueue();
   const allEntries = getStoredEntries();
@@ -686,6 +675,7 @@ export async function flushPendingSyncQueue(): Promise<number> {
       const syncTs = Math.max(Date.now(), entry.upd || 0);
       const payload = sanitizeForFirestore({ ...entry, sy: syncTs });
       await setDocWithTimeout(docRef, payload, { merge: true });
+      clearFirestorePathBlockedByRules('downtime_entries');
       entry.sy = syncTs;
       updatedLocalMetadata = true;
       removeFromPendingSyncQueue(entry.id);
@@ -694,6 +684,9 @@ export async function flushPendingSyncQueue(): Promise<number> {
     } catch (err: any) {
       const msg = err?.message || String(err);
       const code = String(err?.code || '').toLowerCase();
+      if (isPermissionDeniedError(err)) {
+        markFirestorePathBlockedByRules('downtime_entries');
+      }
       if (code.includes('invalid-argument')) {
         // Malformed payload rejected by schema validator — prevent infinite queue spin
         removeFromPendingSyncQueue(entry.id);
@@ -712,6 +705,7 @@ export async function flushPendingSyncQueue(): Promise<number> {
           handleFirestoreError(err, OperationType.WRITE, `downtime_entries/${entry.id}`);
         } catch {}
       }
+      if (isPermissionDeniedError(err)) break;
     }
   }
 
@@ -863,6 +857,7 @@ export function subscribeFirebaseEntries(
           if (snapshot.metadata.fromCache) {
             onSyncStatus('syncing', `Loaded local cache (${snapshot.size}); reaching Firestore server...`);
           } else {
+            clearFirestorePathBlockedByRules('downtime_entries');
             onSyncStatus('synced', `Live synced with Firestore server (${snapshot.size} records)`);
             flushPendingSyncQueue().catch(() => {});
           }
@@ -871,6 +866,9 @@ export function subscribeFirebaseEntries(
           listenerActive = false;
           unsubscribe = null;
           lastSyncError = error.message;
+          if (isPermissionDeniedError(error)) {
+            markFirestorePathBlockedByRules('downtime_entries');
+          }
           console.warn('Firestore subscription fallback:', error.message);
           onSyncStatus(
             error.code === 'permission-denied' ? 'error' : 'offline',

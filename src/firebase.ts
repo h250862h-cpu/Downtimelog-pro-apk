@@ -2,9 +2,13 @@ import { deleteApp, initializeApp } from 'firebase/app';
 import {
   createUserWithEmailAndPassword,
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
+  sendEmailVerification,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
 } from 'firebase/auth';
@@ -23,9 +27,11 @@ import {
   getFirestore,
   initializeFirestore,
   onSnapshot,
+  query,
   Query,
   QuerySnapshot,
   setDoc,
+  where,
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
@@ -63,38 +69,11 @@ export const googleProvider = new GoogleAuthProvider();
 
 export const PRIMARY_ADMIN_EMAIL = 'h250862h@hit.ac.zw';
 
-const FLOOR_DEVICE_EMAIL = '0714282338@plant.co.zw';
-const FLOOR_DEVICE_PASS = '0714282338';
-export const SYNC_SERVICE_EMAIL = 'plant-floor-sync@plant.co.zw';
-const SYNC_SERVICE_PASS = 'PlantFloorSync#2026!';
-
-async function signInOrProvisionAccount(
-  acctEmail: string,
-  acctPass: string,
-  displayName: string
-): Promise<boolean> {
-  try {
-    await signInWithEmailAndPassword(auth, acctEmail, acctPass);
-    return true;
-  } catch (signInErr: any) {
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, acctEmail, acctPass);
-      if (cred.user && displayName) {
-        await updateProfile(cred.user, { displayName }).catch(() => {});
-      }
-      return true;
-    } catch (createErr: any) {
-      console.warn(`Firebase auth provisioning note for ${acctEmail}:`, createErr?.message || signInErr?.message);
-      return !!auth.currentUser;
-    }
-  }
-}
-
 let pendingAuthPromise: Promise<boolean> | null = null;
 
 /**
  * Ensures Firebase Auth has finished hydrating its persisted IndexedDB session
- * and has a valid signed-in user token before issuing Firestore requests.
+ * and verifies an active authenticated Firebase user before issuing Firestore requests.
  */
 export async function ensureFirebaseAuth(): Promise<boolean> {
   try {
@@ -106,32 +85,7 @@ export async function ensureFirebaseAuth(): Promise<boolean> {
   pendingAuthPromise = (async () => {
     try {
       await auth.authStateReady().catch(() => {});
-      if (auth.currentUser) return true;
-
-      const session = getActiveSessionUser();
-      if (!session) return false;
-
-      if (session.email.toLowerCase() === FLOOR_DEVICE_EMAIL) {
-        return await signInOrProvisionAccount(
-          FLOOR_DEVICE_EMAIL,
-          FLOOR_DEVICE_PASS,
-          'Floor Operator (0714282338)'
-        );
-      }
-
-      if (session.email.toLowerCase() === PRIMARY_ADMIN_EMAIL.toLowerCase() || session.isAdmin) {
-        return await signInOrProvisionAccount(
-          SYNC_SERVICE_EMAIL,
-          SYNC_SERVICE_PASS,
-          session.displayName || 'PLANT ADMINISTRATOR'
-        );
-      }
-
-      return await signInOrProvisionAccount(
-        SYNC_SERVICE_EMAIL,
-        SYNC_SERVICE_PASS,
-        session.displayName || 'Plant Floor Terminal'
-      );
+      return Boolean(auth.currentUser);
     } finally {
       pendingAuthPromise = null;
     }
@@ -225,6 +179,12 @@ export function markFirestorePathBlockedByRules(firestorePath: string) {
   if (!collectionRoot) return;
   lastAuthUidForCooldown = auth.currentUser.uid;
   pathBlockedUntil.set(collectionRoot, Date.now() + PERMISSION_COOLDOWN_MS);
+}
+
+export function clearFirestorePathBlockedByRules(firestorePath: string) {
+  const collectionRoot = firestorePath.replace(/^\/+/, '').split('/')[0];
+  if (!collectionRoot) return;
+  pathBlockedUntil.delete(collectionRoot);
 }
 
 /**
@@ -433,8 +393,11 @@ export async function testConnection() {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     return;
   }
+  const authed = await ensureFirebaseAuth().catch(() => false);
+  if (!authed || !auth.currentUser) {
+    return;
+  }
   try {
-    await ensureFirebaseAuth().catch(() => false);
     await withTimeout(
       getDocFromServer(doc(db, 'test', 'connection')),
       3500,
@@ -448,6 +411,7 @@ export async function testConnection() {
       await new Promise((resolve) => setTimeout(resolve, 600));
       try {
         await reconnectFirestoreNetwork(true);
+        if (!auth.currentUser) return;
         await withTimeout(
           getDocFromServer(doc(db, 'test', 'connection')),
           3500,
@@ -538,72 +502,203 @@ export function isCreatedPlantAccountEmail(
   plantUsersList?: PlantUserAccount[]
 ): boolean {
   const normEmail = (email || '').trim().toLowerCase();
-  if (!normEmail || normEmail === SYNC_SERVICE_EMAIL.toLowerCase()) return false;
+  if (!normEmail) return false;
   if (normEmail === PRIMARY_ADMIN_EMAIL.toLowerCase()) return true;
 
   const users = plantUsersList || getLocalPlantUsers();
   const matched = users.find((u) => u.email.trim().toLowerCase() === normEmail);
-  if (normEmail === FLOOR_DEVICE_EMAIL) {
-    return !matched || (matched.status !== 'suspended' && !matched.revoked);
-  }
   return Boolean(matched && matched.status !== 'suspended' && !matched.revoked);
 }
 
-export async function loginWithGoogle() {
+export function normalizePlantLoginIdentifier(identifier: string): string {
+  const norm = identifier.trim().toLowerCase();
+  if (!norm) return '';
+  return norm.includes('@') ? norm : `${norm}@plant.co.zw`;
+}
+
+function cacheVerifiedUserLocally(account: PlantUserAccount) {
+  const existing = getLocalPlantUsers();
+  const next = [
+    account,
+    ...existing.filter(
+      (u) =>
+        u.uid !== account.uid &&
+        u.email.trim().toLowerCase() !== account.email.trim().toLowerCase()
+    ),
+  ];
+  saveLocalPlantUsers(ensureSystemMasterAdminInList(next));
+}
+
+async function ensurePrimaryAdminPlantUserDoc(
+  uid: string,
+  email: string,
+  emailVerified: boolean,
+  displayName?: string | null
+) {
+  const normEmail = email.trim().toLowerCase();
+  if (normEmail !== PRIMARY_ADMIN_EMAIL.toLowerCase() || !emailVerified || !uid) return;
   try {
+    const ref = doc(db, 'plant_users', uid);
+    const snap = await getDocFromServer(ref).catch(() => null);
+    if (!snap || !snap.exists()) {
+      const nowMs = Date.now();
+      const masterRecord: PlantUserAccount = {
+        uid,
+        email: PRIMARY_ADMIN_EMAIL,
+        displayName: (displayName || '').trim() || 'Plant Administrator',
+        role: 'Plant Administrator',
+        department: 'Management',
+        permissions: { ...FULL_ADMIN_PERMISSIONS },
+        createdBy: 'System Root',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        status: 'active',
+        revoked: false,
+        upd: nowMs,
+        sy: nowMs,
+      };
+      await setDocWithTimeout(ref, deepSanitizeForFirestore(masterRecord), { merge: true });
+    }
+  } catch {}
+}
+
+async function finalizeAuthenticatedPlantSession(
+  firebaseUser: import('firebase/auth').User,
+  normalizedHintEmail?: string
+) {
+  const email = (firebaseUser.email || normalizedHintEmail || '').trim().toLowerCase();
+  const isMaster = email === PRIMARY_ADMIN_EMAIL.toLowerCase();
+
+  if (isMaster && firebaseUser.emailVerified) {
+    await ensurePrimaryAdminPlantUserDoc(
+      firebaseUser.uid,
+      email,
+      true,
+      firebaseUser.displayName
+    );
+  } else if (isMaster && !firebaseUser.emailVerified) {
+    // Remind/send verification link once if Primary Admin signed in via Email/Password without verification
+    const ownSnap = await getDocFromServer(doc(db, 'plant_users', firebaseUser.uid)).catch(() => null);
+    if (!ownSnap || !ownSnap.exists()) {
+      try {
+        const sentKey = `dt_admin_verify_sent_${firebaseUser.uid}`;
+        if (!sessionStorage.getItem(sentKey)) {
+          sessionStorage.setItem(sentKey, '1');
+          await sendEmailVerification(firebaseUser).catch(() => {});
+        }
+      } catch {}
+    }
+  }
+
+  const latestUsers = await fetchPlantUsersDirectory();
+  const matched = latestUsers.find((u) => u.email.trim().toLowerCase() === email);
+
+  if (!isMaster && !matched) {
+    setActiveSessionUser(null);
+    await signOut(auth).catch(() => {});
+    throw new Error(
+      'Access Denied: Only accounts created by the Plant Administrator can sign in to this system.'
+    );
+  }
+
+  if (!isMaster && (matched?.status === 'suspended' || matched?.revoked)) {
+    setActiveSessionUser(null);
+    await signOut(auth).catch(() => {});
+    throw new Error('This account has been suspended or revoked by the Plant Administrator.');
+  }
+
+  const resolvedDisplayName =
+    matched?.displayName ||
+    firebaseUser.displayName ||
+    (isMaster ? 'PLANT ADMINISTRATOR' : email.split('@')[0].toUpperCase());
+  const resolvedRole: PlantRole = isMaster ? 'Plant Administrator' : matched!.role;
+  resetFirestorePathAccessCache();
+  const session: PlantSessionUser = {
+    uid: firebaseUser.uid,
+    email,
+    displayName: resolvedDisplayName,
+    role: resolvedRole,
+    isAdmin:
+      isMaster ||
+      resolvedRole === 'Plant Administrator' ||
+      resolvedRole === 'Production HOD',
+    permissions: resolveUserPermissions(email, resolvedRole, latestUsers, resolvedDisplayName),
+  };
+  setActiveSessionUser(session);
+  return session;
+}
+
+/**
+ * Completes any pending Google redirect login (used on Android/iOS standalone PWA / APK).
+ */
+export async function completeGoogleRedirectSignIn(): Promise<PlantSessionUser | null> {
+  try {
+    const result = await getRedirectResult(auth);
+    if (result?.user) {
+      return await finalizeAuthenticatedPlantSession(result.user);
+    }
+  } catch (err) {
+    console.warn('Google redirect completion notice:', err);
+  }
+  return null;
+}
+
+export async function loginWithGoogle() {
+  const isStandaloneApk =
+    typeof window !== 'undefined' &&
+    window.self === window.top &&
+    (window.matchMedia?.('(display-mode: standalone)').matches ||
+      (window.navigator as { standalone?: boolean }).standalone === true);
+
+  try {
+    if (isStandaloneApk) {
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+
     const cred = await signInWithPopup(auth, googleProvider);
     if (cred.user) {
-      const latestUsers = await fetchPlantUsersDirectory();
-      const email = (cred.user.email || '').trim().toLowerCase();
-      const isMaster = email === PRIMARY_ADMIN_EMAIL.toLowerCase();
-      const matched = latestUsers.find((u) => u.email.trim().toLowerCase() === email);
-
-      if (!isMaster && !matched) {
-        setActiveSessionUser(null);
-        await signOut(auth).catch(() => {});
-        throw new Error(
-          'Access Denied: Only accounts created by the Plant Administrator can sign in to this system.'
-        );
-      }
-
-      if (!isMaster && (matched?.status === 'suspended' || matched?.revoked)) {
-        setActiveSessionUser(null);
-        await signOut(auth).catch(() => {});
-        throw new Error('This account has been suspended or revoked by the Plant Administrator.');
-      }
-
-      const resolvedDisplayName =
-        matched?.displayName || cred.user.displayName || email.split('@')[0].toUpperCase();
-      const role: PlantRole = isMaster ? 'Plant Administrator' : matched!.role;
-      resetFirestorePathAccessCache();
-      setActiveSessionUser({
-        uid: cred.user.uid,
-        email,
-        displayName: resolvedDisplayName,
-        role,
-        isAdmin: isMaster || role === 'Plant Administrator' || role === 'Production HOD',
-        permissions: resolveUserPermissions(email, role, latestUsers, resolvedDisplayName),
-      });
+      await finalizeAuthenticatedPlantSession(cred.user);
     }
     return cred;
   } catch (err: any) {
     const code = err?.code || '';
     const msg = err instanceof Error ? err.message : String(err);
+
+    if (
+      typeof window !== 'undefined' &&
+      window.self === window.top &&
+      (code === 'auth/popup-blocked' ||
+        code === 'auth/operation-not-supported-in-this-environment' ||
+        msg.includes('popup-blocked'))
+    ) {
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+
     console.warn('Google Sign-In notice:', code || msg);
     if (code === 'auth/unauthorized-domain' || msg.includes('auth/unauthorized-domain')) {
       const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
-      throw new Error(
-        `AUTH_UNAUTHORIZED_DOMAIN:${host}`
-      );
+      throw new Error(`AUTH_UNAUTHORIZED_DOMAIN:${host}`);
     }
     if (code === 'auth/popup-closed-by-user' || msg.includes('popup-closed-by-user')) {
       throw new Error('Google Sign-In popup was closed before completing.');
     }
     if (code === 'auth/popup-blocked' || msg.includes('popup-blocked')) {
-      throw new Error('Google Sign-In popup was blocked by browser. Please allow popups or sign in with Email/Password below.');
+      throw new Error(
+        'Google Sign-In popup was blocked by browser. Allow popups or sign in with your Email/Password below.'
+      );
     }
     throw err;
   }
+}
+
+export async function sendUserPasswordReset(identifier: string): Promise<string> {
+  const normEmail = normalizePlantLoginIdentifier(identifier);
+  if (!normEmail || !normEmail.includes('@')) {
+    throw new Error('Enter a valid work email or login ID first to reset your password.');
+  }
+  await sendPasswordResetEmail(auth, normEmail);
+  return normEmail;
 }
 
 export interface PlantSessionUser {
@@ -617,7 +712,7 @@ export interface PlantSessionUser {
 
 export function resolveUserPermissions(
   email?: string | null,
-  fallbackRole?: PlantRole | string,
+  _fallbackRole?: PlantRole | string,
   plantUsersList?: PlantUserAccount[],
   _displayName?: string | null
 ): UserPermissions {
@@ -637,10 +732,6 @@ export function resolveUserPermissions(
       return { ...ZERO_PERMISSIONS, ...matched.permissions };
     }
     return getDefaultPermissionsForRole(matched.role);
-  }
-
-  if (normEmail === FLOOR_DEVICE_EMAIL && fallbackRole) {
-    return getDefaultPermissionsForRole(fallbackRole as PlantRole);
   }
 
   return { ...ZERO_PERMISSIONS };
@@ -665,132 +756,18 @@ export function setActiveSessionUser(user: PlantSessionUser | null) {
 }
 
 export async function loginWithEmail(identifier: string, pass: string) {
-  let normEmail = identifier.trim().toLowerCase();
+  const normEmail = normalizePlantLoginIdentifier(identifier);
   const trimmedPass = pass.trim();
 
-  // If phone number or username entered without domain
-  if (!normEmail.includes('@')) {
-    normEmail = `${normEmail}@plant.co.zw`;
-  }
-
-  // Master Admin check for plant admin h250862h@hit.ac.zw with password h250862h@!
-  const isMasterAdminCred =
-    normEmail === 'h250862h@hit.ac.zw' && trimmedPass === 'h250862h@!';
-
-  // Shop floor shared device terminal login for Samsung phone 0714282338
-  const isFloorDevice0714282338 =
-    (normEmail === FLOOR_DEVICE_EMAIL || identifier.trim() === '0714282338') &&
-    trimmedPass === FLOOR_DEVICE_PASS;
-
-  if (isFloorDevice0714282338) {
-    const authed = await signInOrProvisionAccount(
-      FLOOR_DEVICE_EMAIL,
-      FLOOR_DEVICE_PASS,
-      'Floor Operator (0714282338)'
-    );
-    await fetchPlantUsersDirectory();
-    const localMatch = getLocalPlantUsers().find(
-      (u) => u.email.toLowerCase() === FLOOR_DEVICE_EMAIL.toLowerCase()
-    );
-    if (localMatch?.status === 'suspended') {
-      setActiveSessionUser(null);
-      await signOut(auth).catch(() => {});
-      throw new Error('This terminal account has been suspended by the Plant Administrator.');
-    }
-    const floorRole = localMatch?.role || 'Machine Operator';
-    resetFirestorePathAccessCache();
-    const sessionUser: PlantSessionUser = {
-      uid: authed && auth.currentUser ? auth.currentUser.uid : 'device-0714282338',
-      email: FLOOR_DEVICE_EMAIL,
-      displayName: localMatch?.displayName || 'Floor Operator (0714282338)',
-      role: floorRole,
-      isAdmin: floorRole === 'Plant Administrator' || floorRole === 'Production HOD',
-      permissions: resolveUserPermissions(FLOOR_DEVICE_EMAIL, floorRole),
-    };
-    setActiveSessionUser(sessionUser);
-    return { user: sessionUser };
+  if (!normEmail || !trimmedPass) {
+    throw new Error('Email / Login ID and password are required.');
   }
 
   try {
     const cred = await signInWithEmailAndPassword(auth, normEmail, trimmedPass);
-    const latestUsers = await fetchPlantUsersDirectory();
-    const localMatch = latestUsers.find((s) => s.email.trim().toLowerCase() === normEmail);
-    const isMasterEmail = normEmail === PRIMARY_ADMIN_EMAIL.toLowerCase();
-
-    if (!isMasterAdminCred && !isMasterEmail && !localMatch) {
-      setActiveSessionUser(null);
-      await signOut(auth).catch(() => {});
-      throw new Error(
-        'Access Denied: Only accounts created by the Plant Administrator can sign in to this system.'
-      );
-    }
-
-    if (!isMasterAdminCred && !isMasterEmail && (localMatch?.status === 'suspended' || localMatch?.revoked)) {
-      setActiveSessionUser(null);
-      await signOut(auth).catch(() => {});
-      throw new Error('This account has been suspended or revoked by the Plant Administrator.');
-    }
-
-    const resolvedDisplayName =
-      localMatch?.displayName ||
-      cred.user.displayName ||
-      (isMasterAdminCred || isMasterEmail ? 'PLANT ADMINISTRATOR' : normEmail.split('@')[0].toUpperCase());
-    const resolvedRole: PlantRole =
-      isMasterAdminCred || isMasterEmail ? 'Plant Administrator' : localMatch!.role;
-    resetFirestorePathAccessCache();
-    setActiveSessionUser({
-      uid: cred.user.uid,
-      email: cred.user.email || normEmail,
-      displayName: resolvedDisplayName,
-      role: resolvedRole,
-      isAdmin:
-        isMasterAdminCred ||
-        isMasterEmail ||
-        resolvedRole === 'Plant Administrator' ||
-        resolvedRole === 'Production HOD',
-      permissions: resolveUserPermissions(normEmail, resolvedRole, latestUsers, resolvedDisplayName),
-    });
+    await finalizeAuthenticatedPlantSession(cred.user, normEmail);
     return cred;
   } catch (err: any) {
-    // Only exact Master Admin credentials may auto-provision or recover on initial deployment
-    if (isMasterAdminCred) {
-      try {
-        const newCred = await createUserWithEmailAndPassword(auth, normEmail, trimmedPass);
-        if (newCred.user) {
-          await updateProfile(newCred.user, { displayName: 'PLANT ADMINISTRATOR' });
-        }
-        resetFirestorePathAccessCache();
-        setActiveSessionUser({
-          uid: newCred.user.uid,
-          email: normEmail,
-          displayName: 'PLANT ADMINISTRATOR',
-          role: 'Plant Administrator',
-          isAdmin: true,
-          permissions: { ...FULL_ADMIN_PERMISSIONS },
-        });
-        return newCred;
-      } catch {
-        const authed = await signInOrProvisionAccount(
-          SYNC_SERVICE_EMAIL,
-          SYNC_SERVICE_PASS,
-          'PLANT ADMINISTRATOR'
-        );
-        if (authed && auth.currentUser) {
-          resetFirestorePathAccessCache();
-          const sessionUser: PlantSessionUser = {
-            uid: 'admin-master',
-            email: normEmail,
-            displayName: 'PLANT ADMINISTRATOR',
-            role: 'Plant Administrator',
-            isAdmin: true,
-            permissions: { ...FULL_ADMIN_PERMISSIONS },
-          };
-          setActiveSessionUser(sessionUser);
-          return { user: sessionUser };
-        }
-      }
-    }
-
     console.warn('Email Sign-In notice:', err?.code || err?.message || err);
     throw err;
   }
@@ -799,18 +776,11 @@ export async function loginWithEmail(identifier: string, pass: string) {
 export async function verifyAdminCredentialsOnly(
   identifier: string,
   pass: string
-): Promise<{ email: string }> {
-  let normEmail = identifier.trim().toLowerCase();
+): Promise<{ email: string; displayName: string; role: PlantRole }> {
+  const normEmail = normalizePlantLoginIdentifier(identifier);
   const trimmedPass = pass.trim();
-  if (normEmail && !normEmail.includes('@')) {
-    normEmail = `${normEmail}@plant.co.zw`;
-  }
   if (!normEmail || !trimmedPass) {
-    throw new Error('Administrator email and password are required.');
-  }
-
-  if (normEmail === PRIMARY_ADMIN_EMAIL.toLowerCase() && trimmedPass === 'h250862h@!') {
-    return { email: normEmail };
+    throw new Error('Administrator email / ID and password are required.');
   }
 
   const verifyAppName = `AdminVerify_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
@@ -818,20 +788,31 @@ export async function verifyAdminCredentialsOnly(
   const verifyAuth = getAuth(verifyApp);
 
   try {
-    await signInWithEmailAndPassword(verifyAuth, normEmail, trimmedPass);
+    const cred = await signInWithEmailAndPassword(verifyAuth, normEmail, trimmedPass);
     const verifyDb = getFirestore(verifyApp, dbId);
-    const snap = await getDocsFromServer(collection(verifyDb, 'plant_users')).catch(() => null);
-    const remoteUsers: PlantUserAccount[] = [];
-    if (snap) {
-      snap.forEach((d) => {
-        const u = d.data() as PlantUserAccount;
-        remoteUsers.push({ ...u, uid: u.uid || d.id });
-      });
+    let matched: PlantUserAccount | undefined;
+
+    try {
+      const ownDoc = await getDocFromServer(doc(verifyDb, 'plant_users', cred.user.uid));
+      if (ownDoc.exists()) {
+        matched = { ...(ownDoc.data() as PlantUserAccount), uid: ownDoc.id };
+      }
+    } catch {}
+
+    if (!matched) {
+      try {
+        const q = query(collection(verifyDb, 'plant_users'), where('email', '==', normEmail));
+        const qSnap = await getDocsFromServer(q);
+        qSnap.forEach((d) => {
+          const u = d.data() as PlantUserAccount;
+          matched = { ...u, uid: u.uid || d.id };
+        });
+      } catch {}
     }
-    const directory = remoteUsers.length > 0 ? remoteUsers : getLocalPlantUsers();
-    const matched = directory.find((u) => u.email.trim().toLowerCase() === normEmail);
+
+    const isPrimary = normEmail === PRIMARY_ADMIN_EMAIL.toLowerCase();
     const isAdminOrHod =
-      normEmail === PRIMARY_ADMIN_EMAIL.toLowerCase() ||
+      isPrimary ||
       Boolean(
         matched &&
           matched.status !== 'suspended' &&
@@ -845,7 +826,25 @@ export async function verifyAdminCredentialsOnly(
       );
     }
 
-    return { email: normEmail };
+    const resolvedRole: PlantRole = isPrimary
+      ? 'Plant Administrator'
+      : matched!.role;
+    const resolvedDisplayName =
+      matched?.displayName || cred.user.displayName || 'Plant Administrator';
+
+    if (matched) {
+      cacheVerifiedUserLocally({
+        ...matched,
+        uid: matched.uid || cred.user.uid,
+        email: normEmail,
+        displayName: resolvedDisplayName,
+        role: resolvedRole,
+        status: 'active',
+        revoked: false,
+      });
+    }
+
+    return { email: normEmail, displayName: resolvedDisplayName, role: resolvedRole };
   } finally {
     await signOut(verifyAuth).catch(() => {});
     await deleteApp(verifyApp).catch(() => {});
@@ -879,17 +878,6 @@ export function getLocalPlantUsers(): PlantUserAccount[] {
       department: 'Management',
       permissions: { ...FULL_ADMIN_PERMISSIONS },
       createdBy: 'System Root',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      status: 'active',
-    },
-    {
-      uid: 'device-0714282338',
-      email: '0714282338@plant.co.zw',
-      displayName: 'Floor Operator (0714282338)',
-      role: 'Machine Operator',
-      department: 'Extrusion Floor',
-      permissions: getDefaultPermissionsForRole('Machine Operator'),
-      createdBy: 'System Provision',
       createdAt: '2026-01-01T00:00:00.000Z',
       status: 'active',
     },
@@ -977,7 +965,7 @@ function queueLocalPlantUsersMissingFromRemote(
   const remoteMap = new Map(remote.map((u) => [u.uid, u]));
   let mutated = false;
   const next = merged.map((u) => {
-    if (!u?.uid || u.uid === 'admin-master' || u.uid === 'device-0714282338') return u;
+    if (!u?.uid || u.uid === 'admin-master') return u;
     const r = remoteMap.get(u.uid);
     const needsUpload = !r || (u.upd || 0) > (r.upd || 0);
     if (needsUpload) {
@@ -1035,8 +1023,11 @@ function mergePlantUsers(local: PlantUserAccount[], remote: PlantUserAccount[]):
 
 export async function flushPendingPlantUsers(): Promise<number> {
   repairPendingPlantUsersQueue();
-  await ensureFirebaseAuth().catch(() => false);
+  const authed = await ensureFirebaseAuth().catch(() => false);
+  if (!authed || !auth.currentUser) return 0;
   if (isFirestorePathBlockedByRules('plant_users')) return 0;
+  const currentEmail = (auth.currentUser.email || '').trim().toLowerCase();
+  if (!isAuthorizedAdminEmail(currentEmail)) return 0;
 
   const local = getLocalPlantUsers();
   const pendingSet = new Set<string>(getPendingPlantUsersQueue());
@@ -1044,7 +1035,6 @@ export async function flushPendingPlantUsers(): Promise<number> {
     if (
       u?.uid &&
       u.uid !== 'admin-master' &&
-      u.uid !== 'device-0714282338' &&
       (!u.sy || (u.upd && u.upd > u.sy))
     ) {
       pendingSet.add(u.uid);
@@ -1079,29 +1069,90 @@ export async function flushPendingPlantUsers(): Promise<number> {
   return flushed;
 }
 
+function isCurrentSignedInUserAdminHint(): boolean {
+  const email = (auth.currentUser?.email || getActiveSessionUser()?.email || '').trim().toLowerCase();
+  if (!email) return false;
+  if (email === PRIMARY_ADMIN_EMAIL.toLowerCase()) return true;
+  const cached = getLocalPlantUsers().find((u) => u.email.trim().toLowerCase() === email);
+  return Boolean(
+    cached &&
+      cached.status !== 'suspended' &&
+      !cached.revoked &&
+      (cached.role === 'Plant Administrator' || cached.role === 'Production HOD')
+  );
+}
+
 /**
- * Fetch plant_users directory directly from Firestore and cache locally
+ * Fetch plant_users directory directly from Firestore (Admins get full roster; non-admins read only their own clearance doc to isolate PII).
  */
 export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
   try {
-    await ensureFirebaseAuth().catch(() => false);
-    const snap = await getCollectionDocsServerFirst(collection(db, 'plant_users'));
-    const remote: PlantUserAccount[] = [];
-    snap.forEach((d) => {
-      const rawUser = d.data() as PlantUserAccount;
-      remote.push({
-        ...rawUser,
-        uid: rawUser.uid || d.id,
-        sy: rawUser.sy || rawUser.upd || 1,
+    const authed = await ensureFirebaseAuth().catch(() => false);
+    if (!authed || !auth.currentUser) return getLocalPlantUsers();
+
+    const currentUid = auth.currentUser.uid;
+    const currentEmail = (auth.currentUser.email || '').trim().toLowerCase();
+
+    // First verify own clearance document so we know whether this user is Admin/HOD
+    let ownAccount: PlantUserAccount | null = null;
+    try {
+      const ownSnap = await getDocServerFirst(doc(db, 'plant_users', currentUid));
+      if (ownSnap.exists()) {
+        const raw = ownSnap.data() as PlantUserAccount;
+        ownAccount = { ...raw, uid: raw.uid || ownSnap.id, sy: raw.sy || raw.upd || 1 };
+      } else if (currentEmail) {
+        const q = query(collection(db, 'plant_users'), where('email', '==', currentEmail));
+        const qSnap = await getCollectionDocsServerFirst(q);
+        qSnap.forEach((d) => {
+          const raw = d.data() as PlantUserAccount;
+          ownAccount = { ...raw, uid: raw.uid || d.id, sy: raw.sy || raw.upd || 1 };
+        });
+      }
+    } catch {}
+
+    const isAdminUser =
+      currentEmail === PRIMARY_ADMIN_EMAIL.toLowerCase() ||
+      Boolean(
+        ownAccount &&
+          ownAccount.status !== 'suspended' &&
+          !ownAccount.revoked &&
+          (ownAccount.role === 'Plant Administrator' || ownAccount.role === 'Production HOD')
+      );
+
+    if (currentEmail === PRIMARY_ADMIN_EMAIL.toLowerCase() && auth.currentUser.emailVerified && !ownAccount) {
+      await ensurePrimaryAdminPlantUserDoc(
+        currentUid,
+        currentEmail,
+        true,
+        auth.currentUser.displayName
+      );
+    }
+
+    if (isAdminUser) {
+      const snap = await getCollectionDocsServerFirst(collection(db, 'plant_users'));
+      const remote: PlantUserAccount[] = [];
+      snap.forEach((d) => {
+        const rawUser = d.data() as PlantUserAccount;
+        remote.push({
+          ...rawUser,
+          uid: rawUser.uid || d.id,
+          sy: rawUser.sy || rawUser.upd || 1,
+        });
       });
-    });
-    const local = getLocalPlantUsers();
-    const mergedRaw = mergePlantUsers(local, remote);
-    clearSyncedPlantUsersFromQueue(local, remote);
-    const merged = queueLocalPlantUsersMissingFromRemote(mergedRaw, remote);
-    saveLocalPlantUsers(merged);
+      const local = getLocalPlantUsers();
+      const mergedRaw = mergePlantUsers(local, remote);
+      clearSyncedPlantUsersFromQueue(local, remote);
+      const merged = queueLocalPlantUsersMissingFromRemote(mergedRaw, remote);
+      saveLocalPlantUsers(merged);
+      markPlantUsersServerLoaded();
+      return merged;
+    }
+
+    // Non-admins only retain their own verified record (prevents cross-user PII caching)
+    const scopedList = ensureSystemMasterAdminInList(ownAccount ? [ownAccount] : []);
+    saveLocalPlantUsers(scopedList);
     markPlantUsersServerLoaded();
-    return merged;
+    return scopedList;
   } catch (e) {
     console.warn('fetchPlantUsersDirectory note:', e);
   }
@@ -1109,17 +1160,14 @@ export async function fetchPlantUsersDirectory(): Promise<PlantUserAccount[]> {
 }
 
 function isAuthorizedAdminEmail(email: string): boolean {
-  const norm = email.trim().toLowerCase();
+  const norm = normalizePlantLoginIdentifier(email);
+  if (!norm) return false;
   if (norm === PRIMARY_ADMIN_EMAIL.toLowerCase()) return true;
-  try {
-    const raw = localStorage.getItem('dtadmins');
-    const list: string[] = raw ? JSON.parse(raw) : [];
-    if (list.map((e) => e.toLowerCase()).includes(norm)) return true;
-  } catch {}
   const staff = getLocalPlantUsers().find((u) => u.email.trim().toLowerCase() === norm);
   if (
     staff &&
     staff.status !== 'suspended' &&
+    !staff.revoked &&
     (staff.role === 'Plant Administrator' || staff.role === 'Production HOD')
   ) {
     return true;
@@ -1128,7 +1176,7 @@ function isAuthorizedAdminEmail(email: string): boolean {
 }
 
 /**
- * Real-time subscription to plant_users collection (auto-retry + safety reconcile + online wake)
+ * Real-time subscription to plant_users clearance (Admins listen to roster; non-admins listen strictly to their own doc)
  */
 export function subscribePlantUsers(
   onUpdate: (users: PlantUserAccount[]) => void
@@ -1140,6 +1188,7 @@ export function subscribePlantUsers(
   let cancelled = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let activeMode: 'all' | 'self' | null = null;
 
   const scheduleRetry = () => {
     if (cancelled || retryTimer) return;
@@ -1156,50 +1205,134 @@ export function subscribePlantUsers(
   });
 
   const start = async () => {
-    await ensureFirebaseAuth().catch(() => false);
-    if (cancelled) return;
+    const authed = await ensureFirebaseAuth().catch(() => false);
+    if (cancelled || !authed || !auth.currentUser) return;
     try {
+      let useAdminRoster = isCurrentSignedInUserAdminHint();
+      if (!useAdminRoster) {
+        const ownUid = auth.currentUser.uid;
+        try {
+          const ownCheck = await getDocServerFirst(doc(db, 'plant_users', ownUid));
+          if (ownCheck.exists()) {
+            const rawOwn = ownCheck.data() as PlantUserAccount;
+            const ownUser: PlantUserAccount = {
+              ...rawOwn,
+              uid: rawOwn.uid || ownCheck.id,
+              sy: rawOwn.sy || rawOwn.upd || 1,
+            };
+            cacheVerifiedUserLocally(ownUser);
+            if (
+              ownUser.status !== 'suspended' &&
+              !ownUser.revoked &&
+              (ownUser.role === 'Plant Administrator' || ownUser.role === 'Production HOD')
+            ) {
+              useAdminRoster = true;
+            }
+          }
+        } catch {}
+      }
+      if (cancelled || !auth.currentUser) return;
+
+      const targetMode: 'all' | 'self' = useAdminRoster ? 'all' : 'self';
+      if (unsub && activeMode === targetMode) return;
       if (unsub) {
         unsub();
         unsub = null;
+        activeMode = null;
       }
-      const colRef = collection(db, 'plant_users');
-      unsub = onSnapshot(
-        colRef,
-        { includeMetadataChanges: true },
-        (snapshot) => {
-          const remote: PlantUserAccount[] = [];
-          snapshot.forEach((d) => {
-            const rawUser = d.data() as PlantUserAccount;
-            remote.push({
-              ...rawUser,
-              uid: rawUser.uid || d.id,
-              sy: rawUser.sy || rawUser.upd || 1,
-            });
-          });
-          const local = getLocalPlantUsers();
-          const mergedRaw = mergePlantUsers(local, remote);
-          const merged = !snapshot.metadata.fromCache
-            ? queueLocalPlantUsersMissingFromRemote(mergedRaw, remote)
-            : mergedRaw;
-          clearSyncedPlantUsersFromQueue(local, remote);
-          saveLocalPlantUsers(merged);
-          onUpdate(merged);
 
-          if (!snapshot.metadata.fromCache) {
-            markPlantUsersServerLoaded();
-            flushPendingPlantUsers().catch(() => {});
+      if (targetMode === 'all') {
+        activeMode = 'all';
+        const colRef = collection(db, 'plant_users');
+        unsub = onSnapshot(
+          colRef,
+          { includeMetadataChanges: true },
+          (snapshot) => {
+            clearFirestorePathBlockedByRules('plant_users');
+            const remote: PlantUserAccount[] = [];
+            snapshot.forEach((d) => {
+              const rawUser = d.data() as PlantUserAccount;
+              remote.push({
+                ...rawUser,
+                uid: rawUser.uid || d.id,
+                sy: rawUser.sy || rawUser.upd || 1,
+              });
+            });
+            const local = getLocalPlantUsers();
+            const mergedRaw = mergePlantUsers(local, remote);
+            const merged = !snapshot.metadata.fromCache
+              ? queueLocalPlantUsersMissingFromRemote(mergedRaw, remote)
+              : mergedRaw;
+            clearSyncedPlantUsersFromQueue(local, remote);
+            saveLocalPlantUsers(merged);
+            onUpdate(merged);
+
+            if (!snapshot.metadata.fromCache) {
+              markPlantUsersServerLoaded();
+              flushPendingPlantUsers().catch(() => {});
+            }
+          },
+          (err) => {
+            activeMode = null;
+            if (isPermissionDeniedError(err)) {
+              markFirestorePathBlockedByRules('plant_users');
+            }
+            console.warn('plant_users Firestore subscription fallback:', err.message);
+            scheduleRetry();
           }
-        },
-        (err) => {
-          if (isPermissionDeniedError(err)) {
-            markFirestorePathBlockedByRules('plant_users');
+        );
+      } else {
+        activeMode = 'self';
+        const currentUid = auth.currentUser.uid;
+        unsub = onSnapshot(
+          doc(db, 'plant_users', currentUid),
+          { includeMetadataChanges: true },
+          (docSnap) => {
+            clearFirestorePathBlockedByRules('plant_users');
+            const remote: PlantUserAccount[] = [];
+            let promotedToAdmin = false;
+            if (docSnap.exists()) {
+              const rawUser = docSnap.data() as PlantUserAccount;
+              const ownAccount: PlantUserAccount = {
+                ...rawUser,
+                uid: rawUser.uid || docSnap.id,
+                sy: rawUser.sy || rawUser.upd || 1,
+              };
+              remote.push(ownAccount);
+              if (
+                ownAccount.status !== 'suspended' &&
+                !ownAccount.revoked &&
+                (ownAccount.role === 'Plant Administrator' || ownAccount.role === 'Production HOD')
+              ) {
+                promotedToAdmin = true;
+                cacheVerifiedUserLocally(ownAccount);
+              }
+            }
+            if (promotedToAdmin) {
+              if (!docSnap.metadata.fromCache) {
+                markPlantUsersServerLoaded();
+              }
+              start();
+              return;
+            }
+            const scoped = ensureSystemMasterAdminInList(remote);
+            saveLocalPlantUsers(scoped);
+            onUpdate(scoped);
+            if (!docSnap.metadata.fromCache) {
+              markPlantUsersServerLoaded();
+            }
+          },
+          (err) => {
+            activeMode = null;
+            if (isPermissionDeniedError(err)) {
+              markFirestorePathBlockedByRules('plant_users');
+            }
+            scheduleRetry();
           }
-          console.warn('plant_users Firestore subscription fallback:', err.message);
-          scheduleRetry();
-        }
-      );
+        );
+      }
     } catch {
+      activeMode = null;
       scheduleRetry();
     }
   };
@@ -1255,7 +1388,8 @@ export async function adminCreateOperatorAccount(
   displayName: string,
   role: PlantRole = 'Machine Operator',
   department: string = 'Production',
-  permissions?: UserPermissions
+  permissions?: UserPermissions,
+  adminPassword?: string
 ): Promise<PlantUserAccount> {
   if (!isAuthorizedAdminEmail(adminAuthorizerEmail)) {
     throw new Error(
@@ -1323,16 +1457,30 @@ export async function adminCreateOperatorAccount(
     try {
       const syncTs = Math.max(Date.now(), nowMs);
       const syncedPayload = deepSanitizeForFirestore({ ...newAccount, sy: syncTs });
-      const targetDb = auth.currentUser ? db : getFirestore(secondaryApp, dbId);
-      const userDocRef = doc(targetDb, 'plant_users', createdUid);
-      await setDocWithTimeout(userDocRef, syncedPayload, {
-        merge: true,
-      });
-      removePendingPlantUser(createdUid);
-      saveLocalPlantUsers(
-        getLocalPlantUsers().map((u) => (u.uid === createdUid ? { ...u, sy: syncTs } : u))
-      );
-      notifyCloudSyncBus('plant_users');
+
+      if (auth.currentUser) {
+        const userDocRef = doc(db, 'plant_users', createdUid);
+        await setDocWithTimeout(userDocRef, syncedPayload, { merge: true });
+      } else if (adminPassword) {
+        await signOut(secondaryAuth).catch(() => {});
+        await signInWithEmailAndPassword(
+          secondaryAuth,
+          adminAuthorizerEmail.trim().toLowerCase(),
+          adminPassword.trim()
+        );
+        const adminSecondaryDb = getFirestore(secondaryApp, dbId);
+        await setDocWithTimeout(doc(adminSecondaryDb, 'plant_users', createdUid), syncedPayload, {
+          merge: true,
+        });
+      }
+
+      if (auth.currentUser || adminPassword) {
+        removePendingPlantUser(createdUid);
+        saveLocalPlantUsers(
+          getLocalPlantUsers().map((u) => (u.uid === createdUid ? { ...u, sy: syncTs } : u))
+        );
+        notifyCloudSyncBus('plant_users');
+      }
     } catch (dbErr) {
       console.warn('Could not write to plant_users Firestore collection; queued in outbox:', dbErr);
     }

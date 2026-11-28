@@ -24,9 +24,9 @@ import {
   loginWithEmail,
   loginWithGoogle,
   PRIMARY_ADMIN_EMAIL,
+  sendUserPasswordReset,
   verifyAdminCredentialsOnly,
 } from '../firebase';
-import { isUserAdmin } from '../services/downtimeStore';
 import { PlantRole } from '../types';
 import { LgplastLogo } from './LgplastLogo';
 import polymerWatermarkImg from '../assets/images/polymer_structure_watermark_1795107461403.jpg';
@@ -67,6 +67,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
   } | null>(null);
 
   const [errorMsg, setErrorMsg] = useState('');
+  const [infoMsg, setInfoMsg] = useState('');
   const [unauthorizedDomain, setUnauthorizedDomain] = useState<string | null>(null);
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -75,6 +76,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    setInfoMsg('');
     setLoading(true);
 
     try {
@@ -93,30 +95,8 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
         msg.includes('auth/invalid-credential') ||
         msg.includes('auth/wrong-password')
       ) {
-        setErrorMsg('Invalid work email or password. Please verify your credentials or ask Plant Administration.');
-      } else {
-        setErrorMsg(msg);
-      }
-    }
-  };
-
-  // Google Sign In Handler
-  const handleGoogleSignIn = async () => {
-    setErrorMsg('');
-    setUnauthorizedDomain(null);
-    setLoading(true);
-    try {
-      await loginWithGoogle();
-      setLoading(false);
-      onLoginSuccess();
-    } catch (err: unknown) {
-      setLoading(false);
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.startsWith('AUTH_UNAUTHORIZED_DOMAIN:')) {
-        const domain = msg.replace('AUTH_UNAUTHORIZED_DOMAIN:', '');
-        setUnauthorizedDomain(domain);
         setErrorMsg(
-          `Google Sign-In requires adding "${domain}" to Firebase Authorized Domains, OR sign in below using Email / Phone Number (works immediately).`
+          'Invalid work email or password. If your account uses Google Sign-In, tap "Continue with Google" above or click "Forgot / Reset Password" below.'
         );
       } else {
         setErrorMsg(msg);
@@ -124,19 +104,59 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  // 2. Admin Verification Handler (Blocks non-admins without mutating primary auth session)
+  const handlePasswordReset = async () => {
+    setErrorMsg('');
+    setInfoMsg('');
+    if (!email.trim()) {
+      setErrorMsg('Type your work email or login ID first, then tap "Forgot / Reset Password".');
+      return;
+    }
+    setLoading(true);
+    try {
+      const sentTo = await sendUserPasswordReset(email);
+      setInfoMsg(
+        `Password reset link sent to ${sentTo}. Check your email inbox (or spam) to set a new password.`
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMsg(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Google Sign In Handler
+  const handleGoogleSignIn = async () => {
+    setErrorMsg('');
+    setInfoMsg('');
+    setUnauthorizedDomain(null);
+    setLoading(true);
+    try {
+      const res = await loginWithGoogle();
+      setLoading(false);
+      if (res) {
+        onLoginSuccess();
+      }
+    } catch (err: unknown) {
+      setLoading(false);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('AUTH_UNAUTHORIZED_DOMAIN:')) {
+        const domain = msg.replace('AUTH_UNAUTHORIZED_DOMAIN:', '');
+        setUnauthorizedDomain(domain);
+        setErrorMsg(
+          `Google Sign-In requires adding "${domain}" to Firebase Authorized Domains, OR sign in below using Email / Password (works immediately).`
+        );
+      } else {
+        setErrorMsg(msg);
+      }
+    }
+  };
+
+  // 2. Admin Verification Handler (Verifies directly via Firebase Auth + live Firestore plant_users)
   const handleAdminVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
-
-    const normAdmin = adminEmail.trim().toLowerCase();
-    if (!isUserAdmin(normAdmin)) {
-      setErrorMsg(
-        `Access Denied: ${adminEmail} is not an authorized plant administrator. Only ${PRIMARY_ADMIN_EMAIL} or active Admins can register new staff.`
-      );
-      return;
-    }
-
+    setInfoMsg('');
     setLoading(true);
     try {
       const verified = await verifyAdminCredentialsOnly(adminEmail, adminPassword);
@@ -149,7 +169,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
       if (msg.includes('auth/invalid-credential') || msg.includes('auth/wrong-password')) {
         setErrorMsg('Admin password verification failed. Please check administrator credentials.');
       } else {
-        setErrorMsg(`Admin authorization error: ${msg}`);
+        setErrorMsg(msg);
       }
     }
   };
@@ -183,7 +203,9 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
         newOpPassword,
         newOpName,
         newOpRole,
-        newOpDept
+        newOpDept,
+        undefined,
+        adminPassword
       );
 
       setLastCreatedUser({
@@ -349,9 +371,19 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Password
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Password
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handlePasswordReset}
+                      disabled={loading}
+                      className="text-[11px] font-semibold text-[#0F1E36] hover:underline disabled:opacity-50"
+                    >
+                      Forgot / Reset Password?
+                    </button>
+                  </div>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
@@ -372,6 +404,13 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
                     </button>
                   </div>
                 </div>
+
+                {infoMsg && (
+                  <div className="flex items-start gap-2 rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5 text-emerald-600" />
+                    <span className="leading-snug">{infoMsg}</span>
+                  </div>
+                )}
 
                 {errorMsg && (
                   <div className="flex items-start gap-2 rounded-lg bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-800">
@@ -449,21 +488,21 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onLoginSuccess }) => {
               <form onSubmit={handleAdminVerify} className="space-y-3.5">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Designated Admin Email
+                    Designated Admin Email or Login ID
                   </label>
                   <div className="relative">
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                     <input
-                      type="email"
+                      type="text"
                       required
                       value={adminEmail}
                       onChange={(e) => setAdminEmail(e.target.value)}
-                      placeholder="h250862h@hit.ac.zw"
+                      placeholder="h250862h@hit.ac.zw or hod"
                       className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F1E36] focus:outline-none focus:ring-1 focus:ring-[#0F1E36]"
                     />
                   </div>
                   <span className="text-[10px] text-slate-500 mt-1 block">
-                    Primary Plant Admin: <code className="font-mono text-[#0F1E36] font-semibold">h250862h@hit.ac.zw</code>
+                    Accepts Primary Admin (<code className="font-mono text-[#0F1E36] font-semibold">h250862h@hit.ac.zw</code>) or any created Plant Administrator / Production HOD.
                   </span>
                 </div>
 

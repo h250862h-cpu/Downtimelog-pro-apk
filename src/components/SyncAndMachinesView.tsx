@@ -38,6 +38,7 @@ import {
   getLocalPlantUsers,
   logoutUser,
   PRIMARY_ADMIN_EMAIL,
+  sendUserPasswordReset,
   subscribePlantUsers,
 } from '../firebase';
 import {
@@ -340,6 +341,27 @@ export const SyncAndMachinesView: React.FC<SyncAndMachinesViewProps> = ({
       });
       setOpMsg({
         text: `Reactivated ${updated.displayName} (${updated.role}) across all devices.`,
+        isError: false,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setOpMsg({ text: msg, isError: true });
+    }
+  };
+
+  const handleSendPasswordResetForUser = async (target: PlantUserAccount) => {
+    if (!userIsAdmin) return;
+    if (target.email.endsWith('@plant.co.zw') || target.email.endsWith('@plant.com')) {
+      setOpMsg({
+        text: `Short internal IDs like ${target.email} do not have external inboxes. Create or reset real-email accounts via Admin Access, or update the user's clearance below.`,
+        isError: true,
+      });
+      return;
+    }
+    try {
+      const sentTo = await sendUserPasswordReset(target.email);
+      setOpMsg({
+        text: `Password reset email sent to ${sentTo}. Ask the user to check inbox/spam.`,
         isError: false,
       });
     } catch (err: unknown) {
@@ -1006,8 +1028,8 @@ git push -u origin main`}
               </span>
             </div>
 
-            {/* 3 Quick Role Templates */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {/* 4 Quick Role Templates */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
               <button
                 type="button"
                 onClick={() => applyRolePreset('WH Personnel')}
@@ -1050,6 +1072,21 @@ git push -u origin main`}
                 <div className="text-xs font-black text-emerald-300">3. Production HOD (Admin)</div>
                 <div className="text-[10px] text-slate-300 mt-0.5">
                   Full Admin access: sees ALL sections, Final HOD Confirm, User Access &amp; Excel report downloads.
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => applyRolePreset('Plant Administrator')}
+                className={`text-left rounded-xl border p-3 transition ${
+                  newOpRole === 'Plant Administrator'
+                    ? 'border-purple-500 bg-purple-500/15 shadow-md'
+                    : 'border-slate-800 bg-slate-950/70 hover:border-slate-700'
+                }`}
+              >
+                <div className="text-xs font-black text-purple-300">4. Plant Administrator (Admin)</div>
+                <div className="text-[10px] text-slate-300 mt-0.5">
+                  Full APK Administrator account: manages staff logins, machinery, background Excel &amp; all approvals.
                 </div>
               </button>
             </div>
@@ -1503,38 +1540,59 @@ git push -u origin main`}
                     </div>
                   </div>
 
-                  {userIsAdmin && !isItemAdmin && (
-                    <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                      <button
-                        type="button"
-                        onClick={() => openEditUserAccess(u)}
-                        className="flex items-center gap-1 text-[10px] font-bold text-blue-400 hover:text-blue-300"
-                      >
-                        <KeyRound className="h-3 w-3" />
-                        <span>Edit Access</span>
-                      </button>
-
-                      {isSuspended ? (
+                  {userIsAdmin && (
+                    <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+                      {!isItemAdmin ? (
                         <button
                           type="button"
-                          onClick={() => handleReactivateOperator(u)}
-                          className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 hover:text-emerald-300"
-                          title="Restore access across all devices"
+                          onClick={() => openEditUserAccess(u)}
+                          className="flex items-center gap-1 text-[10px] font-bold text-blue-400 hover:text-blue-300"
                         >
-                          <UserCheck className="h-3 w-3" />
-                          <span>Reactivate</span>
+                          <KeyRound className="h-3 w-3" />
+                          <span>Edit Access</span>
                         </button>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteOperator(u.uid, u.displayName)}
-                          className="flex items-center gap-1 text-[10px] text-rose-400 hover:text-rose-300"
-                          title="Suspend & revoke access"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          <span>Revoke</span>
-                        </button>
+                        <span className="text-[10px] font-bold text-amber-400">
+                          Primary System Admin
+                        </span>
                       )}
+
+                      <div className="flex items-center gap-2.5">
+                        {!u.email.endsWith('@plant.co.zw') && !u.email.endsWith('@plant.com') && (
+                          <button
+                            type="button"
+                            onClick={() => handleSendPasswordResetForUser(u)}
+                            className="flex items-center gap-1 text-[10px] font-semibold text-sky-400 hover:text-sky-300"
+                            title="Send password reset email via Firebase Auth"
+                          >
+                            <KeyRound className="h-3 w-3" />
+                            <span>Reset PW</span>
+                          </button>
+                        )}
+
+                        {!isItemAdmin &&
+                          (isSuspended ? (
+                            <button
+                              type="button"
+                              onClick={() => handleReactivateOperator(u)}
+                              className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 hover:text-emerald-300"
+                              title="Restore access across all devices"
+                            >
+                              <UserCheck className="h-3 w-3" />
+                              <span>Reactivate</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteOperator(u.uid, u.displayName)}
+                              className="flex items-center gap-1 text-[10px] text-rose-400 hover:text-rose-300"
+                              title="Suspend & revoke access"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              <span>Revoke</span>
+                            </button>
+                          ))}
+                      </div>
                     </div>
                   )}
                 </div>

@@ -30,7 +30,7 @@ import {
   buildUnifiedProductionReportWorkbook,
 } from './productionPlanStore';
 import { buildQualityTrialsWorkbook } from './qualityTrialStore';
-import { buildScrapSalesExcelWorkbook } from './scrapSalesStore';
+import { buildScrapSalesExcelWorkbook, isScrapSaleConfirmedForExcel } from './scrapSalesStore';
 import { buildSopMasterWorkbook } from './sopStore';
 import { buildAttendanceExcelWorkbook, buildQcLogsExcelWorkbook } from './attendanceParser';
 import { buildTqmMasterExcelWorkbook, buildUnifiedTqmAnalytics } from './tqmStore';
@@ -125,7 +125,7 @@ const REPORT_DEFS: Record<
     defaultFilename: 'LGPLAST_Generator_Logs.xlsx',
   },
   scrap_sales: {
-    label: 'Recycling Scrap Sales & Invoices',
+    label: 'Recycling Scrap Sales & Invoices (Paid + 3-Signed)',
     category: 'Scrap Sales',
     defaultFilename: 'LGPLAST_Scrap_Sales_Invoices.xlsx',
   },
@@ -323,11 +323,12 @@ function buildWorkbookForId(
       return { wb, filename, rowCount: ds.generatorLogs.length };
     }
     case 'scrap_sales': {
+      const confirmedScrap = ds.scrapSalesInvoices.filter(isScrapSaleConfirmedForExcel);
       const { wb, filename } = buildScrapSalesExcelWorkbook(
-        ds.scrapSalesInvoices,
-        'All_Invoices'
+        confirmedScrap,
+        'Confirmed_Paid_3Signed'
       );
-      return { wb, filename, rowCount: ds.scrapSalesInvoices.length };
+      return { wb, filename, rowCount: confirmedScrap.length };
     }
     case 'attendance': {
       const { wb, filename } = buildAttendanceExcelWorkbook(

@@ -7,6 +7,7 @@ import {
 import historicalAttendanceRaw from '../data/historicalAttendance.json';
 import {
   canAccessFirestorePath,
+  clearFirestorePathBlockedByRules,
   db,
   deepSanitizeForFirestore,
   ensureFirebaseAuth,
@@ -698,10 +699,15 @@ export async function pollQCLogs(): Promise<QCInspectionRecord[]> {
     Object.values(remoteMap).forEach((rem) => merged.push(rem));
     merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     if (merged.length > 0 || !snapshot.empty) {
+      clearFirestorePathBlockedByRules('qc_inspections');
       saveLocalQCLogs(merged);
       return merged;
     }
-  } catch {}
+  } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      markFirestorePathBlockedByRules('qc_inspections');
+    }
+  }
   return getLocalQCLogs();
 }
 
@@ -771,10 +777,14 @@ export function subscribeQCLogs(onUpdate: (logs: QCInspectionRecord[]) => void) 
             onUpdate(merged);
           }
           if (!snapshot.metadata.fromCache) {
+            clearFirestorePathBlockedByRules('qc_inspections');
             flushPendingQCLogs().catch(() => {});
           }
         },
         (err) => {
+          if (isPermissionDeniedError(err)) {
+            markFirestorePathBlockedByRules('qc_inspections');
+          }
           console.warn('QC firestore listener notice:', err.message);
           scheduleRetry();
         }

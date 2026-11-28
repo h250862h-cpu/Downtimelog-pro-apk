@@ -1,14 +1,13 @@
 import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { ScrapSalesInvoice } from '../types';
 import { saveFileBlob } from './downtimeCalc';
 import { drawLgplastPdfHeader, ensureLgplastLogoLoaded } from './reportPdf';
 
 /**
  * Generates the official LG PLAST Recycling Scrap Sales Invoice PDF (Portrait A4)
- * featuring the LG PLAST Logo header, formal heading, the exact 3-category
- * calculation breakdown, Total Scrap Qnty & Total Cost summary, Total Cost footer,
- * and formatted blocks for 3 signatures.
+ * structured like the Diesel Fuel Issue Voucher: NO tables, clean card/voucher layout,
+ * LG PLAST Logo header with formal heading, showing ONLY Total KG, Total Cost, and
+ * Invoice Amount Due, plus the formatted 3-signature authorization block.
  */
 export async function generateScrapSalesInvoicePdf(invoice: ScrapSalesInvoice) {
   await ensureLgplastLogoLoaded();
@@ -26,185 +25,130 @@ export async function generateScrapSalesInvoicePdf(invoice: ScrapSalesInvoice) {
   drawLgplastPdfHeader(
     doc,
     'RECYCLING SCRAP SALES INVOICE',
-    'LG PLAST (PVT) LTD  •  OFFICIAL RECYCLING SCRAP SALES & WEIGHT BILLING',
+    'LG PLAST (PVT) LTD  •  OFFICIAL RECYCLING SCRAP SALES INVOICE',
     [
-      `Invoice No: ${invoice.invoiceNo}`,
+      `Invoice: ${invoice.invoiceNo}`,
       `Date: ${invoice.date}`,
       `Status: ${invoice.status}`,
     ]
   );
 
-  // 2. Customer / Invoice Metadata Card
-  autoTable(doc, {
-    startY: 36,
-    margin: { left: 10, right: 10 },
-    head: [['INVOICE & CUSTOMER DETAILS', 'DOCUMENT & BILLING REFERENCE']],
-    body: [
-      [
-        `Buyer / Customer: ${invoice.buyerName || 'Walk-in / Cash Buyer'}`,
-        `Invoice Number: ${invoice.invoiceNo}`,
-      ],
-      [
-        `Contact / Ref: ${invoice.buyerPhone || 'N/A'}`,
-        `Invoice Date: ${invoice.date}`,
-      ],
-      [
-        `Vehicle / Collection Reg: ${invoice.vehicleReg || 'N/A'}`,
-        `Prepared By: ${invoice.preparedByName}`,
-      ],
-      [
-        `Remarks: ${invoice.notes || 'Recycling scrap dispatch & sale'}`,
-        `Currency: USD ($)  •  Net Billing Basis: 50% of Gross Qnty`,
-      ],
-    ],
-    styles: {
-      fontSize: 8.2,
-      cellPadding: 2.3,
-      textColor: [15, 23, 42],
-      lineColor: [203, 213, 225],
-      lineWidth: 0.2,
-    },
-    headStyles: {
-      fillColor: [15, 47, 102],
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      fontSize: 8,
-    },
-    alternateRowStyles: { fillColor: [248, 250, 252] },
-    columnStyles: {
-      0: { cellWidth: 98 },
-      1: { cellWidth: 92 },
-    },
-  });
-
-  const afterMetaY = ((doc as any).lastAutoTable?.finalY || 72) + 6;
-
-  // Section Label
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(15, 47, 102);
-  doc.text('SCRAP WEIGHT & BILLING CALCULATION', 10, afterMetaY);
-
-  // 3. Exact Spreadsheet-Structure Line Items + Total Scrap Qnty & Total Cost + Grand Total Cost
-  const formatCostPerKg = (rate: number): string => {
-    if (Math.abs(rate - 0.066666667) < 0.0001) return '$0.066666667';
-    return `$${rate.toFixed(2)}`;
-  };
-
-  const bodyRows: any[][] = invoice.items.map((item) => [
-    item.name,
-    formatCostPerKg(item.costPerKg),
-    `${item.qntyKg.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg`,
-    `${item.totalKg.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg`,
-    `$${item.totalCost.toFixed(2)}`,
-  ]);
-
-  // Row showing TOTAL SCRAP QNTY and TOTAL COST
-  bodyRows.push([
-    {
-      content: 'TOTAL SCRAP QNTY & TOTAL COST',
-      styles: { fontStyle: 'bold', fillColor: [226, 232, 240], textColor: [15, 23, 42] },
-    },
-    {
-      content: '—',
-      styles: { halign: 'center', fillColor: [226, 232, 240], textColor: [71, 85, 105] },
-    },
-    {
-      content: `${invoice.totalScrapQntyKg.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })} kg`,
-      styles: { halign: 'right', fontStyle: 'bold', fillColor: [226, 232, 240], textColor: [15, 23, 42] },
-    },
-    {
-      content: `${invoice.totalNetKg.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })} kg`,
-      styles: { halign: 'right', fontStyle: 'bold', fillColor: [226, 232, 240], textColor: [15, 23, 42] },
-    },
-    {
-      content: `$${invoice.totalCost.toFixed(2)}`,
-      styles: { halign: 'right', fontStyle: 'bold', fillColor: [226, 232, 240], textColor: [15, 23, 42] },
-    },
-  ]);
-
-  // Grand TOTAL COST Summary Row
-  bodyRows.push([
-    {
-      content: 'TOTAL COST (INVOICE AMOUNT DUE)',
-      colSpan: 4,
-      styles: {
-        fontStyle: 'bold',
-        fontSize: 10,
-        fillColor: [15, 47, 102],
-        textColor: [255, 255, 255],
-        halign: 'right',
-      },
-    },
-    {
-      content: `$${invoice.totalCost.toFixed(2)}`,
-      styles: {
-        fontStyle: 'bold',
-        fontSize: 10.5,
-        fillColor: [15, 47, 102],
-        textColor: [255, 255, 255],
-        halign: 'right',
-      },
-    },
-  ]);
-
-  autoTable(doc, {
-    startY: afterMetaY + 3,
-    margin: { left: 10, right: 10 },
-    head: [['NAME', 'COST PER KG', 'QNTY / KG', 'TOTAL KG', 'TOTAL COST']],
-    body: bodyRows,
-    styles: {
-      fontSize: 9,
-      cellPadding: 3.4,
-      textColor: [15, 23, 42],
-      lineColor: [203, 213, 225],
-      lineWidth: 0.25,
-      valign: 'middle',
-    },
-    headStyles: {
-      fillColor: [30, 58, 95],
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      fontSize: 8.5,
-    },
-    alternateRowStyles: { fillColor: [248, 250, 252] },
-    columnStyles: {
-      0: { cellWidth: 52, fontStyle: 'bold' },
-      1: { cellWidth: 36, halign: 'right' },
-      2: { cellWidth: 34, halign: 'right' },
-      3: { cellWidth: 34, halign: 'right' },
-      4: { cellWidth: 34, halign: 'right', fontStyle: 'bold' },
-    },
-  });
-
-  const afterTableY = ((doc as any).lastAutoTable?.finalY || 135) + 6;
-
-  // 4. Calculation Note Box
-  doc.setFillColor(248, 250, 252);
+  // 2. Sub-header Reference Strip (matching Diesel Request Voucher header strip)
+  doc.setFillColor(241, 245, 249);
+  doc.rect(10, 33, pageWidth - 20, 9, 'F');
   doc.setDrawColor(203, 213, 225);
-  doc.roundedRect(10, afterTableY, pageWidth - 20, 14, 1.8, 1.8, 'FD');
+  doc.rect(10, 33, pageWidth - 20, 9, 'S');
+  doc.setTextColor(30, 41, 59);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.6);
-  doc.setTextColor(15, 47, 102);
-  doc.text('CALCULATION BASIS:', 14, afterTableY + 5.5);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(51, 65, 85);
+  doc.setFontSize(7.5);
+  doc.text(`Invoice No: ${invoice.invoiceNo}  •  Status: ${invoice.status}`, 13, 38.7);
   doc.text(
-    'TOTAL KG = 50% of entered QNTY/KG  •  TOTAL COST = TOTAL KG × COST PER KG  •  Total Scrap Qnty & Grand Total Cost auto-summed.',
-    14,
-    afterTableY + 10.5
+    `Date: ${invoice.date}  |  Currency: USD ($)`,
+    pageWidth - 13,
+    38.7,
+    { align: 'right' }
   );
 
+  // 3. Clean Invoice & Customer Particulars Card (NO table)
+  const detailsY = 47;
+  const detailsH = 64;
+  doc.setDrawColor(203, 213, 225);
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(10, detailsY, pageWidth - 20, detailsH, 2, 2, 'FD');
+
+  doc.setFillColor(15, 47, 102);
+  doc.rect(10, detailsY, pageWidth - 20, 7.5, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.setTextColor(255, 255, 255);
+  doc.text('INVOICE & CUSTOMER PARTICULARS', 14, detailsY + 5.1);
+
+  const detailFields: Array<[string, string]> = [
+    ['Invoice Number', invoice.invoiceNo],
+    ['Invoice Date', invoice.date],
+    ['Buyer / Customer Name', invoice.buyerName || 'Walk-in / Cash Buyer'],
+    ['Buyer Contact / Phone', invoice.buyerPhone || 'N/A'],
+    ['Vehicle / Collection Reg', invoice.vehicleReg || 'N/A'],
+    ['Prepared / Issued By', invoice.preparedByName || 'Plant Operator'],
+    ['Payment Status', invoice.status === 'PAID' ? 'PAID (SETTLED)' : 'ISSUED (AMOUNT DUE)'],
+    ['Remarks / Scale Ref', invoice.notes || 'Recycling scrap sale & dispatch'],
+  ];
+
+  let rowY = detailsY + 13.5;
+  detailFields.forEach(([label, val], idx) => {
+    if (idx % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(10.5, rowY - 4.2, pageWidth - 21, 6.2, 'F');
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.2);
+    doc.setTextColor(71, 85, 105);
+    doc.text(`${label}:`, 14, rowY);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text(val, 68, rowY, { maxWidth: pageWidth - 82 });
+    rowY += 6.3;
+  });
+
+  // 4. Clean Invoice Summary Card (NO tables — ONLY Total KG, Total Cost, and Invoice Amount Due)
+  const summaryY = detailsY + detailsH + 8;
+  const summaryH = 48;
+  doc.setDrawColor(148, 163, 184);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(10, summaryY, pageWidth - 20, summaryH, 2.2, 2.2, 'FD');
+
+  doc.setFillColor(30, 58, 95);
+  doc.rect(10, summaryY, pageWidth - 20, 8, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('INVOICE SUMMARY', 14, summaryY + 5.4);
+
+  // Row 1: TOTAL KG
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(51, 65, 85);
+  doc.text('TOTAL KG', 15, summaryY + 17);
+  doc.setFontSize(11);
+  doc.setTextColor(15, 23, 42);
+  doc.text(
+    `${invoice.totalNetKg.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })} kg`,
+    pageWidth - 15,
+    summaryY + 17,
+    { align: 'right' }
+  );
+
+  doc.setDrawColor(226, 232, 240);
+  doc.line(15, summaryY + 21, pageWidth - 15, summaryY + 21);
+
+  // Row 2: TOTAL COST
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(51, 65, 85);
+  doc.text('TOTAL COST', 15, summaryY + 29);
+  doc.setFontSize(11);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`$${invoice.totalCost.toFixed(2)}`, pageWidth - 15, summaryY + 29, { align: 'right' });
+
+  // Highlighted Bar: INVOICE AMOUNT DUE
+  doc.setFillColor(15, 47, 102);
+  doc.roundedRect(12, summaryY + 34, pageWidth - 24, 11, 1.5, 1.5, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('INVOICE AMOUNT DUE', 16, summaryY + 41.2);
+  doc.setFontSize(12);
+  doc.setTextColor(167, 243, 208);
+  doc.text(`$${invoice.totalCost.toFixed(2)}`, pageWidth - 16, summaryY + 41.2, { align: 'right' });
+
   // 5. Three Signatures Block (Formatted for 3 Signatures — Digital or Manual Ink Sign-Off)
-  let sigY = afterTableY + 22;
+  let sigY = summaryY + summaryH + 12;
   const sigBoxH = 52;
-  if (sigY + sigBoxH + 14 > pageHeight) {
+  if (sigY + sigBoxH + 16 > pageHeight) {
     doc.addPage();
     sigY = 20;
   }
@@ -243,7 +187,6 @@ export async function generateScrapSalesInvoicePdf(invoice: ScrapSalesInvoice) {
     doc.setFillColor(248, 250, 252);
     doc.roundedRect(x, sigY, colWidth, sigBoxH, 2, 2, 'FD');
 
-    // Top colored strip
     doc.setFillColor(15, 47, 102);
     doc.rect(x, sigY, colWidth, 6.5, 'F');
     doc.setFont('helvetica', 'bold');
@@ -267,7 +210,6 @@ export async function generateScrapSalesInvoicePdf(invoice: ScrapSalesInvoice) {
       { maxWidth: colWidth - 7 }
     );
 
-    // Signature Area
     if (cfg.slot?.signature) {
       try {
         doc.addImage(cfg.slot.signature, 'PNG', x + 6, sigY + 19, colWidth - 12, 19);

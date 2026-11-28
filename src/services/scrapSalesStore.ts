@@ -79,6 +79,39 @@ export function calculateScrapSalesInvoiceValues(
   };
 }
 
+function hasValidSignatureData(sig?: string): boolean {
+  return typeof sig === 'string' && sig.trim().length > 10;
+}
+
+export function getScrapSalesSignatureCount(
+  inv?: Pick<ScrapSalesInvoice, 'signatures'> | null
+): number {
+  if (!inv?.signatures) return 0;
+  let count = 0;
+  if (hasValidSignatureData(inv.signatures.preparedBy?.signature)) count += 1;
+  if (hasValidSignatureData(inv.signatures.approvedBy?.signature)) count += 1;
+  if (hasValidSignatureData(inv.signatures.buyer?.signature)) count += 1;
+  return count;
+}
+
+export function hasAllScrapSalesSignatures(
+  inv?: Pick<ScrapSalesInvoice, 'signatures'> | null
+): boolean {
+  return getScrapSalesSignatureCount(inv) === 3;
+}
+
+/**
+ * Only invoices that have BOTH confirmed payment (status === 'PAID')
+ * AND all 3 verified digital signatures (Prepared By, Approved By, Buyer)
+ * are allowed to enter Excel ledgers & TQM revenue/COPQ calculations.
+ */
+export function isScrapSaleConfirmedForExcel(
+  inv?: ScrapSalesInvoice | null
+): boolean {
+  if (!inv) return false;
+  return inv.status === 'PAID' && hasAllScrapSalesSignatures(inv);
+}
+
 function readLocalInvoices(): ScrapSalesInvoice[] {
   try {
     const raw = localStorage.getItem(SCRAP_SALES_STORAGE_KEY);
@@ -219,8 +252,26 @@ export async function saveScrapSalesInvoiceToFirebase(
   invoice: ScrapSalesInvoice,
   options?: { preserveUpd?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
+  const safeInvoiceNo = (invoice.invoiceNo || `INV-SCR-${Date.now()}`).trim().slice(0, 60);
+  const safeDate = (invoice.date || ymd(new Date())).trim().slice(0, 20);
+  const safeBuyerName = (invoice.buyerName || 'CASH / WALK-IN BUYER').trim().slice(0, 150) || 'CASH / WALK-IN BUYER';
+  const allSigned = hasAllScrapSalesSignatures(invoice);
+  const enforcedStatus: 'ISSUED' | 'PAID' =
+    invoice.status === 'PAID' && allSigned ? 'PAID' : 'ISSUED';
+
   const updated: ScrapSalesInvoice = {
     ...invoice,
+    invoiceNo: safeInvoiceNo.length >= 3 ? safeInvoiceNo : `INV-${safeInvoiceNo}`,
+    date: safeDate,
+    buyerName: safeBuyerName,
+    totalScrapQntyKg: Math.max(0, Number(invoice.totalScrapQntyKg) || 0),
+    totalNetKg: Math.max(0, Number(invoice.totalNetKg) || 0),
+    totalCost: Math.max(0, Number(invoice.totalCost) || 0),
+    status: enforcedStatus,
+    paidConfirmedAt:
+      enforcedStatus === 'PAID'
+        ? invoice.paidConfirmedAt || new Date().toISOString()
+        : undefined,
     upd: options?.preserveUpd && invoice.upd ? invoice.upd : Date.now(),
     sy: 0,
   };
@@ -404,12 +455,20 @@ export function buildScrapSalesExcelWorkbook(
   invoices: ScrapSalesInvoice[],
   dateLabel?: string
 ): { wb: XLSX.WorkBook; filename: string } {
+  const confirmedInvoices = invoices.filter(isScrapSaleConfirmedForExcel);
   const wb = XLSX.utils.book_new();
 
   const summaryRows: any[][] = [
-    ['LG PLAST — RECYCLING SCRAP SALES & INVOICE LEDGER'],
+    ['LG PLAST — RECYCLING SCRAP SALES & INVOICE LEDGER (CONFIRMED PAID + 3 SIGNATURES ONLY)'],
     ['LG PLAST — Affordable / Durable / Complete'],
-    ['Generated At:', new Date().toLocaleString(), 'Total Invoices:', invoices.length],
+    [
+      'Generated At:',
+      new Date().toLocaleString(),
+      'Confirmed Invoices in Excel:',
+      confirmedInvoices.length,
+      'Gate Rule:',
+      'Only PAID + All 3 Signatures Verified',
+    ],
     [],
     [
       'Invoice No',
@@ -430,11 +489,16 @@ export function buildScrapSalesExcelWorkbook(
       'Total Net Kg (50%)',
       'TOTAL COST ($)',
       'Prepared By',
+      '1. Prepared Signed',
+      '2. Approved Signed',
+      '3. Buyer Signed',
+      'Payment Confirmed By',
+      'Payment Confirmed At',
       'Status',
     ],
   ];
 
-  invoices.forEach((inv) => {
+  confirmedInvoices.forEach((inv) => {
     const col = inv.items.find((i) => i.key === 'colour_scrap');
     const wht = inv.items.find((i) => i.key === 'white_scrap');
     const bag = inv.items.find((i) => i.key === 'empty_bags');
@@ -457,7 +521,12 @@ export function buildScrapSalesExcelWorkbook(
       inv.totalNetKg,
       inv.totalCost,
       inv.preparedByName,
-      inv.status,
+      inv.signatures?.preparedBy?.name || inv.preparedByName || 'Signed',
+      inv.signatures?.approvedBy?.name || 'Signed',
+      inv.signatures?.buyer?.name || inv.buyerName || 'Signed',
+      inv.paidConfirmedBy || inv.preparedByName || 'Confirmed',
+      inv.paidConfirmedAt ? inv.paidConfirmedAt.slice(0, 16).replace('T', ' ') : inv.date,
+      'PAID (3/3 SIGNED)',
     ]);
   });
 
@@ -481,7 +550,12 @@ export function buildScrapSalesExcelWorkbook(
     { wch: 16 },
     { wch: 14 },
     { wch: 20 },
-    { wch: 12 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 20 },
+    { wch: 18 },
+    { wch: 18 },
   ];
   XLSX.utils.book_append_sheet(wb, ws, 'Scrap_Sales_Invoices');
   return {
@@ -496,7 +570,9 @@ export async function exportScrapSalesExcelWorkbook(
   isAdmin: boolean = false
 ): Promise<string> {
   if (!isAdmin) return '';
-  const { wb, filename } = buildScrapSalesExcelWorkbook(invoices, dateLabel);
+  const confirmedInvoices = invoices.filter(isScrapSaleConfirmedForExcel);
+  if (confirmedInvoices.length === 0) return '';
+  const { wb, filename } = buildScrapSalesExcelWorkbook(confirmedInvoices, dateLabel);
   const out = await XLSX.writeAsync(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([out], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

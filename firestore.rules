@@ -29,49 +29,140 @@ service cloud.firestore {
       return incoming().keys().size() >= 1 && incoming().keys().size() <= 100;
     }
 
-    // Connection health check (authenticated users only)
+    function isVerifiedPrimaryAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'h250862h@hit.ac.zw'
+        && request.auth.token.email_verified == true;
+    }
+
+    function hasUserDoc() {
+      return exists(/databases/$(database)/documents/plant_users/$(request.auth.uid));
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/plant_users/$(request.auth.uid)).data;
+    }
+
+    function isActiveUserDoc() {
+      return hasUserDoc()
+        && userDoc().status != 'suspended'
+        && userDoc().revoked != true;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isVerifiedPrimaryAdmin()
+        || (isActiveUserDoc() && userDoc().role in ['Plant Administrator', 'Production HOD'])
+      );
+    }
+
+    function isActiveStaff() {
+      return isSignedIn() && (isVerifiedPrimaryAdmin() || isActiveUserDoc());
+    }
+
+    function isValidPlantUser(data) {
+      return data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 160
+        && data.role is string
+        && data.role.size() >= 2
+        && data.role.size() <= 80
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 160
+        && (!('status' in data) || (data.status is string && data.status in ['active', 'suspended']))
+        && (!('revoked' in data) || data.revoked is bool)
+        && (!('department' in data) || (data.department is string && data.department.size() <= 120));
+    }
+
+    function isValidDowntimeEntry(data) {
+      return (!('del' in data) || data.del != 1)
+        && (!('id' in data) || (data.id is string && data.id.size() <= 160))
+        && (!('mc' in data) || (data.mc is string && data.mc.size() <= 120))
+        && (!('equipmentName' in data) || (data.equipmentName is string && data.equipmentName.size() <= 120));
+    }
+
+    function isValidScrapSalesInvoice(data) {
+      return data.invoiceNo is string
+        && data.invoiceNo.size() >= 3
+        && data.invoiceNo.size() <= 60
+        && data.date is string
+        && data.date.size() <= 20
+        && data.buyerName is string
+        && data.buyerName.size() <= 150
+        && data.totalScrapQntyKg is number
+        && data.totalScrapQntyKg >= 0
+        && data.totalNetKg is number
+        && data.totalNetKg >= 0
+        && data.totalCost is number
+        && data.totalCost >= 0
+        && data.status is string
+        && data.status in ['ISSUED', 'PAID'];
+    }
+
+    function isValidTqmCapa(data) {
+      return data.capaNo is string
+        && data.capaNo.size() >= 3
+        && data.capaNo.size() <= 60
+        && data.date is string
+        && data.date.size() <= 20
+        && data.title is string
+        && data.title.size() <= 250
+        && data.machine is string
+        && data.machine.size() <= 100
+        && data.ishikawaCategory is string
+        && data.ishikawaCategory.size() <= 40
+        && data.severity is string
+        && data.severity.size() <= 30
+        && data.status is string
+        && data.status.size() <= 30;
+    }
+
+    // Connection health check (authenticated active staff only)
     match /test/{docId} {
       allow get: if isSignedIn() && docId == 'connection';
       allow list, write: if false;
     }
 
-    // Core Downtime Logs — authenticated only, no deletion or soft-delete allowed
-    match /downtime_entries/{entryId} {
-      allow get: if isSignedIn() && isValidDocId(entryId);
-      allow list: if isSignedIn();
-      allow create: if isSignedIn()
-        && isValidDocId(entryId)
+    // Plant User Directory — PII isolated: users read own doc only; Admins manage directory; never deleted
+    match /plant_users/{userId} {
+      allow get: if isSignedIn()
+        && isValidDocId(userId)
+        && (userId == request.auth.uid || isAdmin());
+      allow list: if isAdmin()
+        || (isSignedIn() && existing().email == request.auth.token.email);
+      allow create, update: if isAdmin()
+        && isValidDocId(userId)
         && isBoundedPayload()
-        && (!('del' in incoming()) || incoming().del != 1);
-      allow update: if isSignedIn()
-        && isValidDocId(entryId)
-        && isBoundedPayload()
-        && (!('del' in incoming()) || incoming().del != 1);
+        && isValidPlantUser(incoming());
       allow delete: if false;
     }
 
-    // Plant User Directory — authenticated only, schema-validated, never hard-deleted
-    match /plant_users/{userId} {
-      allow get: if isSignedIn() && isValidDocId(userId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn()
-        && isValidDocId(userId)
+    // System Configuration (Machines List) — active staff read, Admin write only
+    match /app_config/{docId} {
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isAdmin() && isValidDocId(docId) && isBoundedPayload();
+      allow delete: if false;
+    }
+
+    // Core Downtime Logs — active staff only, no deletion or soft-delete allowed
+    match /downtime_entries/{entryId} {
+      allow get: if isActiveStaff() && isValidDocId(entryId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff()
+        && isValidDocId(entryId)
         && isBoundedPayload()
-        && incoming().email is string
-        && incoming().email.size() <= 160
-        && incoming().role is string
-        && incoming().role.size() <= 80
-        && incoming().displayName is string
-        && incoming().displayName.size() <= 160;
+        && isValidDowntimeEntry(incoming());
       allow delete: if false;
     }
 
     // Special Order Factory Production (Gumboots) — confirmed factory stock is locked against deletion
     match /special_order_production/{entryId} {
-      allow get: if isSignedIn() && isValidDocId(entryId);
-      allow list: if isSignedIn();
-      allow create: if isSignedIn() && isValidDocId(entryId) && isBoundedPayload();
-      allow update: if isSignedIn()
+      allow get: if isActiveStaff() && isValidDocId(entryId);
+      allow list: if isActiveStaff();
+      allow create: if isActiveStaff() && isValidDocId(entryId) && isBoundedPayload();
+      allow update: if isActiveStaff()
         && isValidDocId(entryId)
         && isBoundedPayload()
         && !(existing().status == 'CONFIRMED_IN_FACTORY' && ('deleted' in incoming()) && incoming().deleted == true);
@@ -80,154 +171,152 @@ service cloud.firestore {
 
     // Special Order WH Dispatches (Gumboots) — confirmed dispatches are locked against deletion
     match /special_order_wh_dispatches/{entryId} {
-      allow get: if isSignedIn() && isValidDocId(entryId);
-      allow list: if isSignedIn();
-      allow create: if isSignedIn() && isValidDocId(entryId) && isBoundedPayload();
-      allow update: if isSignedIn()
+      allow get: if isActiveStaff() && isValidDocId(entryId);
+      allow list: if isActiveStaff();
+      allow create: if isActiveStaff() && isValidDocId(entryId) && isBoundedPayload();
+      allow update: if isActiveStaff()
         && isValidDocId(entryId)
         && isBoundedPayload()
         && !(existing().status == 'CONFIRMED' && ('deleted' in incoming()) && incoming().deleted == true);
       allow delete: if false;
     }
 
-    // Explicit allowlisted operational collections (authenticated staff only, no deletions)
-    match /app_config/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
-      allow delete: if false;
-    }
-
     match /dispatch_entries/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /historical_dispatch_uploads/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isAdmin() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /monthly_production_plans/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /diesel_tank_config/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /diesel_fuel_requests/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /diesel_grn_records/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /power_cut_logs/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /generator_logs/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /sop_production_logs/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /sop_qc_checks/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /sop_scrap_pipeline/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /sop_mixing_reports/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /sop_shift_handovers/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /special_orders/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /quality_trial_reports/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /attendance_batches/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /qc_inspections/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff() && isValidDocId(docId) && isBoundedPayload();
       allow delete: if false;
     }
 
     match /scrap_sales_invoices/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff()
+        && isValidDocId(docId)
+        && isBoundedPayload()
+        && isValidScrapSalesInvoice(incoming());
       allow delete: if false;
     }
 
     match /tqm_capa_records/{docId} {
-      allow get: if isSignedIn() && isValidDocId(docId);
-      allow list: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidDocId(docId) && isBoundedPayload();
+      allow get: if isActiveStaff() && isValidDocId(docId);
+      allow list: if isActiveStaff();
+      allow create, update: if isActiveStaff()
+        && isValidDocId(docId)
+        && isBoundedPayload()
+        && isValidTqmCapa(incoming());
       allow delete: if false;
     }
   }
