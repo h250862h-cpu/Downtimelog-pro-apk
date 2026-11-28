@@ -3,11 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20 <23"
+  },
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build && node -e \"const fs=require('fs');fs.rmSync('dict',{recursive:true,force:true});fs.cpSync('dist','dict',{recursive:true});\"",
+    "build": "vite build && node -e \"const fs=require('fs'),p=require('path'),d='dist/assets/aistudio';if(fs.existsSync(d)){for(const f of fs.readdirSync(d)){if(f!=='image_65f70fd7.png')fs.rmSync(p.join(d,f),{recursive:true,force:true});}}fs.rmSync('dict',{recursive:true,force:true});fs.cpSync('dist','dict',{recursive:true});\"",
     "start": "vite preview --host 0.0.0.0 --port ${PORT:-3000}",
-    "preview": "vite preview",
+    "preview": "vite preview --host 0.0.0.0",
     "clean": "rm -rf dist dict server.js",
     "lint": "tsc --noEmit"
   },
